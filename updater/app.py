@@ -5875,6 +5875,23 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
     if _hold_scheduled_device(job, job.devices[ip]):
         return False, job.devices[ip].progress_message or "Scheduled job stopped"
 
+    # The persisted admission cutoff controls when a device may start. Once its
+    # first disruptive action begins, let that device finish flashing and
+    # recovery even if the cutoff or maintenance window passes.
+    if getattr(job.devices[ip], "_firmware_sequence_started", False):
+        return True, ""
+
+    if not _firmware_deadline_admits(job, ip):
+        reason = "Deferred: firmware admission cutoff reached or unavailable; device will retry next window"
+        device_status = job.devices[ip]
+        device_status.status = "pending"
+        device_status.error = None
+        device_status.progress_message = reason
+        deferred_ips = getattr(job, "_deferred_admission_ips", set())
+        deferred_ips.add(ip)
+        job._deferred_admission_ips = deferred_ips
+        return False, reason
+
     if not (job.is_scheduled and job.enforce_window_cutoff):
         return True, ""
 
@@ -5904,6 +5921,45 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
     job.devices[ip].status = "pending"
     job.devices[ip].progress_message = reason
     return False, reason
+
+
+def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
+    """Read the persisted target cutoff and admit only before its deadline.
+
+    Exact serial queue jobs use the family and artifact hash stored with their
+    timing row. Missing, stale, or malformed timing state fails closed.
+    """
+    if not (job.is_scheduled and job.enforce_window_cutoff and job.device_order):
+        return True
+    if not job.window_key:
+        return False
+
+    try:
+        device_status = job.devices.get(ip)
+        fw_path = job.device_firmware_map.get(ip)
+        model = device_status.model if device_status else None
+        family = _get_firmware_type_for_model(model, job.device_vendor_map.get(ip, "tachyon"))
+        target_sha256 = db.get_firmware_sha256(Path(fw_path).name) if fw_path else None
+        if not family or not target_sha256:
+            return False
+        with db.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_window_key, cutoff_utc FROM firmware_window_timing "
+                "WHERE family = ? AND target_sha256 = ?",
+                (family, target_sha256),
+            ).fetchone()
+        expected_key = json.dumps(list(job.window_key), separators=(",", ":"))
+        if not row or row["last_window_key"] != expected_key:
+            return False
+        cutoff = datetime.fromisoformat(row["cutoff_utc"].replace("Z", "+00:00"))
+        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            return False
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            return False
+        return now.astimezone(timezone.utc) < cutoff.astimezone(timezone.utc)
+    except Exception:
+        return False
 
 
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
@@ -6177,6 +6233,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 info = await client.get_device_info()
                 current_serial = getattr(info, "serial", None)
                 current_version = getattr(info, "current_version", None)
+                device_status.model = device_status.model or getattr(info, "model", None)
                 if expected_serial and current_serial != expected_serial:
                     raise RuntimeError("Expected serial changed before pre-update reboot")
                 expected_serial = expected_serial or current_serial
@@ -6197,8 +6254,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 })
                 _persist_recovery_locator(job, ip)
                 reboot_timeout = client.get_reboot_timeout(device_status.role)
-                if not _firmware_write_gate(job, ip)[0]:
-                    return
                 if device_status.role == "ap" and vendor_id == "tachyon":
                     pre_reboot_ap_baseline = await _capture_ap_recovery_baseline(
                         job, ip, client
@@ -6212,6 +6267,9 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 reboot_options = {"timeout": reboot_timeout}
                 if recovery_callback:
                     reboot_options["recovery_callback"] = recovery_callback
+                if not _firmware_write_gate(job, ip)[0]:
+                    return
+                device_status._firmware_sequence_started = True
                 if not await client.reboot(**reboot_options):
                     locator = job.recovery_locators.get(ip, {})
                     reason = (recovery_callback.failure_reason["reason"]
@@ -6289,6 +6347,10 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     admission_denial["reason"] = f"Device model changed before {stage}"
                     return False
             _persist_recovery_locator(job, ip)
+            admitted, reason = _firmware_write_gate(job, ip)
+            if not admitted:
+                admission_denial["reason"] = reason
+                return False
             return True
 
         update_options = {
@@ -6297,9 +6359,11 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         if supports_tachyon_recovery:
             update_options["serial_check"] = _driver_serial_check
         if vendor_id == "tachyon":
-            update_options["upload_started_callback"] = lambda: setattr(
-                device_status, "_firmware_upload_started", True
-            )
+            def _mark_firmware_upload_started():
+                device_status._firmware_upload_started = True
+                device_status._firmware_sequence_started = True
+
+            update_options["upload_started_callback"] = _mark_firmware_upload_started
         try:
             from .vendors.base import VendorDeviceInfo
             try:
@@ -6309,6 +6373,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 info = None
             if info is None:
                 info = VendorDeviceInfo(ip=ip)
+            device_status.model = device_status.model or getattr(info, "model", None)
             if not expected_serial:
                 expected_serial = getattr(info, "serial", None)
                 expected_version = getattr(info, "current_version", None)
@@ -6705,7 +6770,7 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             # Await each complete update and persist its result before moving on.
             for ip in device_ips:
                 await _run_device(ip, pass_number)
-                if job.cancelled:
+                if job.cancelled or ip in getattr(job, "_deferred_admission_ips", set()):
                     break
         else:
             await asyncio.gather(
