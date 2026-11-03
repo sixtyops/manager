@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from updater import database as db
+from updater.db.schema import build_schema
 from updater.database import _migrate_identity
 
 
@@ -41,6 +42,30 @@ def test_identity_migration_preserves_legacy_rows_and_is_repeatable():
         "SELECT device_id,mac,interface FROM device_macs"
     ).fetchone()) == (7, "00:11:22:33:44:55", "legacy")
     conn.close()
+
+
+def test_schema_leaves_legacy_firmware_holds_inert_and_does_not_create_them():
+    new_db = sqlite3.connect(":memory:")
+    build_schema(new_db)
+    assert new_db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='firmware_window_holds'"
+    ).fetchone() is None
+    assert new_db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='firmware_window_stops'"
+    ).fetchone() is not None
+
+    old_db = sqlite3.connect(":memory:")
+    old_db.execute(
+        "CREATE TABLE firmware_window_holds "
+        "(window_key TEXT PRIMARY KEY, job_id TEXT, device_ip TEXT, reason TEXT, held_at TEXT)"
+    )
+    old_db.execute(
+        "INSERT INTO firmware_window_holds VALUES ('window', 'job', '192.0.2.1', 'reason', 'time')"
+    )
+    build_schema(old_db)
+    assert tuple(old_db.execute("SELECT * FROM firmware_window_holds").fetchone()) == (
+        "window", "job", "192.0.2.1", "reason", "time"
+    )
 
 
 class TestTowerSites:
