@@ -593,7 +593,7 @@ def test_manual_fallback_admission_is_blocked_by_configured_window_stop(mock_db,
 
 
 @pytest.mark.asyncio
-async def test_manual_fallback_job_does_not_bypass_scheduled_one_wave_gate(
+async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
     mock_db, monkeypatch, utc_window_clock,
 ):
     db.set_setting("scheduled_rollout_safety_ready", "true")
@@ -664,7 +664,7 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_one_wave_gate(
     assert db.get_active_rollout()["phase"] == "pct50"
     assert db.get_active_rollout()["last_phase_window"] == '["firmware","' + configured_key[1] + '"]'
     start_update.assert_not_awaited()
-    assert scheduler._state == "waiting"
+    assert scheduler._state == "blocked_all_current"
 
 
 def test_window_key_stays_constant_across_midnight():

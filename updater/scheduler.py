@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import json
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +17,7 @@ from .firmware_policy import (
 )
 from . import rollout_gate
 from . import services
+from .core.gates import MaintenanceSchedule, firmware_window_cutoff
 from .services import format_temperature
 
 logger = logging.getLogger(__name__)
@@ -241,6 +243,8 @@ class AutoUpdateScheduler:
         self._last_run_result: Optional[str] = None
         self._last_run_time: Optional[str] = None
         self._current_job_id: Optional[str] = None
+        self._check_lock = asyncio.Lock()
+        self._queue_job_context: dict[str, dict] = {}
         self._ran_today: Set[str] = set()
         # Human-readable note when a family's Firmware Hold was cleared early
         # because a device is confirmed working on the new firmware (None when no
@@ -422,6 +426,11 @@ class AutoUpdateScheduler:
             await asyncio.sleep(self.check_interval)
 
     async def _check_and_run(self):
+        """Serialize scheduler ticks so one window cannot admit duplicate jobs."""
+        async with self._check_lock:
+            await self._check_and_run_locked()
+
+    async def _check_and_run_locked(self):
         """Main decision logic each tick."""
         settings = db.get_all_settings()
         schedule_enabled = settings.get("schedule_enabled")
@@ -671,11 +680,177 @@ class AutoUpdateScheduler:
             db.log_schedule_event("rollout_created", f"Rollout {rollout_id} for {fw_30x}")
             logger.info(f"Created rollout {rollout_id} for firmware {fw_30x}")
 
-        if rollout["status"] == "paused":
+        return await self._run_derived_queue(
+            settings, rollout, now, schedule_days, start_hour, end_hour, tz_str,
+            fw_30x, fw_303l, fw_tns100, allow_downgrade, today_key,
+        )
+
+    async def _run_derived_queue(
+        self, settings, rollout, now, schedule_days, start_hour, end_hour,
+        timezone_name, fw_30x, fw_303l, fw_tns100, allow_downgrade, today_key,
+    ):
+        """Admit the current derived queue under its persisted family cutoffs."""
+        window_key = rollout_gate.firmware_window_key({
+            "schedule_days": ",".join(schedule_days),
+            "schedule_start_hour": start_hour,
+            "schedule_end_hour": end_hour,
+            "schedule_timezone": timezone_name,
+        }, now)
+        if window_key is None:
             self._state = "waiting"
-            self._block_reason = f"Rollout paused: {rollout.get('pause_reason', 'Unknown reason')}"
+            self._block_reason = "Maintenance window identity is invalid"
             await self._broadcast_status()
             return
+
+        try:
+            if db.get_firmware_window_stop(window_key):
+                self._state = "blocked_safety"
+                self._block_reason = "This maintenance window stopped after a device failure"
+                await self._broadcast_status()
+                return
+            unresolved = db.get_unresolved_firmware_window_stops()
+        except Exception as exc:
+            logger.warning("Could not read firmware window stops; holding queue: %s", exc)
+            self._state = "blocked_safety"
+            self._block_reason = "Could not verify firmware failure stops"
+            await self._broadcast_status()
+            return
+        if unresolved:
+            stop = unresolved[0]
+            self._state = "blocked_safety"
+            self._block_reason = (
+                f"Firmware queue stopped at {stop.get('device_ip', 'a device')}; "
+                "resolve the failure before a later window"
+            )
+            await self._broadcast_status()
+            return
+
+        held_families: set[str] = set()
+        family_holds: dict = {}
+        try:
+            held_families, family_holds = self._held_families(settings, rollout)
+            queue = self._derive_pending_queue(
+                settings, rollout, allow_downgrade, held_families=held_families,
+            )
+        except Exception as exc:
+            logger.warning("Derived firmware queue failed closed: %s", exc)
+            if held_families:
+                self._state = "blocked_firmware_hold"
+                self._block_reason = self._firmware_hold_block_reason(held_families, family_holds)
+            else:
+                self._state = "waiting"
+                self._block_reason = str(exc) or "Could not build firmware queue"
+            await self._broadcast_status()
+            return
+
+        if not queue:
+            try:
+                held_queue = self._derive_pending_queue(
+                    settings, rollout, allow_downgrade, held_families=set(),
+                ) if held_families else []
+            except Exception as exc:
+                logger.warning("Could not verify held queue entries: %s", exc)
+                held_queue = [True]
+            if held_queue:
+                self._state = "blocked_firmware_hold"
+                self._block_reason = self._firmware_hold_block_reason(held_families, family_holds)
+            else:
+                self._state = "blocked_all_current"
+                self._block_reason = "All devices up to date"
+            await self._broadcast_status()
+            return
+
+        if rollout.get("status") in ("paused", "waiting_hold"):
+            db.resume_rollout(rollout["id"])
+            rollout = db.get_rollout(rollout["id"]) or rollout
+
+        filenames = {
+            "tna-30x": rollout.get("firmware_file") or fw_30x,
+            "tna-303l": rollout.get("firmware_file_303l") or fw_303l,
+            "tns-100": rollout.get("firmware_file_tns100") or fw_tns100,
+        }
+        schedule = MaintenanceSchedule(
+            schedule_id=window_key[0],
+            days=frozenset(_parse_schedule_days(schedule_days)),
+            start_hour=start_hour,
+            end_hour=end_hour,
+            tz=timezone_name,
+        )
+        try:
+            ramp_minutes = json.loads(settings.get("firmware_window_ramp_minutes", "[30, 120]"))
+            families = dict.fromkeys(entry["family"] for entry in queue)
+            for family in families:
+                artifact = filenames.get(family)
+                target_sha256 = db.get_firmware_sha256(artifact) if artifact else None
+                if not target_sha256:
+                    raise ValueError(f"Firmware artifact hash is unavailable for {family}")
+                with db.get_db() as conn:
+                    prior = conn.execute(
+                        "SELECT ordinal, last_window_key, cutoff_utc FROM firmware_window_timing "
+                        "WHERE family = ? AND target_sha256 = ?",
+                        (family, target_sha256),
+                    ).fetchone()
+                encoded_key = json.dumps(list(window_key), separators=(",", ":"))
+                same_window = bool(prior and prior["last_window_key"] == encoded_key)
+                ordinal = int(prior["ordinal"]) if same_window else (int(prior["ordinal"]) + 1 if prior else 1)
+                stored_cutoff = prior["cutoff_utc"] if same_window else None
+                cutoff = firmware_window_cutoff(
+                    schedule, now, ordinal, ramp_minutes, stored_cutoff,
+                )
+                if cutoff is None:
+                    raise ValueError(f"Firmware cutoff is invalid for {family}")
+                timing = db.record_firmware_window_admission(
+                    family, target_sha256, window_key, cutoff.isoformat(),
+                )
+                if timing["last_window_key"] != encoded_key or int(timing["ordinal"]) != ordinal:
+                    raise ValueError(f"Firmware timing changed during admission for {family}")
+        except Exception as exc:
+            logger.warning("Could not persist firmware window timing; holding queue: %s", exc)
+            self._state = "waiting"
+            self._block_reason = "Firmware window timing is unavailable"
+            await self._broadcast_status()
+            return
+
+        entries = [
+            {"ip": item["ip"], "role": item["device_type"], "parent_ap": item["parent_ip"]}
+            for item in queue
+        ]
+        self._state = "running"
+        self._block_reason = None
+        await self._broadcast_status()
+        if not self._scheduled_admission_allowed():
+            await self._broadcast_status()
+            return
+        db.log_schedule_event(
+            "job_starting", f"Derived queue: {len(entries)} device(s), concurrency=1",
+        )
+        try:
+            job_id = await self.start_update_func(
+                ap_ips=[], switch_ips=[], device_entries=entries,
+                firmware_file=fw_30x, firmware_file_303l=fw_303l,
+                firmware_file_tns100=fw_tns100, bank_mode="one", concurrency=1,
+                start_hour=start_hour, end_hour=end_hour,
+                schedule_days=schedule_days, schedule_timezone=timezone_name,
+                window_key=window_key,
+            )
+        except Exception as exc:
+            self._state = "waiting"
+            self._block_reason = f"Queue admission failed: {exc}"
+            db.log_schedule_event("job_start_failed", str(exc))
+            logger.error("Scheduler failed to admit derived firmware queue: %s", exc)
+            await self._broadcast_status()
+            return
+
+        self._current_job_id = job_id
+        self._queue_job_context[job_id] = {
+            "rollout": rollout,
+            "window_key": window_key,
+            "entries": queue,
+        }
+        self._ran_today.add(today_key)
+        db.set_rollout_job_id(rollout["id"], job_id)
+        db.log_schedule_event("job_started", f"Job {job_id} for derived firmware queue", job_id=job_id)
+        return
 
         if rollout["status"] == "waiting_hold":
             held_families, family_holds = self._held_families(settings, rollout)
@@ -1618,6 +1793,45 @@ class AutoUpdateScheduler:
             self._current_job_id = None
 
         self._last_run_time = datetime.now().isoformat()
+
+        queue_context = self._queue_job_context.pop(job_id, None)
+        if queue_context is not None:
+            if self._current_job_id == job_id:
+                self._current_job_id = None
+            rollout = queue_context["rollout"]
+            window_key = queue_context["window_key"]
+            entries = queue_context["entries"]
+            if device_statuses:
+                for ip, status in device_statuses.items():
+                    db.mark_rollout_device(
+                        rollout["id"], ip, "updated" if status == "success" else status,
+                    )
+            if failed_count > 0:
+                failed_ip = next(
+                    (ip for ip, status in (device_statuses or {}).items()
+                     if status not in ("success", "updated", "deferred", "skipped")),
+                    entries[0]["ip"] if entries else "unknown",
+                )
+                stop = db.stop_firmware_window(
+                    window_key, job_id, failed_ip, "scheduled_update",
+                    f"{failed_count} device(s) failed during the derived firmware queue",
+                )
+                reason = (stop or {}).get("reason") or "A device failed during the firmware queue"
+                self._last_run_result = f"Firmware queue stopped: {reason}"
+                db.log_schedule_event("firmware_window_stopped", reason, job_id=job_id)
+                logger.warning("Firmware queue stopped for job %s: %s", job_id, reason)
+            elif cancel_reason:
+                self._last_run_result = cancel_reason
+                db.log_schedule_event("job_deferred", cancel_reason, job_id=job_id)
+            else:
+                self._last_run_result = f"Queue job completed ({success_count} device(s))"
+                db.log_schedule_event("job_completed", self._last_run_result, job_id=job_id)
+            if self._state != "blocked_safety":
+                self._state = "waiting"
+                self._block_reason = self._last_run_result
+            task = asyncio.create_task(self._broadcast_status())
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+            return
 
         rollout = db.get_active_rollout()
         if rollout and rollout.get("last_job_id") == job_id:
