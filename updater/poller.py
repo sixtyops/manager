@@ -47,6 +47,7 @@ class PolicyEnforceError(RuntimeError):
 logger = logging.getLogger(__name__)
 
 CPE_SESSION_POLICY = "credential_change"
+_CREDENTIAL_IP_UNSET = object()
 _MAX_CLIENT_CACHE = 500
 _CLIENT_IDLE_TTL_SECONDS = 600  # 10 minutes since last use, for APs and switches
 _CPE_FRESH_LOGIN_LEAD = timedelta(minutes=15)
@@ -1304,6 +1305,8 @@ class NetworkPoller:
 
     async def poll_all_configs(self):
         """Fetch configs from all managed devices."""
+        generations = self._client_credentials_generation.copy()
+        cpe_generation = self._cpe_credentials_generation
         aps = db.get_access_points(enabled_only=True)
         switches = db.get_switches(enabled_only=True)
         all_cpes = db.get_all_cpes()
@@ -1311,16 +1314,19 @@ class NetworkPoller:
         # Build list of devices to poll: (ip, username, password, model, role)
         devices = []
         for ap in aps:
-            devices.append((ap["ip"], ap["username"], ap["password"], ap.get("model"), "ap"))
+            devices.append((ap["ip"], ap["username"], ap["password"], ap.get("model"), "ap",
+                            generations.get(ap["ip"], 0), ap["ip"]))
         for sw in switches:
-            devices.append((sw["ip"], sw["username"], sw["password"], sw.get("model"), "switch"))
+            devices.append((sw["ip"], sw["username"], sw["password"], sw.get("model"), "switch",
+                            generations.get(sw["ip"], 0), sw["ip"]))
         ap_dict = db.get_all_access_points_dict(enabled_only=False)
         for cpe in all_cpes:
             if cpe.get("auth_status") == "ok" and cpe.get("ip"):
                 # Use parent AP credentials for CPE (batch lookup)
                 ap = ap_dict.get(cpe["ap_ip"])
                 if ap:
-                    devices.append((cpe["ip"], ap["username"], ap["password"], cpe.get("model"), "cpe"))
+                    devices.append((cpe["ip"], ap["username"], ap["password"], cpe.get("model"), "cpe",
+                                    cpe_generation, None))
 
         if not devices:
             self._record_last_config_poll()
@@ -1329,12 +1335,14 @@ class NetworkPoller:
         logger.info(f"Config poll: fetching configs from {len(devices)} devices")
         sem = asyncio.Semaphore(5)
 
-        async def fetch_config(ip, username, password, model, role):
+        async def fetch_config(ip, username, password, model, role, generation, credential_ip):
             async with sem:
-                await self._fetch_and_store_config(ip, username, password, model)
+                await self._fetch_and_store_config(
+                    ip, username, password, model, generation, credential_ip,
+                )
 
         await asyncio.gather(
-            *[fetch_config(ip, u, p, m, r) for ip, u, p, m, r in devices],
+            *[fetch_config(*device) for device in devices],
             return_exceptions=True,
         )
 
@@ -1349,48 +1357,83 @@ class NetworkPoller:
         sem = asyncio.Semaphore(5)
 
         async def fetch_one(ip):
+            generation = self._client_credentials_generation.get(ip, 0)
+            cpe_generation = self._cpe_credentials_generation
             async with sem:
                 # Find device credentials
                 device = db.get_access_point(ip)
                 if device:
-                    await self._fetch_and_store_config(ip, device["username"], device["password"], device.get("model"))
+                    await self._fetch_and_store_config(
+                        ip, device["username"], device["password"], device.get("model"),
+                        generation, ip,
+                    )
                     return
                 device = db.get_switch(ip)
                 if device:
-                    await self._fetch_and_store_config(ip, device["username"], device["password"], device.get("model"))
+                    await self._fetch_and_store_config(
+                        ip, device["username"], device["password"], device.get("model"),
+                        generation, ip,
+                    )
                     return
                 cpe = db.get_cpe_by_ip(ip)
                 if cpe:
                     ap = db.get_access_point(cpe["ap_ip"])
                     if ap:
-                        await self._fetch_and_store_config(ip, ap["username"], ap["password"], cpe.get("model"))
+                        await self._fetch_and_store_config(
+                            ip, ap["username"], ap["password"], cpe.get("model"),
+                            cpe_generation, None,
+                        )
 
         await asyncio.gather(*[fetch_one(ip) for ip in ips], return_exceptions=True)
 
         if self.broadcast_func:
             await self.broadcast_func({"type": "config_poll_complete"})
 
-    async def _fetch_and_store_config(self, ip: str, username: str, password: str, model: str = None):
+    async def _fetch_and_store_config(self, ip: str, username: str, password: str,
+                                      model: str = None, credential_generation: int = None,
+                                      credential_ip=_CREDENTIAL_IP_UNSET):
         """Fetch config from a device and store if changed."""
+        if credential_generation is None:
+            credential_generation = self._client_credentials_generation.get(ip, 0)
+        if credential_ip is _CREDENTIAL_IP_UNSET:
+            credential_ip = ip
         lock = self._cpe_request_locks.setdefault(ip, asyncio.Lock())
         async with lock:
-            await self._fetch_and_store_config_unlocked(ip, username, password, model)
+            if not self._credentials_current(credential_generation, credential_ip):
+                return
+            await self._fetch_and_store_config_unlocked(
+                ip, username, password, model, credential_generation, credential_ip,
+            )
 
-    async def _fetch_and_store_config_unlocked(self, ip: str, username: str, password: str, model: str = None):
+    async def _fetch_and_store_config_unlocked(self, ip: str, username: str, password: str,
+                                               model: str = None, credential_generation: int = None,
+                                               credential_ip=_CREDENTIAL_IP_UNSET):
         """Fetch config while holding the per-CPE request lock."""
         try:
+            if credential_generation is None:
+                credential_generation = self._client_credentials_generation.get(ip, 0)
+            if credential_ip is _CREDENTIAL_IP_UNSET:
+                credential_ip = ip
+            if not self._credentials_current(credential_generation, credential_ip):
+                return
             # Reuse cached client if available, otherwise create new
             client = self._get_cached_client(ip)
             if not client:
                 client = get_driver("tachyon")(ip, username, password, timeout=15)
                 login_result = await client.connect()
+                if not self._credentials_current(credential_generation, credential_ip):
+                    return
                 if login_result is not True:
                     logger.debug(f"Config poll: login failed for {ip}: {login_result}")
                     err = login_result if isinstance(login_result, str) else "login failed"
                     db.update_device_config_poll_status(ip, "auth", err)
                     return
 
+            if not self._credentials_current(credential_generation, credential_ip):
+                return
             config, poll_status, poll_error = await client.fetch_config()
+            if not self._credentials_current(credential_generation, credential_ip):
+                return
             # 401/403 mid-session means our cached cookie expired (or perms
             # changed) — that's an auth problem, not a generic HTTP one.
             if poll_status == "http_status" and poll_error and (
@@ -1464,6 +1507,8 @@ class NetworkPoller:
                                 "mac": mac,
                                 "snapshots_moved": moved,
                             })
+                            if not self._credentials_current(credential_generation, credential_ip):
+                                return
                         # Refresh existing_hash since rebind brought history under this IP.
                         existing_hash = db.get_latest_config_hash(ip)
                         if existing_hash == config_hash:
@@ -1476,6 +1521,8 @@ class NetworkPoller:
                         f"Skipping rebind; manual reconciliation needed."
                     )
 
+            if not self._credentials_current(credential_generation, credential_ip):
+                return
             db.save_device_config(ip, config_json, config_hash, model, hardware_id, mac)
             logger.info(f"Config poll: saved new config for {ip} (hash: {config_hash[:12]})")
 
@@ -1487,6 +1534,8 @@ class NetworkPoller:
             # in-loop status writes — which is exactly the case we'd
             # otherwise lose visibility on.
             logger.warning(f"Config poll: error fetching config from {ip}: {e}")
+            if not self._credentials_current(credential_generation, credential_ip):
+                return
             try:
                 db.update_device_config_poll_status(ip, "unknown", str(e)[:200])
             except Exception:
