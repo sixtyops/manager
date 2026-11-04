@@ -79,6 +79,12 @@ All notable changes to this project are documented in this file.
 - Fail AP recovery when the CPE eth0 read is unavailable or invalid.
 - Accept a missing eth0 link field only from a valid response.
 - Firmware verification checks the full version and build reported by Tachyon devices.
+- Manager saves and verifies the configuration snapshot before a pre-update reboot or firmware upload.
+- CPE migration maps newer legacy observations to the existing migrated device, resolves duplicate legacy rows without blocking startup, and keeps AP or switch IP conflicts.
+- The scheduler ignores legacy wave rollouts during queue admission. It keeps those rows as history and hides them from current scheduler status.
+
+### Changed
+- Operators can set the firmware window ramp in settings, and scheduler status shows the persisted cutoff and ramp window ordinal.
 
 ### Removed
 - Removed SFTP backups; back up `./data` and `./firmware` with the encryption key.

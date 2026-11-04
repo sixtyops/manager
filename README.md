@@ -12,13 +12,13 @@ predictions have been removed.
 - Write safety: serial recovery, CPE rediscovery, serial checks before each
   write, and stop-on-first-failure are shipped.
 - Queue: cutoff, serial execution, and removal of wave behavior are shipped.
-- Proof: C2 passed on 2026-11-03 in dev host run 26. The live single-bank
-  firmware test upgraded and restored the lab AP. C3 is dropped (owner,
-  2026-11-03): the qualification record belonged to the removed hold; run 26
-  is the evidence. C4 dev release and C5 opening scheduled rollouts remain
-  open; the owner signs the tag and opens rollouts.
+- Progress: C1 and C2 are done. C3 is dropped by the owner. C4 release
+  preparation is complete in [#732](https://github.com/sixtyops/manager/pull/732)
+  for version 1.4.1-dev6; the tag awaits the owner's signature after the UI
+  review. C5 step 1 passed in dev host run 28c on 2026-11-04. C5 steps 2 and 3
+  await the owner.
 
-Updated 2026-11-03. Track status in [issue #604](https://github.com/sixtyops/manager/issues/604).
+Updated 2026-11-04. Track status in [#604](https://github.com/sixtyops/manager/issues/604).
 
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 

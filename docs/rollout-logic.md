@@ -11,7 +11,7 @@ stays closed until required safety proof passes.
 **Detail:** The shipped queue uses Manager inventory and the device APIs it calls. It runs one ordered list of devices that need the selected firmware. It does not persist membership or calculate percentages.
 
 - Keep device identity, address holds, and offline history as described below.
-- Keep Firmware Hold by firmware family. Apply `firmware_window_ramp_minutes` (30-120) to the first used maintenance windows for each new firmware family or artifact; later windows use the normal schedule.
+- Keep Firmware Hold by firmware family. Operators set `firmware_window_ramp_minutes` (30-120) in settings for the first used maintenance windows for each new firmware family or artifact; later windows use the normal schedule. Scheduler status shows the persisted cutoff and ramp window ordinal.
 - Run CPEs, then APs, then switches. Process one device write and recovery
   sequence at a time.
 - Persist the first failure and the maintenance-window cutoff. Stop new starts
@@ -26,6 +26,11 @@ stays closed until required safety proof passes.
 The target remains closed to scheduled admission until its required proof
 passes. See [issue #695](https://github.com/sixtyops/manager/issues/695) for the
 ordered PR plan.
+
+The shipped queue ignores legacy wave rollouts during admission. Legacy wave
+rows remain in history and are hidden from current scheduler status. Startup
+migration resolves duplicate legacy CPE rows by mapping newer observations to
+the existing migrated CPE; AP and switch IP conflicts remain errors.
 
 ## 1. Device identity
 
