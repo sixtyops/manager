@@ -77,6 +77,22 @@ def _migrate_cpe_rows(db):
                         "tx_rate", "rx_rate", "mcs", "link_uptime", "signal_health",
                         "target_rssi_dbm", "snr_db", "sector_tx", "sector_rx", "antenna_kit",
                         "max_rain_mm_hr")
+        map_indexes = db.execute("PRAGMA index_list(cpe_migration_map)").fetchall()
+        for index in map_indexes:
+            if not index[2]:
+                continue
+            indexed_columns = [row[2] for row in db.execute(f"PRAGMA index_info('{index[1]}')")]
+            if indexed_columns == ["device_id"]:
+                db.execute("""CREATE TABLE cpe_migration_map_new (
+                    old_cpe_id INTEGER PRIMARY KEY,
+                    device_id INTEGER NOT NULL,
+                    FOREIGN KEY (device_id) REFERENCES devices(id)
+                )""")
+                db.execute("INSERT INTO cpe_migration_map_new SELECT old_cpe_id,device_id FROM cpe_migration_map")
+                db.execute("DROP TABLE cpe_migration_map")
+                db.execute("ALTER TABLE cpe_migration_map_new RENAME TO cpe_migration_map")
+                db.execute("CREATE INDEX idx_cpe_migration_map_device_id ON cpe_migration_map(device_id)")
+                break
         source_columns = {row[1] for row in db.execute("PRAGMA table_info(cpe_cache)")}
         legacy_rows = db.execute("SELECT * FROM cpe_cache ORDER BY id").fetchall()
         pending_rows = [
@@ -117,6 +133,39 @@ def _migrate_cpe_rows(db):
                     "SELECT old_cpe_id,device_id FROM cpe_migration_map WHERE device_id=?",
                     (owner["id"],),
                 ).fetchone()
+                if owner["role"] == "cpe" and prior:
+                    existing = db.execute(
+                        "SELECT last_seen FROM devices WHERE id=?", (owner["id"],)
+                    ).fetchone()
+                    values = {name: row[name] for name in source_columns}
+                    if (values.get("last_updated") or "") > (existing["last_seen"] or ""):
+                        db.execute(
+                            """UPDATE devices SET parent_device_id=?, firmware_version=?, last_seen=?,
+                               bank1_version=?, bank2_version=?, active_bank=?, bank_last_fetched=?,
+                               last_config_poll_at=?, last_config_poll_status=?, last_config_poll_error=?,
+                               auth_status=? WHERE id=?""",
+                            (parent["id"], row["firmware_version"], values.get("last_updated"),
+                             values.get("bank1_version"), values.get("bank2_version"),
+                             values.get("active_bank"), values.get("bank_last_fetched"),
+                             values.get("last_config_poll_at"), values.get("last_config_poll_status"),
+                             values.get("last_config_poll_error"), values.get("auth_status"), owner["id"]),
+                        )
+                        db.execute(
+                            f"UPDATE link_metrics SET {','.join(f'{name}=?' for name in metric_names)} "
+                            "WHERE device_id=?",
+                            (*(values.get(name) for name in metric_names), owner["id"]),
+                        )
+                        logger.info(
+                            "Updated migrated CPE from newer legacy row %s; moved to parent device %s",
+                            old_id, parent["id"],
+                        )
+                    else:
+                        logger.info(
+                            "Kept migrated CPE for older or equal legacy row %s",
+                            old_id,
+                        )
+                    db.execute("INSERT INTO cpe_migration_map VALUES (?,?)", (old_id, owner["id"]))
+                    continue
                 raise ValueError(
                     f"CPE migration collision rows {prior['old_cpe_id'] if prior else 'existing'} "
                     f"and {old_id}; parent device IDs {owner['id']} and {parent['id']}; IP {row['ip']}"
