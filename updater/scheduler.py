@@ -577,15 +577,15 @@ class AutoUpdateScheduler:
             logger.info(f"Created rollout {rollout_id} for firmware {fw_30x}")
 
         return await self._run_derived_queue(
-            settings, rollout, now, schedule_days, start_hour, end_hour, tz_str,
+            settings, now, schedule_days, start_hour, end_hour, tz_str,
             fw_30x, fw_303l, fw_tns100, allow_downgrade,
         )
 
     async def _run_derived_queue(
-        self, settings, rollout, now, schedule_days, start_hour, end_hour,
+        self, settings, now, schedule_days, start_hour, end_hour,
         timezone_name, fw_30x, fw_303l, fw_tns100, allow_downgrade,
     ):
-        """Admit the current derived queue under its persisted family cutoffs."""
+        """Admit the selected firmware queue under its persisted family cutoffs."""
         window_key = rollout_gate.firmware_window_key({
             "schedule_days": ",".join(schedule_days),
             "schedule_start_hour": start_hour,
@@ -633,10 +633,10 @@ class AutoUpdateScheduler:
         held_families: set[str] = set()
         family_holds: dict = {}
         try:
-            held_families, family_holds = self._held_families(settings, rollout)
+            held_families, family_holds = self._held_families(settings, None)
             if recovery_ip:
                 recovery_queue = self._derive_pending_queue(
-                    settings, rollout, allow_downgrade, held_families=set(),
+                    settings, None, allow_downgrade, held_families=set(),
                     recovery_ip=recovery_ip,
                 )
                 recovery_entry = next(
@@ -665,7 +665,7 @@ class AutoUpdateScheduler:
                 queue = [recovery_entry]
             else:
                 queue = self._derive_pending_queue(
-                    settings, rollout, allow_downgrade, held_families=held_families,
+                    settings, None, allow_downgrade, held_families=held_families,
                 )
         except Exception as exc:
             logger.warning("Derived firmware queue failed closed: %s", exc)
@@ -681,7 +681,7 @@ class AutoUpdateScheduler:
         if not queue:
             try:
                 held_queue = self._derive_pending_queue(
-                    settings, rollout, allow_downgrade, held_families=set(),
+                    settings, None, allow_downgrade, held_families=set(),
                     recovery_ip=recovery_ip,
                 ) if held_families else []
             except Exception as exc:
@@ -696,14 +696,10 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        if rollout.get("status") in ("paused", "waiting_hold"):
-            db.resume_rollout(rollout["id"])
-            rollout = db.get_rollout(rollout["id"]) or rollout
-
         filenames = {
-            "tna-30x": rollout.get("firmware_file") or fw_30x,
-            "tna-303l": rollout.get("firmware_file_303l") or fw_303l,
-            "tns-100": rollout.get("firmware_file_tns100") or fw_tns100,
+            "tna-30x": fw_30x,
+            "tna-303l": fw_303l,
+            "tns-100": fw_tns100,
         }
         schedule = MaintenanceSchedule(
             schedule_id=window_key[0],
@@ -794,7 +790,6 @@ class AutoUpdateScheduler:
 
         self._current_job_id = job_id
         self._queue_job_context[job_id] = {
-            "rollout": rollout,
             "window_key": window_key,
             "entries": queue,
         }
@@ -1338,6 +1333,8 @@ class AutoUpdateScheduler:
 
         rollout_info = None
         rollout = db.get_current_rollout()
+        if rollout and db.get_rollout_devices(rollout["id"]):
+            rollout = None
         if rollout:
             progress = db.get_rollout_progress(rollout["id"])
             remaining_devices = None
