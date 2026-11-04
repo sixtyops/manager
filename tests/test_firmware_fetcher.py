@@ -12,6 +12,7 @@ from updater import database as db
 from updater.firmware_fetcher import (
     FirmwareFetcher,
     FirmwareRelease,
+    FRESHDESK_PAGES,
     _discover_family_pages,
     RE_TABLE_MD5,
     RE_VERSION_TABLE,
@@ -201,7 +202,7 @@ class TestScrapePage:
 
 
 class TestFamilyPageDiscovery(TestScrapePage):
-    def test_discovers_supported_families_and_reports_unsupported_successor(self):
+    def test_discovers_supported_families_and_skips_unsupported_successor(self):
         html = (FIXTURE_DIR / "family_index.html").read_text()
         pages, errors = _discover_family_pages(html)
 
@@ -209,8 +210,13 @@ class TestFamilyPageDiscovery(TestScrapePage):
         assert any(family.startswith("TNA-301, TNA-302, TNA-303X") for _, _, family in pages)
         assert any(family.startswith("TNA-303L-65, TNA-303L-65-LIB, TNA-303L") for _, _, family in pages)
         assert any(family.startswith("TNS-100") for _, _, family in pages)
-        assert any("TNA-305X, TNA-305A" in error for error in errors)
+        assert errors == []
+        assert not any("TNA-305" in error for error in errors)
         assert all("TNA-305" not in url for _, url, _ in pages)
+        assert (
+            next(url for platform, url, _ in pages if platform == "tna-303l")
+            == FRESHDESK_PAGES["tna-303l"]
+        )
 
     def test_missing_supported_family_is_a_parse_error(self):
         pages, errors = _discover_family_pages(
@@ -225,7 +231,7 @@ class TestFamilyPageDiscovery(TestScrapePage):
         fetcher = FirmwareFetcher(tmp_path, AsyncMock())
         fixtures = {
             "tna-30x": "tna_300.html",
-            "tna-303l": "tna_303l.html",
+            "tna-303l": "tna_303l_live.html",
             "tns-100": "tns_100.html",
         }
         for platform, fixture in fixtures.items():
@@ -243,6 +249,10 @@ class TestFamilyPageDiscovery(TestScrapePage):
             assert warnings == []
             if platform == "tns-100":
                 assert releases[0].md5 == "33333333333333333333333333333333"
+            if platform == "tna-303l":
+                assert releases[0].version == "1.15.1"
+                assert releases[0].md5 == "4404c586a0122460b778ed28b438e595"
+                assert [release.channel for release in releases] == ["stable"]
 
     def test_sha256_table_checksum_is_parsed(self, tmp_path):
         html = """
