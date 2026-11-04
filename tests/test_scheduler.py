@@ -738,6 +738,50 @@ class TestSchedulerStartFailure:
         assert timing["ordinal"] == 1
 
 
+def test_status_reads_persisted_cutoff_and_ramp_ordinal_for_current_target(tmp_path, monkeypatch):
+    """Status reports timing from the real SQLite row for the pending target."""
+    database_path = tmp_path / "scheduler-status.db"
+    monkeypatch.setattr(db, "DB_PATH", database_path)
+    db.init_db()
+    db.set_settings({
+        "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+        "schedule_start_hour": "0",
+        "schedule_end_hour": "23",
+        "timezone": "UTC",
+        "firmware_canary_hold_days": "0",
+        "selected_firmware_30x": "tna-30x-2.0.0-r200.bin",
+        "selected_firmware_303l": "",
+        "selected_firmware_tns100": "",
+        "schedule_scope": "all",
+    })
+    firmware = "tna-30x-2.0.0-r200.bin"
+    target_sha256 = "a" * 64
+    db.register_firmware(firmware, sha256=target_sha256)
+    db.upsert_access_point(
+        "10.0.0.10", "root", "pass", enabled=True, model="TNA-301",
+        firmware_version="1.0.0",
+    )
+    db.create_rollout(firmware)
+
+    from updater import rollout_gate
+
+    current_key = rollout_gate.firmware_window_key(db.get_all_settings(), datetime.now())
+    assert current_key is not None
+    previous_key = (current_key[0], "2000-01-01")
+    cutoff_utc = "2099-01-01T00:00:00+00:00"
+    db.record_firmware_window_admission(
+        "tna-30x", target_sha256, previous_key, "2098-01-01T00:00:00+00:00"
+    )
+    db.record_firmware_window_admission(
+        "tna-30x", target_sha256, current_key, cutoff_utc
+    )
+
+    status = AutoUpdateScheduler(AsyncMock(), AsyncMock()).get_status()
+
+    assert status["rollout"]["cutoff_utc"] == cutoff_utc
+    assert status["rollout"]["ramp_ordinal"] == 2
+
+
 class TestSchedulerSettingsSafety:
     @pytest.mark.asyncio
     async def test_malformed_settings_do_not_crash_check_and_run(self, mock_db, monkeypatch):
