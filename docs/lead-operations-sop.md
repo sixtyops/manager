@@ -418,14 +418,21 @@ For a follow-up inside a worker's own task, the verified CLI supports `paseo
 send "$worker_id" --prompt-file "$task_file" --no-wait`. For review findings,
 launch a new worker with a brief that names the review report. If the builder
 has unpushed work, use the builder's workspace and require the new worker to
-verify that work first. For new capacity, inspect `paseo run --help` and provider capabilities, then
-use a bounded prompt and isolated workspace. `paseo run` ignores `--cwd`; use
-`--workspace <id>` or `--new-workspace worktree --worktree-mode branch-off|checkout-pr`.
+verify that work first. Run a read-only worker for review, bench run, diagnosis,
+or tracker edit in the lead's workspace with `paseo run --workspace <lead
+workspace id>`. A read-only worker makes no worktree. Give a worker that writes
+code or docs a worktree workspace. For new capacity, inspect `paseo run --help`
+and provider capabilities, then use a bounded prompt and isolated workspace.
+`paseo run` ignores `--cwd`; use `--workspace <id>` or
+`--new-workspace worktree --worktree-mode branch-off|checkout-pr`.
 Pass secrets only through `--env`. Codex workers need escalated sandbox
 permission for network access, including `gh` and `git fetch`; state this in
 every brief. Keep briefs in the lead state folder, not `/tmp`. Do not
 copy stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
 services as part of resuming work.
+
+When a worker task or its PR ends, confirm that its branch is pushed or merged.
+Then archive its workspace with `paseo workspace archive <id>`.
 
 ## Durable record and fresh-session prompt
 
