@@ -78,14 +78,39 @@ def _migrate_cpe_rows(db):
                         "target_rssi_dbm", "snr_db", "sector_tx", "sector_rx", "antenna_kit",
                         "max_rain_mm_hr")
         source_columns = {row[1] for row in db.execute("PRAGMA table_info(cpe_cache)")}
-        for row in db.execute("SELECT * FROM cpe_cache ORDER BY id").fetchall():
-            old_id = row["id"]
-            if db.execute("SELECT 1 FROM cpe_migration_map WHERE old_cpe_id=?", (old_id,)).fetchone():
-                continue
+        legacy_rows = db.execute("SELECT * FROM cpe_cache ORDER BY id").fetchall()
+        pending_rows = [
+            row for row in legacy_rows
+            if not db.execute("SELECT 1 FROM cpe_migration_map WHERE old_cpe_id=?", (row["id"],)).fetchone()
+        ]
+        rows_by_ip = {}
+        parents_by_id = {}
+        for row in pending_rows:
             parent = db.execute("SELECT id,username,password FROM devices WHERE ip=? AND role='ap'",
                                 (row["ap_ip"],)).fetchone()
             if not parent:
-                raise ValueError(f"CPE migration row {old_id} has no AP parent at {row['ap_ip']}")
+                raise ValueError(f"CPE migration row {row['id']} has no AP parent at {row['ap_ip']}")
+            parents_by_id[row["id"]] = parent
+            rows_by_ip.setdefault(row["ip"], []).append(row)
+
+        canonical_ids = set()
+        dropped_ids = set()
+        for rows in rows_by_ip.values():
+            parent_ids = {parents_by_id[row["id"]]["id"] for row in rows}
+            if len(rows) > 1 and len(parent_ids) > 1:
+                # ISO last_updated values sort chronologically; the lower stable
+                # legacy row ID wins when observations have the same timestamp.
+                canonical = max(rows, key=lambda item: (item["last_updated"] or "", -item["id"]))
+                canonical_ids.add(canonical["id"])
+                dropped_ids.update(row["id"] for row in rows if row["id"] != canonical["id"])
+
+        for row in legacy_rows:
+            old_id = row["id"]
+            if db.execute("SELECT 1 FROM cpe_migration_map WHERE old_cpe_id=?", (old_id,)).fetchone():
+                continue
+            if old_id in dropped_ids:
+                continue
+            parent = parents_by_id[old_id]
             owner = db.execute("SELECT id,role FROM devices WHERE ip=?", (row["ip"],)).fetchone()
             if owner:
                 prior = db.execute(
@@ -116,6 +141,16 @@ def _migrate_cpe_rows(db):
                        f"VALUES ({','.join('?' for _ in range(len(metric_names)+1))})",
                        (device_id, *(values.get(name) for name in metric_names)))
             db.execute("INSERT INTO cpe_migration_map VALUES (?,?)", (old_id, device_id))
+        for old_id in dropped_ids:
+            db.execute("DELETE FROM cpe_cache WHERE id=?", (old_id,))
+        for rows in rows_by_ip.values():
+            if any(row["id"] in canonical_ids for row in rows):
+                canonical_id = next(row["id"] for row in rows if row["id"] in canonical_ids)
+                logger.warning(
+                    "Resolved duplicate legacy CPE rows during migration; kept row %s and dropped %s older cache rows",
+                    canonical_id,
+                    sum(row["id"] in dropped_ids for row in rows),
+                )
         db.commit()
     except Exception:
         db.rollback()
