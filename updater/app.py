@@ -243,6 +243,7 @@ def _queue_status_payload(status: dict) -> dict:
         "current_device": _current_queue_device(status.get("current_job_id")),
         "pause_reason": rollout.get("pause_reason") or status.get("block_reason") or status.get("safety_block_reason"),
         "cutoff_utc": rollout.get("cutoff_utc"),
+        "ramp_ordinal": rollout.get("ramp_ordinal"),
         "next_window": status.get("next_window_iso") or status.get("next_window"),
     }
     return result
@@ -2241,6 +2242,7 @@ _SETTINGS_WRITABLE = {
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "firmware_beta_enabled", "firmware_canary_hold_days",
+    "firmware_window_ramp_minutes",
     "slack_webhook_url",
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
     "snmp_trap_community", "snmp_trap_version",
@@ -2349,6 +2351,16 @@ def _validate_settings(filtered: dict):
         hold_days = _parse_int_field(filtered["firmware_canary_hold_days"], "firmware_canary_hold_days")
         if hold_days < 6 or hold_days > 365:
             raise HTTPException(400, "firmware_canary_hold_days must be between 6 and 365")
+    if "firmware_window_ramp_minutes" in filtered:
+        try:
+            ramp_minutes = json.loads(filtered["firmware_window_ramp_minutes"])
+        except (TypeError, json.JSONDecodeError):
+            raise HTTPException(400, "firmware_window_ramp_minutes must be a JSON array of minutes")
+        if (not isinstance(ramp_minutes, list) or not ramp_minutes
+                or any(type(minutes) is not int or not 30 <= minutes <= 120 for minutes in ramp_minutes)
+                or any(later < earlier for earlier, later in zip(ramp_minutes, ramp_minutes[1:]))):
+            raise HTTPException(400, "firmware_window_ramp_minutes must be ascending minutes from 30 to 120")
+        filtered["firmware_window_ramp_minutes"] = json.dumps(ramp_minutes)
     if "min_temperature_c" in filtered:
         min_temp = _parse_float_field(filtered["min_temperature_c"], "min_temperature_c")
         if min_temp < -100 or min_temp > 100:

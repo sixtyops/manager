@@ -1342,6 +1342,7 @@ class AutoUpdateScheduler:
             progress = db.get_rollout_progress(rollout["id"])
             remaining_devices = None
             cutoff_utc = None
+            ramp_ordinal = None
             try:
                 pending = self._derive_pending_queue(
                     settings, rollout, settings.get("allow_downgrade", "false") == "true",
@@ -1361,12 +1362,13 @@ class AutoUpdateScheduler:
                         encoded_key = json.dumps(list(window_key), separators=(",", ":"))
                         with db.get_db() as conn:
                             timing = conn.execute(
-                                "SELECT last_window_key, cutoff_utc FROM firmware_window_timing "
+                                "SELECT ordinal, last_window_key, cutoff_utc FROM firmware_window_timing "
                                 "WHERE family = ? AND target_sha256 = ?",
                                 (family, target_sha256),
                             ).fetchone()
                         if timing and timing["last_window_key"] == encoded_key:
                             cutoff_utc = timing["cutoff_utc"]
+                            ramp_ordinal = timing["ordinal"]
             except Exception as exc:
                 logger.debug("Could not calculate current queue status: %s", exc)
             rollout_info = {
@@ -1380,6 +1382,7 @@ class AutoUpdateScheduler:
                 "remaining_devices": remaining_devices,
                 "pause_reason": rollout.get("pause_reason") or self._block_reason,
                 "cutoff_utc": cutoff_utc,
+                "ramp_ordinal": ramp_ordinal,
             }
 
         # Per-family Firmware Hold state for the selected firmware (or the active
