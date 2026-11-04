@@ -190,6 +190,30 @@ async def test_scheduler_dispatches_exact_serial_queue(mock_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scheduler_tick_leaves_paused_legacy_rollout_untouched(mock_db, monkeypatch):
+    _seed_aps(1)
+    db.set_settings(_settings(hold_days=0))
+    legacy_id = db.create_rollout("old-firmware.bin")
+    db.pause_rollout(legacy_id, "Paused legacy rollout")
+    legacy_before = db.get_rollout(legacy_id)
+    scheduler, start_update = _make_scheduler()
+
+    with patch.object(db, "get_active_rollout", side_effect=AssertionError("legacy read")) as get_active, \
+         patch.object(db, "get_last_rollout_for_firmware_set", side_effect=AssertionError("legacy read")) as get_last, \
+         patch.object(db, "create_rollout", side_effect=AssertionError("legacy write")) as create, \
+         patch.object(db, "cancel_rollout", side_effect=AssertionError("legacy write")) as cancel:
+        await _Harness(scheduler, monkeypatch).tick()
+
+    start_update.assert_awaited_once()
+    assert start_update.await_args.kwargs["device_entries"]
+    get_active.assert_not_called()
+    get_last.assert_not_called()
+    create.assert_not_called()
+    cancel.assert_not_called()
+    assert db.get_rollout(legacy_id) == legacy_before
+
+
+@pytest.mark.asyncio
 async def test_queue_failure_stops_later_windows_and_target_changes(mock_db, monkeypatch):
     _seed_aps(2)
     db.set_settings(_settings(hold_days=0))

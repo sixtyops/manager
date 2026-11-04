@@ -435,30 +435,6 @@ class AutoUpdateScheduler:
 
         fw_30x = settings.get("selected_firmware_30x", "")
         allow_downgrade = settings.get("allow_downgrade", "false") == "true"
-        if fw_30x:
-            fw_303l_early = settings.get("selected_firmware_303l", "")
-            fw_tns100_early = settings.get("selected_firmware_tns100", "")
-            last_rollout = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l_early, fw_tns100_early)
-            if last_rollout and last_rollout["status"] == "completed":
-                scope_ips = self._resolve_scope(settings)
-                switch_scope = self._resolve_switch_scope(settings)
-
-                target_versions = self._target_versions(settings, None)
-                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
-                needs_update = self._filter_devices_needing_update(
-                    scope_ips, target_versions, allow_downgrade, cooldown_days=cooldown_days
-                )
-                needs_switch_update = self._filter_switches_needing_update(
-                    switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
-                )
-                retry_key = rollout_gate.firmware_window_key(settings, now)
-                if (not needs_update and not needs_switch_update
-                        and not _resolved_failure_recovery_ip(retry_key)):
-                    if self._state != "blocked_all_current":
-                        self._state = "blocked_all_current"
-                        self._block_reason = "All devices up to date"
-                        await self._broadcast_status()
-                    return
 
         schedule_days = [d.strip() for d in settings.get("schedule_days", "").split(",") if d.strip()]
         start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
@@ -527,55 +503,6 @@ class AutoUpdateScheduler:
 
         fw_303l = settings.get("selected_firmware_303l", "")
         fw_tns100 = settings.get("selected_firmware_tns100", "")
-
-        rollout = db.get_active_rollout()
-
-        if rollout and self._firmware_changed(rollout, fw_30x, fw_303l, fw_tns100):
-            db.cancel_rollout(rollout["id"])
-            db.log_schedule_event("rollout_cancelled", "Firmware selection changed")
-            logger.info(f"Cancelled rollout {rollout['id']} due to firmware change")
-            rollout = None
-
-        if rollout is None:
-            last = db.get_last_rollout_for_firmware_set(fw_30x, fw_303l, fw_tns100)
-            if last and last["status"] == "completed":
-                scope_ips = self._resolve_scope(settings)
-                switch_scope = self._resolve_switch_scope(settings)
-
-                target_versions = self._target_versions(settings, None)
-                cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
-                needs_update = self._filter_devices_needing_update(
-                    scope_ips, target_versions, allow_downgrade, cooldown_days=cooldown_days
-                )
-                needs_switch_update = self._filter_switches_needing_update(
-                    switch_scope, target_versions, allow_downgrade, cooldown_days=cooldown_days
-                )
-                retry_key = rollout_gate.firmware_window_key(settings, now)
-                if (not needs_update and not needs_switch_update
-                        and not _resolved_failure_recovery_ip(retry_key)):
-                    self._state = "blocked_all_current"
-                    self._block_reason = "All devices up to date"
-                    await self._broadcast_status()
-                    return
-
-            if not self._scheduled_admission_allowed():
-                await self._broadcast_status()
-                return
-            try:
-                rollout_id = db.create_rollout(
-                    fw_30x, fw_303l if fw_303l else None, fw_tns100 if fw_tns100 else None,
-                    now=now,
-                )
-            except Exception as e:
-                logger.warning(f"Rollout could not be created; no job started: {e}")
-                self._state = "waiting"
-                self._block_reason = "Could not create rollout; retry next tick"
-                await self._broadcast_status()
-                return
-            rollout = db.get_rollout(rollout_id)
-            db.log_schedule_event("rollout_created", f"Rollout {rollout_id} for {fw_30x}")
-            logger.info(f"Created rollout {rollout_id} for firmware {fw_30x}")
-
         return await self._run_derived_queue(
             settings, now, schedule_days, start_hour, end_hour, tz_str,
             fw_30x, fw_303l, fw_tns100, allow_downgrade,
