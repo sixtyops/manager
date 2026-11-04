@@ -110,16 +110,17 @@ def _discover_family_pages(html: str) -> tuple[list[tuple[str, str, str]], list[
     for row, url in parser.rows:
         platform = _platform_for_family_row(row)
         if not platform:
-            if re.search(r"TNA|TNS", row, re.IGNORECASE):
-                errors.append(f"Firmware family is not supported by Manager: {row}")
+            # Manager only checks the families in FRESHDESK_PAGES.
             continue
         if platform in seen_platforms:
             errors.append(f"Firmware index lists more than one family page for {platform}: {url}")
             continue
         seen_platforms.add(platform)
-        if url.startswith("/"):
-            if url.startswith("/a/solutions/articles/"):
-                url = url.replace("/a/solutions/articles/", "/support/solutions/articles/", 1)
+        if "/a/solutions/articles/" in url:
+            # Freshdesk's /a route serves its JavaScript app shell. Use the
+            # canonical public article URL already defined for this platform.
+            url = FRESHDESK_PAGES[platform]
+        elif url.startswith("/"):
             url = "https://tachyon-networks.freshdesk.com" + url
         pages.append((platform, url, row))
     for platform in PLATFORM_SETTING_KEYS:
