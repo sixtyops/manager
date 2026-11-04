@@ -41,14 +41,12 @@ All notable changes to this project are documented in this file.
 - Name the covered firmware test and dev host procedure.
 
 ### Fixed
-- Config rollback now shares the device lock with config push. It verifies the
-- applied config hash and reports an error when the read-back does not match.
+- Config rollback now shares the device lock with config push. It verifies the applied config hash and reports an error when the read-back does not match.
 - The final-wave scheduler skips stragglers whose last firmware update is inside the configured cooldown.
 - Firmware updates now require verified reboot recovery and clean smoke proof.
 - Require recovery counters to reach the saved pre-write values after a reset.
 - Compare recovered link rates with every rate reported before the write.
-- Added Tachyon users now use `username`, an MD5-crypt `password`, `level`,
-- `enabled`, and `first_login=false`.
+- Added Tachyon users now use `username`, an MD5-crypt `password`, `level`, `enabled`, and `first_login=false`.
 - Existing device user records stay unchanged.
 - Keep template user validation errors free of account names.
 - Report failed AP boot bank reads and retain the last good bank values.
