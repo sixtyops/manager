@@ -38,12 +38,18 @@ def prepared_client(readback):
 
 
 @pytest.mark.asyncio
-async def test_late_reboot_readback_reports_landed_firmware_as_success():
+async def test_late_reboot_readback_runs_recovery_before_reporting_success():
     client = prepared_client(
-        device_info(TARGET_VERSION, TARGET_VERSION, TARGET_VERSION, 1)
+        device_info(TARGET_VERSION, TARGET_VERSION, TARGET_VERSION, 1),
     )
+    client.get_device_info = AsyncMock(side_effect=[
+        device_info(OLD_VERSION, OLD_VERSION, "1.10.0.1", 2),
+        device_info(TARGET_VERSION, TARGET_VERSION, TARGET_VERSION, 1),
+        device_info(TARGET_VERSION, TARGET_VERSION, TARGET_VERSION, 1),
+    ])
+    recovery_callback = AsyncMock(return_value=True)
 
-    result = await client.update_firmware(FIRMWARE)
+    result = await client.update_firmware(FIRMWARE, recovery_callback=recovery_callback)
 
     assert result.success
     assert result.error is None
@@ -51,7 +57,36 @@ async def test_late_reboot_readback_reports_landed_firmware_as_success():
     assert (result.active_bank, result.bank1_version, result.bank2_version) == (
         1, TARGET_VERSION, TARGET_VERSION,
     )
-    assert client.get_device_info.await_count == 2
+    assert client.get_device_info.await_count == 3
+    recovery_callback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_late_reboot_readback_stays_failed_when_recovery_fails():
+    client = prepared_client(
+        device_info(TARGET_VERSION, TARGET_VERSION, TARGET_VERSION, 1)
+    )
+    recovery_callback = AsyncMock(return_value=False)
+
+    result = await client.update_firmware(FIRMWARE, recovery_callback=recovery_callback)
+
+    assert not result.success
+    assert result.error == "Device did not come back online"
+    assert result.new_version == TARGET_VERSION
+    recovery_callback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_late_reboot_readback_stays_failed_without_recovery_evidence():
+    client = prepared_client(
+        device_info(TARGET_VERSION, TARGET_VERSION, TARGET_VERSION, 1)
+    )
+
+    result = await client.update_firmware(FIRMWARE)
+
+    assert not result.success
+    assert result.error == "Device did not come back online"
+    assert result.new_version == TARGET_VERSION
 
 
 @pytest.mark.asyncio

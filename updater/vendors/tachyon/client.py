@@ -1119,9 +1119,20 @@ class TachyonClient:
             if not await self.wait_for_reboot(
                 timeout=reboot_timeout, recovery_callback=recovery_callback
             ):
-                return await reconcile_readback(
-                    "Device did not come back online", allow_target_success=True
-                )
+                readback = await reconcile_readback("Device did not come back online")
+                target_version = _extract_version_from_firmware(firmware_path)
+                if (
+                    not target_version
+                    or _normalize_version(readback.new_version or "") != target_version
+                ):
+                    return readback
+                if not recovery_callback:
+                    return readback
+                loop = asyncio.get_running_loop()
+                deadline = self.last_reboot_deadline or loop.time()
+                reboot_started = deadline - reboot_timeout
+                if not await recovery_callback(deadline, reboot_started):
+                    return readback
 
             # Re-login and verify
             progress("Verifying...")
@@ -1153,6 +1164,7 @@ class TachyonClient:
                     progress(f"Verified: already on {result.new_version}")
                     result.skipped = True
                 result.success = True
+                result.error = None
             elif target_version:
                 # Device is NOT running target firmware - update failed
                 return await reconcile_readback(
