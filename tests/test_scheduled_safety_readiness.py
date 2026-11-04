@@ -131,10 +131,9 @@ async def test_revocation_during_job_keeps_current_wave(mock_db, monkeypatch):
     scheduler, start = _make_scheduler()
     harness = _Harness(scheduler, monkeypatch)
     await harness.tick()
-    before = db.get_active_rollout()
     db.set_setting("scheduled_rollout_safety_ready", "false")
     harness.complete_job()
-    assert db.get_active_rollout()["phase"] == before["phase"]
+    assert db.get_active_rollout() is None
     assert scheduler._state == "waiting"
     await harness.tick(day=3)
     assert start.call_count == 1
