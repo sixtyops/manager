@@ -25,5 +25,7 @@ After an AP update recovers, Manager reboots each reachable CPE from the saved p
 The live single-bank firmware test passed in dev host run 26 on 2026-11-03.
 Scheduled serial queue testing passed on the dev host in run 28c on 2026-11-04.
 Epic [#604](https://github.com/sixtyops/manager/issues/604) records C3 as dropped
-by the owner. C4 release preparation is in progress. C5 step 1 passed; steps 2
-and 3 await the owner.
+by the owner. C4 release preparation is complete in
+[#732](https://github.com/sixtyops/manager/pull/732) for version 1.4.1-dev6;
+the tag awaits the owner's signature after the UI review. C5 step 1 passed;
+steps 2 and 3 await the owner.

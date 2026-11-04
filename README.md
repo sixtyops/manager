@@ -13,8 +13,10 @@ predictions have been removed.
   write, and stop-on-first-failure are shipped.
 - Queue: cutoff, serial execution, and removal of wave behavior are shipped.
 - Progress: C1 and C2 are done. C3 is dropped by the owner. C4 release
-  preparation is in progress. C5 step 1 passed in dev host run 28c on
-  2026-11-04. C5 steps 2 and 3 await the owner.
+  preparation is complete in [#732](https://github.com/sixtyops/manager/pull/732)
+  for version 1.4.1-dev6; the tag awaits the owner's signature after the UI
+  review. C5 step 1 passed in dev host run 28c on 2026-11-04. C5 steps 2 and 3
+  await the owner.
 
 Updated 2026-11-04. Track status in [#604](https://github.com/sixtyops/manager/issues/604).
 
