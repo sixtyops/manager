@@ -207,9 +207,11 @@ def build_schema(db: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS cpe_migration_map (
             old_cpe_id INTEGER PRIMARY KEY,
-            device_id INTEGER NOT NULL UNIQUE,
+            device_id INTEGER NOT NULL,
             FOREIGN KEY (device_id) REFERENCES devices(id)
         );
+        CREATE INDEX IF NOT EXISTS idx_cpe_migration_map_device_id
+            ON cpe_migration_map(device_id);
 
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
