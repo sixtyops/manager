@@ -209,9 +209,13 @@ Keep the shared test virtual environment outside `/tmp`; macOS may remove
 temporary files while a review is running.
 They push a feature branch normally and open one PR to `main` with issue closure,
 validation, risks/limits and `agent:review`. Never force-push shared history.
+Before adding `agent:review`, fill the PR's Device test plan with exact-head
+bench run IDs. An empty plan blocks the review loop.
 Follow [Slices and reviews](../AGENTS.md#slices-and-reviews) for epic structure,
 slice sizing, engine design notes, review scope and findings, reviewer
 assignment, base updates, and bench proof ownership.
+A PR that only removes dead code may exceed the 300-line engine guideline in
+one PR. List the removed symbols in the PR body.
 
 The lead checks that each eligible non-draft PR awaiting review has
 `agent:review`. The trusted-author workflow adds it on open, reopen, or ready
@@ -226,6 +230,10 @@ criteria before it enters review. The pre-review checks that the PR can pass
 on the first round. A final pre-review reports all remaining findings in one
 pass. Record the review result and follow the review-fix rule in [Priority and
 delegation](#priority-and-delegation).
+Reviewers compare the PR with `git diff origin/main...HEAD`; the three-dot diff
+uses the merge base. A two-dot diff against newer `main` can show other merged
+PRs as reverts. If the review loop reports "no eligible PR" while CI runs,
+re-add `agent:review` after CI passes.
 Hold merge until the review and all normal review and sign-off gates pass. Use
 the existing `agent:escalated` and `agent:needs-human` states; do not create a
 new review label.
@@ -285,6 +293,9 @@ that head, duplicate/overlap sweep, acceptance and post-merge check/rollback.
 Engine/driver changes also require named real-device bench evidence on that
 commit. Skips and synthetic tests do not provide bench proof. Missing, stale or
 unreadable evidence holds the action. A changed head needs fresh gates.
+The bench session-proof lane may be refused by a worker's safety reviewer.
+The bench brief must cite the trusted wrapper lane and standing lab approval
+in [dev-hardware-validation.md](dev-hardware-validation.md).
 Start the bench worker with `--env LEAD_AP_ACCESS_FILE=<AP lab file>` and
 `--env LEAD_SWITCH_ACCESS_FILE=<switch lab file>`. Use the private paths
 recorded under [Private access records](dev-hardware-validation.md#private-access-records),
