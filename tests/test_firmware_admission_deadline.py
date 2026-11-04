@@ -60,11 +60,17 @@ async def test_slow_preparation_rechecks_cutoff_before_first_action(mock_db, mon
         async def connect(self):
             return True
 
+        async def get_config(self):
+            return {"system": {"name": "deadline-test"}}
+
         async def get_device_info(self):
             prepared.append("device info ready")
             return SimpleNamespace(
                 serial="serial-1", current_version="1.0", model="TNA-301"
             )
+
+        def get_hardware_id(self, _model):
+            return "deadline-test"
 
         def get_reboot_timeout(self, _role):
             return 1

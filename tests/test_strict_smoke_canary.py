@@ -102,6 +102,7 @@ class _FakeClient:
     def get_hardware_id(self, model): return "tn-110-prs"
 
     async def connect(self): return True
+    async def get_config(self): return {"system": {"name": "smoke-test"}}
     async def get_connected_cpes(self): return []
     async def get_bridge_table(self): return []
     async def reboot(self, timeout=1):

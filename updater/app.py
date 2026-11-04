@@ -6237,58 +6237,60 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
         client = driver_cls(saved_locator.get("ip", ip), username, password)
         supports_tachyon_recovery = vendor_id == "tachyon" and hasattr(client, "_client")
 
-        if not is_feature_enabled(Feature.CONFIG_BACKUP):
+        snapshot_error = None
+        try:
+            progress_callback(ip, "Backing up configuration...")
+            login_ok = await client.connect()
+            if login_ok is not True:
+                raise RuntimeError(login_ok if isinstance(login_ok, str) else "Login failed")
+            config = await client.get_config()
+            if not config:
+                raise RuntimeError("Configuration snapshot was empty")
+            config_json = _canonical_config_json(config)
+            config_hash = hashlib.sha256(config_json.encode()).hexdigest()
+            info = await client.get_device_info()
+            expected_serial = expected_serial or getattr(info, "serial", None)
+            expected_version = getattr(info, "current_version", None)
+            model = device_status.model or getattr(info, "model", None)
+            hardware_id = client.get_hardware_id(model)
+            snapshot_id = db.save_device_config(ip, config_json, config_hash, model, hardware_id)
+            if not snapshot_id:
+                raise RuntimeError("Configuration snapshot save returned no ID")
+            saved_snapshot = db.get_device_config_by_id(snapshot_id)
+            if not saved_snapshot:
+                raise RuntimeError("Saved configuration snapshot could not be read back")
+            if saved_snapshot.get("id") != snapshot_id:
+                raise RuntimeError("Saved configuration snapshot ID does not match")
+            if saved_snapshot.get("ip") != ip:
+                raise RuntimeError("Saved configuration snapshot belongs to a different device")
+            if saved_snapshot.get("config_hash") != config_hash:
+                raise RuntimeError("Saved configuration snapshot hash does not match")
+            logger.info(f"Pre-update backup saved for {ip}")
+        except Exception as e:
+            snapshot_error = str(e)
+        if snapshot_error:
+            device_status.status = "failed"
+            device_status.error = f"Configuration snapshot failed: {snapshot_error}"
+            device_status.progress_message = device_status.error
+            _stop_firmware_window(job, ip, "snapshot", device_status.error)
+            now_iso = datetime.now().isoformat()
             try:
-                login_result = await client.connect()
-                info = await client.get_device_info() if login_result is True else None
-                if info is not None:
-                    expected_serial = expected_serial or getattr(info, "serial", None)
-                    expected_version = getattr(info, "current_version", None)
-            except Exception:
-                info = None
-
-        # Pre-update config backup (Pro feature)
-        if is_feature_enabled(Feature.CONFIG_BACKUP):
-            snapshot_error = None
-            try:
-                progress_callback(ip, "Backing up configuration...")
-                login_ok = await client.connect()
-                if login_ok is not True:
-                    raise RuntimeError(login_ok if isinstance(login_ok, str) else "Login failed")
-                config = await client.get_config()
-                if not config:
-                    raise RuntimeError("Configuration snapshot was empty")
-                config_json = _canonical_config_json(config)
-                config_hash = hashlib.sha256(config_json.encode()).hexdigest()
-                model = device_status.model or (await client.get_device_info()).model
-                hardware_id = client.get_hardware_id(model)
-                db.save_device_config(ip, config_json, config_hash, model, hardware_id)
-                logger.info(f"Pre-update backup saved for {ip}")
-            except Exception as e:
-                snapshot_error = str(e)
-            if snapshot_error:
-                device_status.status = "failed"
-                device_status.error = f"Configuration snapshot failed: {snapshot_error}"
-                device_status.progress_message = device_status.error
-                _stop_firmware_window(job, ip, "snapshot", device_status.error)
-                now_iso = datetime.now().isoformat()
-                try:
-                    db.save_device_update_history(
-                        job_id=job.job_id, ip=ip, role=device_status.role,
-                        pass_number=pass_number, status="failed", old_version=None,
-                        new_version=None, model=device_status.model,
-                        error=device_status.error, failed_stage="snapshot",
-                        stages=[], duration_seconds=(datetime.now() - device_start_time).total_seconds(),
-                        started_at=device_start_time.isoformat(), completed_at=now_iso,
-                    )
-                except Exception as history_error:
-                    logger.warning(f"Failed to save device history for {ip}: {history_error}")
-                await broadcast({
-                    "type": "device_update", "job_id": job.job_id, "ip": ip,
-                    "status": device_status.status, "message": device_status.progress_message,
-                    "role": device_status.role, "parent_ap": device_status.parent_ap,
-                })
-                return
+                db.save_device_update_history(
+                    job_id=job.job_id, ip=ip, role=device_status.role,
+                    pass_number=pass_number, status="failed", old_version=None,
+                    new_version=None, model=device_status.model,
+                    error=device_status.error, failed_stage="snapshot",
+                    stages=[], duration_seconds=(datetime.now() - device_start_time).total_seconds(),
+                    started_at=device_start_time.isoformat(), completed_at=now_iso,
+                )
+            except Exception as history_error:
+                logger.warning(f"Failed to save device history for {ip}: {history_error}")
+            await broadcast({
+                "type": "device_update", "job_id": job.job_id, "ip": ip,
+                "status": device_status.status, "message": device_status.progress_message,
+                "role": device_status.role, "parent_ap": device_status.parent_ap,
+            })
+            return
 
         if pass_number == 1:
             try:
