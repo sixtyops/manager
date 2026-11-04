@@ -497,7 +497,7 @@
         </div>
         <div>
           <h3 class="font-semibold text-slate-900 mb-2">CPEs and AP recovery</h3>
-          <p class="text-slate-500 leading-relaxed">After an AP update, SixtyOps reboots the CPEs that were connected before the update so they can reconnect. After each reboot, SixtyOps confirms the device serial before it continues. If a CPE returns at a different IP or under a different AP, SixtyOps finds it in the AP peer lists and confirms its serial.</p>
+          <p class="text-slate-500 leading-relaxed">After an AP update, SixtyOps reboots reachable CPEs saved from the AP peer list. It checks that each saved CPE returns to the peer list by MAC and confirms its eth0 link is up if it was up before the update.</p>
         </div>
       </div>
     </div>
