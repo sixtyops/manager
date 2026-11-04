@@ -59,7 +59,9 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
 
         def get_reboot_timeout(self, role): return 5
         def get_update_timeout(self, role): return 5
+        def get_hardware_id(self, _model): return "readiness-test"
         async def connect(self): return True
+        async def get_config(self): return {"system": {"name": "readiness-test"}}
         async def get_connected_cpes(self): return []
         async def get_bridge_table(self): return []
         async def get_device_info(self):
@@ -246,6 +248,7 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
         client = driver._client
         driver_clients.append(client)
         monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
+        monkeypatch.setattr(client, "get_config", AsyncMock(return_value={"system": {"name": "readiness-test"}}))
         monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=SimpleNamespace(
                 ip="192.0.2.1", model="TNA-301", serial="SERIAL-1", current_version="1.2.3.100",
             bank1_version="1.2.3", bank2_version="1.0.0", active_bank=1,

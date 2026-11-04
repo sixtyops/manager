@@ -89,6 +89,30 @@ class _DeviceClient:
         return SimpleNamespace(passed=passed, warnings=[] if passed else ["traffic missing"], checks=checks)
 
 
+def _install_snapshot_store(monkeypatch, *, failure=None):
+    snapshots = {}
+
+    def save(ip, _config_json, config_hash, *_args, **_kwargs):
+        if failure == "save":
+            raise OSError("snapshot storage unavailable")
+        snapshot_id = len(snapshots) + 1
+        snapshots[snapshot_id] = {
+            "id": snapshot_id,
+            "ip": ip,
+            "config_hash": "wrong-hash" if failure == "readback" else config_hash,
+        }
+        return snapshot_id
+
+    def read_back(snapshot_id):
+        row = snapshots.get(snapshot_id)
+        if row:
+            _DeviceClient.calls[row["ip"]].append("snapshot_readback")
+        return row
+
+    monkeypatch.setattr(db, "save_device_config", save)
+    monkeypatch.setattr(db, "get_device_config_by_id", read_back)
+
+
 @pytest.fixture
 def utc_window_clock(monkeypatch):
     """Keep UTC window tests inside their configured 00:00-23:00 window."""
@@ -126,7 +150,7 @@ async def test_first_device_failure_stops_all_second_device_writes(
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
-    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    _install_snapshot_store(monkeypatch)
     monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
@@ -158,6 +182,51 @@ async def test_first_device_failure_stops_all_second_device_writes(
     assert stop["device_ip"] == "192.0.2.1"
     assert stop["gate"] == expected_gate
     assert stop["reason"]
+    if failure in {"flash", "post_flash_timeout", "recovery", "smoke", "smoke_exception"}:
+        first_calls = _DeviceClient.calls["192.0.2.1"]
+        assert first_calls.index("snapshot") < first_calls.index("snapshot_readback")
+        assert first_calls.index("snapshot_readback") < first_calls.index("pre_reboot")
+        assert first_calls.index("snapshot_readback") < first_calls.index("flash")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot_failure", ["save", "readback"])
+async def test_snapshot_commit_failure_stops_before_reboot_or_flash(
+    mock_db, monkeypatch, snapshot_failure,
+):
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    _install_snapshot_store(monkeypatch, failure=snapshot_failure)
+    monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
+    monkeypatch.setattr(app_module.asyncio, "sleep", AsyncMock())
+    ip = "192.0.2.1"
+    key = ("firmware", "2026-10-27")
+    job = app_module.UpdateJob(
+        job_id=f"snapshot-{snapshot_failure}",
+        device_firmware_map={ip: "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={ip: ("u", "p")}, device_roles={ip: "ap"},
+        devices={ip: app_module.DeviceStatus(ip=ip, role="ap", model="TNA-301")},
+        bank_mode="one", pre_update_reboot=True, window_key=key,
+        started_at=datetime.now(),
+    )
+
+    await app_module.run_update_job(job, concurrency=1)
+
+    assert job.devices[ip].status == "failed"
+    calls = _DeviceClient.calls[ip]
+    assert "snapshot" in calls
+    assert "pre_reboot" not in calls
+    assert "flash" not in calls
+    assert "Configuration snapshot failed:" in job.devices[ip].error
+    stop = db.get_firmware_window_stop(key)
+    assert stop["gate"] == "snapshot"
+    assert stop["reason"] == job.devices[ip].error
 
 
 @pytest.mark.asyncio
@@ -201,7 +270,7 @@ async def test_history_save_failure_withholds_firmware_confirmation(mock_db, mon
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
-    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    _install_snapshot_store(monkeypatch)
     monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
     monkeypatch.setattr(db, "save_device_update_history", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
     confirmations = []
@@ -240,7 +309,7 @@ async def test_unexpected_device_task_error_stops_window_before_next_device(tmp_
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
-    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    _install_snapshot_store(monkeypatch)
     monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
@@ -317,7 +386,7 @@ async def test_queue_cutoff_blocks_before_start_but_finishes_started_device(mock
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
-    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    _install_snapshot_store(monkeypatch)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
     monkeypatch.setattr(app_module.asyncio, "sleep", AsyncMock())
@@ -536,7 +605,7 @@ async def test_manual_local_day_stop_survives_reopen_and_blocks_manual_routes(
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
-    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    _install_snapshot_store(monkeypatch)
     monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
@@ -690,7 +759,7 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
-    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    _install_snapshot_store(monkeypatch)
     monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
@@ -779,7 +848,7 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: ClosingClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: True)
     monkeypatch.setattr(app_module, "_shutting_down", False)
-    monkeypatch.setattr(db, "save_device_config", lambda *args, **kwargs: None)
+    _install_snapshot_store(monkeypatch)
     monkeypatch.setattr(db, "save_device_duration", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
