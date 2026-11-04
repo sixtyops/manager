@@ -244,6 +244,20 @@ class TestSettingsAPI:
         resp = authed_client.get("/api/settings")
         assert resp.json()["settings"]["schedule_enabled"] == "true"
 
+    def test_firmware_window_ramp_settings_round_trip_and_validate(self, authed_client):
+        response = authed_client.put(
+            "/api/settings", json={"firmware_window_ramp_minutes": "[30, 90, 120]"},
+        )
+        assert response.status_code == 200
+        response = authed_client.get("/api/settings")
+        assert response.json()["settings"]["firmware_window_ramp_minutes"] == "[30, 90, 120]"
+
+        for invalid in ("not json", "[]", "[30, 20]", "[29, 120]", "[30, 121]", "[30, true]"):
+            response = authed_client.put(
+                "/api/settings", json={"firmware_window_ramp_minutes": invalid},
+            )
+            assert response.status_code == 400
+
     def test_save_settings_and_reevaluate(self, authed_client):
         with patch("updater.app.get_fetcher", return_value=None), \
              patch("updater.app.get_scheduler", return_value=None):

@@ -390,7 +390,7 @@ Auto-detect server location from IP address or configured zip code.
 ## Scheduler
 
 ### `GET /api/scheduler/status`
-Get scheduler state and the serial queue summary. The queue shows remaining devices, the current device, its pause or stop reason, cutoff, and next maintenance window.
+Get scheduler state and the serial queue summary. The queue shows remaining devices, the current device, its pause or stop reason, persisted cutoff and ramp window ordinal, and next maintenance window. `GET /api/settings` returns `firmware_window_ramp_minutes`; administrators can update it through `PUT /api/settings` as an ascending JSON array of minutes from 30 to 120.
 
 ## Firmware queue
 

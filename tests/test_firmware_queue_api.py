@@ -32,6 +32,7 @@ def test_scheduler_status_exposes_queue_state_without_wave_fields(authed_client,
             "remaining_devices": 3,
             "pause_reason": None,
             "cutoff_utc": "2026-11-04T09:30:00+00:00",
+            "ramp_ordinal": 1,
         },
     }
     monkeypatch.setattr(app_module, "get_scheduler", lambda: scheduler)
@@ -46,6 +47,7 @@ def test_scheduler_status_exposes_queue_state_without_wave_fields(authed_client,
         "current_device": {"ip": "192.0.2.10", "role": "cpe", "status": "uploading"},
         "pause_reason": None,
         "cutoff_utc": "2026-11-04T09:30:00+00:00",
+        "ramp_ordinal": 1,
         "next_window": "2026-11-04T03:00:00-06:00",
     }
     assert "phase" not in queue

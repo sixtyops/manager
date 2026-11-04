@@ -8716,7 +8716,9 @@
             currentEl.textContent = current ? `Current: ${current.ip}` : '';
             currentEl.title = current ? `${current.role || 'device'} · ${current.status || 'updating'}` : '';
             const when = value => Number.isNaN(Date.parse(value)) ? value : formatWhen(value);
-            cutoffEl.textContent = queue.cutoff_utc ? `Cutoff: ${when(queue.cutoff_utc)}` : '';
+            const cutoff = queue.cutoff_utc ? `Cutoff: ${when(queue.cutoff_utc)}` : '';
+            const ramp = Number.isInteger(queue.ramp_ordinal) ? `Ramp window: ${queue.ramp_ordinal}` : '';
+            cutoffEl.textContent = [cutoff, ramp].filter(Boolean).join(' · ');
             nextEl.textContent = queue.next_window ? `Next window: ${when(queue.next_window)}` : '';
             reasonEl.textContent = queue.pause_reason || '';
             reasonEl.title = queue.pause_reason || '';
