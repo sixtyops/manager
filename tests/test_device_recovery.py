@@ -321,3 +321,37 @@ async def test_reboot_recovery_callback_uses_one_absolute_deadline(monkeypatch):
     assert len(deadlines) == 2
     assert deadlines[0][0] == deadlines[1][0]
     assert deadlines[0][1] == deadlines[1][1]
+
+
+@pytest.mark.asyncio
+async def test_recovery_callback_exception_fails_even_when_target_version_is_read_back():
+    client = tachyon.TachyonClient(OLD_IP, "synthetic", "synthetic")
+    target_version = "1.15.0.55142"
+    client.login = AsyncMock(return_value=True)
+    client.get_device_info = AsyncMock(side_effect=[
+        tachyon.DeviceInfo(
+            ip=OLD_IP, model="TNA-301", current_version="1.14.0.50000",
+        ),
+        tachyon.DeviceInfo(
+            ip=OLD_IP, model="TNA-301", current_version=target_version,
+        ),
+    ])
+    client.upload_firmware = AsyncMock(return_value=True)
+    client.trigger_update = AsyncMock(return_value=True)
+
+    async def wait_for_reboot(*, timeout, recovery_callback):
+        return await recovery_callback(200, 100)
+
+    client.wait_for_reboot = AsyncMock(side_effect=wait_for_reboot)
+
+    async def recovery_callback(_deadline, _started_at):
+        raise RuntimeError("recovery smoke check failed")
+
+    result = await client.update_firmware(
+        "/tmp/tna-30x-1.15.0-r55142-test.bin",
+        recovery_callback=recovery_callback,
+    )
+
+    assert result.success is False
+    assert result.new_version == target_version
+    assert result.error == "recovery smoke check failed"

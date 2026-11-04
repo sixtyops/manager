@@ -871,9 +871,10 @@ class TachyonClient:
                     ):
                         return True
                 except asyncio.TimeoutError:
-                    break
+                    raise RuntimeError("Recovery callback timed out")
                 except Exception as exc:
                     logger.debug("Recovery callback for %s failed: %s", self.ip, exc)
+                    raise
             if not ping_responded:
                 # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
                 responded = False
@@ -1008,7 +1009,6 @@ class TachyonClient:
 
         result = UpdateResult(ip=self.ip, success=False)
         write_may_have_landed = False
-        install_may_have_landed = False
 
         async def reconcile_readback(
             error: str, allow_target_success: bool = False
@@ -1110,7 +1110,6 @@ class TachyonClient:
                     return await reconcile_readback(reason)
             if serial_check and not await serial_check("install"):
                 return await reconcile_readback("Expected serial did not match before install")
-            install_may_have_landed = True
             if not await self.trigger_update():
                 return await reconcile_readback("Failed to trigger update", allow_target_success=True)
 
@@ -1186,7 +1185,7 @@ class TachyonClient:
 
         except Exception as e:
             if write_may_have_landed:
-                await reconcile_readback(str(e), allow_target_success=install_may_have_landed)
+                await reconcile_readback(str(e), allow_target_success=False)
             else:
                 result.error = str(e)
             logger.exception(f"Update failed for {self.ip}")
