@@ -13,9 +13,10 @@ predictions have been removed.
   write, and stop-on-first-failure are shipped.
 - Queue: cutoff, serial execution, and removal of wave behavior are shipped.
 - Proof: C2 passed on 2026-11-03 in dev host run 26. The live single-bank
-  firmware test upgraded and restored the lab AP. C3 qualification is proposed
-  for removal pending the owner's decision. C4 dev release and C5 opening
-  scheduled rollouts remain open; the owner signs the tag and opens rollouts.
+  firmware test upgraded and restored the lab AP. C3 is dropped (owner,
+  2026-11-03): the qualification record belonged to the removed hold; run 26
+  is the evidence. C4 dev release and C5 opening scheduled rollouts remain
+  open; the owner signs the tag and opens rollouts.
 
 Updated 2026-11-03. Track status in [issue #604](https://github.com/sixtyops/manager/issues/604).
 

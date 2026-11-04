@@ -2,6 +2,93 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.4.1-dev6 - 2026-11-03
+
+### Added
+- Admins can export an encrypted bridge archive from `POST /api/backup/bridge`. The archive keeps devices, users, settings, history, and the encryption key for the move to the new schema.
+- The rollout database records eligible stragglers in the pending final wave in one transaction.
+- The wave engine forwards straggler candidates with its batch and settings to that reservation.
+- The scheduler selects only enabled, in-scope devices that still need a saved rollout target.
+- Store device identity claims and MAC aliases with conflict holds.
+- Require AP updates to confirm recovery for every CPE that was connected before the reboot.
+- Pause CPE polling during traffic samples and hold the next write when evidence is missing.
+- Scheduled firmware jobs can process exact CPE, AP, and switch entries in order.
+- Manager records each device result before it advances to the next entry.
+- After an AP update recovers, Manager reboots reachable CPEs that were connected before the update.
+- Unreachable CPEs are skipped and logged.
+
+### Changed
+- Manager copies legacy CPEs into device rows.
+- It stores current link metrics in a separate table.
+- Rollout records can save their member devices when created.
+- Scheduled rollouts stay held until every saved firmware family clears its hold.
+- Document the shipped serial firmware queue and current proof status.
+- Update rollout, recovery, and lead handoff guidance to match current behavior.
+- Use issue-linked changelog fragments for user-facing changes. Collect them into the versioned changelog at release time.
+- Match the session proof to the checked-out CPE login-age policy. Require token invalidation, login recovery, and reuse with or without an age cap.
+- Stop the proof when its session policy markers are missing, unknown, or conflicting.
+- Allow the lead to change firmware on dedicated test lab devices for tests and validation.
+- Require device read-backs after each write and record each change in the lead artifacts.
+- The firmware integration test accepts an approved address bench plan name for held writes.
+- Set `SIXTYOPS_TEST_ADDRESS_BENCH_PLAN` to pass the name on upgrade and restore requests.
+- Firmware updates now use one bank by default. Both-bank updates remain available in Update Mode.
+- One-bank jobs update CPEs before their parent APs.
+- Show remaining devices, the current device, the pause reason, cutoff, and next window for scheduled firmware queues.
+- Retry a resolved failed device first in a later window.
+- Manager checks the Tachyon serial before each firmware write and can recover a moved CPE from recent AP peer reports.
+- Firmware updates no longer need an address qualification entry or a lab plan.
+- Document standing approval for firmware validation on dedicated lab devices and the dev host.
+- Name the covered firmware test and dev host procedure.
+
+### Fixed
+- Config rollback now shares the device lock with config push. It verifies the applied config hash and reports an error when the read-back does not match.
+- The final-wave scheduler skips stragglers whose last firmware update is inside the configured cooldown.
+- Firmware updates now require verified reboot recovery and clean smoke proof.
+- Require recovery counters to reach the saved pre-write values after a reset.
+- Compare recovered link rates with every rate reported before the write.
+- Added Tachyon users now use `username`, an MD5-crypt `password`, `level`, `enabled`, and `first_login=false`.
+- Existing device user records stay unchanged.
+- Keep template user validation errors free of account names.
+- Report failed AP boot bank reads and retain the last good bank values.
+- Delay repeated CPE login attempts after authentication failures.
+- Clear the delay when credentials change or a login succeeds.
+- Reject AP and switch updates without recognized form fields with a clear error.
+- Manual AP polls clear backoff and report failed reads as errors.
+- AP polls retain saved boot bank values after radio updates.
+- Startup replaces the AP bank sync trigger in existing databases.
+- The firmware fetcher now requires a published MD5 or SHA-256 before it registers an image.
+- The firmware status API marks images without a recorded hash as unverified.
+- The firmware fetcher now discovers Tachyon family pages from its firmware index.
+- It reports unsupported families and page parse failures instead of silent success.
+- Read firmware, active bank, and both bank versions after an ambiguous update result.
+- Report success only after target firmware and recovery checks pass after reboot.
+- Skip the live firmware test when no compatible newer or original image is available.
+- Report sanitized job evidence and allow up to three minutes for restored bank state to return.
+- Config polls stop when device credentials change during a poll.
+- Later polls use the current credentials.
+- Read the management IP mode from the Tachyon configuration during management reads.
+- Hold address-change qualification when status and configuration disagree.
+- Address-change proof now uses the full firmware version reported by the device.
+- Named lab plans with `source_sha256` are rejected with a clear hold error.
+- Verify recovery for the prior failed device first in the next maintenance window, without reflashing when it already reports the target firmware.
+- Stop the queue again when recovery verification or smoke checks fail.
+- Stop recovery when an open identity conflict matches the expected serial or radio MAC.
+- After a crash, check the saved device location and serial with read-only requests.
+- Return `already_current` for a device on the requested firmware during a stopped window.
+- Keep the window stop for requests that would write firmware.
+- Fail AP recovery when the CPE eth0 read is unavailable or invalid.
+- Accept a missing eth0 link field only from a valid response.
+- Firmware verification checks the full version and build reported by Tachyon devices.
+
+### Removed
+- Removed SFTP backups; back up `./data` and `./firmware` with the encryption key.
+- SixtyOps no longer sends anonymous firmware update telemetry. Existing setting values remain readable.
+- Manager now uses browser session cookies as its only user authentication path. API token routes and storage support are removed.
+- Remove the phased config-push dialog and controls.
+- Keep manual device pushes and per-device previews.
+- Remove the unused address qualification matrix and lab plan inputs.
+- Firmware updates use the serial-confirmed recovery checks already in place.
+
 ## Unreleased
 
 ### Added
