@@ -1007,6 +1007,41 @@ class TachyonClient:
             logger.info(f"[{self.ip}] {msg}")
 
         result = UpdateResult(ip=self.ip, success=False)
+        write_may_have_landed = False
+        install_may_have_landed = False
+
+        async def reconcile_readback(
+            error: str, allow_target_success: bool = False
+        ) -> UpdateResult:
+            """Use a fresh device read to resolve an ambiguous write outcome."""
+            result.success = False
+            result.error = error
+            result.new_version = None
+            result.bank1_version = None
+            result.bank2_version = None
+            result.active_bank = None
+            try:
+                try:
+                    info = await self.get_device_info()
+                except Exception:
+                    if await self.login() is not True:
+                        return result
+                    info = await self.get_device_info()
+                result.new_version = info.current_version
+                result.bank1_version = info.bank1_version
+                result.bank2_version = info.bank2_version
+                result.active_bank = info.active_bank
+                target = _extract_version_from_firmware(firmware_path)
+                if (
+                    allow_target_success
+                    and target
+                    and _normalize_version(info.current_version or "") == target
+                ):
+                    result.success = True
+                    result.error = None
+            except Exception:
+                logger.exception("Firmware update read-back failed for %s", self.ip)
+            return result
 
         try:
             # Login (with retries for connectivity errors, e.g. CPE reassociating after AP reboot)
@@ -1061,40 +1096,40 @@ class TachyonClient:
                 upload_options["upload_started_callback"] = upload_started_callback
             if serial_check:
                 upload_options["serial_check"] = serial_check
+            write_may_have_landed = True
             if not await self.upload_firmware(
                 firmware_path, bandwidth_limit_kbps=bandwidth_limit_kbps, **upload_options
             ):
-                result.error = "Firmware upload failed"
-                return result
+                return await reconcile_readback("Firmware upload failed")
 
             # Trigger update (device reboots)
             progress("Installing firmware...")
             if admission_check:
                 admitted, reason = admission_check()
                 if not admitted:
-                    result.error = reason
-                    return result
+                    return await reconcile_readback(reason)
             if serial_check and not await serial_check("install"):
-                result.error = "Expected serial did not match before install"
-                return result
+                return await reconcile_readback("Expected serial did not match before install")
+            install_may_have_landed = True
             if not await self.trigger_update():
-                result.error = "Failed to trigger update"
-                return result
+                return await reconcile_readback("Failed to trigger update", allow_target_success=True)
 
             # Wait for reboot
             progress("Rebooting...")
             if not await self.wait_for_reboot(
                 timeout=reboot_timeout, recovery_callback=recovery_callback
             ):
-                result.error = "Device did not come back online"
-                return result
+                return await reconcile_readback(
+                    "Device did not come back online", allow_target_success=True
+                )
 
             # Re-login and verify
             progress("Verifying...")
             login_result = await self.login()
             if login_result is not True:
-                result.error = "Failed to reconnect after reboot"
-                return result
+                return await reconcile_readback(
+                    "Failed to reconnect after reboot", allow_target_success=True
+                )
 
             new_info = await self.get_device_info()
             result.new_version = new_info.current_version
@@ -1120,8 +1155,10 @@ class TachyonClient:
                 result.success = True
             elif target_version:
                 # Device is NOT running target firmware - update failed
-                result.error = f"Version mismatch: expected {target_version}, got {result.new_version}"
-                progress(f"Failed: {result.error}")
+                return await reconcile_readback(
+                    f"Version mismatch: expected {target_version}, got {result.new_version}",
+                    allow_target_success=True,
+                )
             else:
                 # No target version to compare - fall back to old behavior
                 if result.new_version and result.new_version != result.old_version:
@@ -1136,7 +1173,10 @@ class TachyonClient:
                     result.success = True
 
         except Exception as e:
-            result.error = str(e)
+            if write_may_have_landed:
+                await reconcile_readback(str(e), allow_target_success=install_may_have_landed)
+            else:
+                result.error = str(e)
             logger.exception(f"Update failed for {self.ip}")
 
         # NOTE: Post-update verification is version-string only. Future enhancement:
