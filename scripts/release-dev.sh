@@ -50,9 +50,15 @@ done < <(git show "$sha:updater/__init__.py")
   fail "updater/__init__.py at this commit does not have a -devN version."
 
 tag="v${version}"
-if git show-ref --verify --quiet "refs/tags/$tag" || \
-  [[ -n "$(git ls-remote --tags origin "refs/tags/$tag")" ]]; then
+if git show-ref --verify --quiet "refs/tags/$tag"; then
   fail "Tag $tag already exists."
+fi
+if remote_tag="$(git ls-remote --exit-code --tags origin "refs/tags/$tag")"; then
+  [[ -z "$remote_tag" ]] || fail "Tag $tag already exists."
+else
+  lookup_status=$?
+  [[ "$lookup_status" -eq 2 ]] || \
+    fail "Could not check whether tag $tag exists (git ls-remote exited $lookup_status)."
 fi
 
 last_tag="$(git describe --tags --abbrev=0 "$sha" 2>/dev/null || true)"
@@ -79,12 +85,16 @@ fi
 git push origin "refs/tags/$tag"
 
 release_run=""
-while [[ -z "$release_run" ]]; do
+push_time="$(date -u +%s)"
+deadline=$((push_time + 120))
+while [[ -z "$release_run" && "$(date -u +%s)" -lt "$deadline" ]]; do
   release_run="$(gh run list --repo "$REPOSITORY" --workflow Release --event push \
-    --commit "$sha" --json databaseId,headSha,event,createdAt \
-    --jq "[.[] | select(.headSha == \"$sha\" and .event == \"push\")] | sort_by(.createdAt) | last | .databaseId // empty")"
+    --commit "$sha" --json databaseId,headSha,event,headBranch,createdAt \
+    --jq "[.[] | select(.headSha == \"$sha\" and .event == \"push\" and .headBranch == \"$tag\" and (.createdAt | fromdateiso8601) >= $push_time)] | sort_by(.createdAt) | last | .databaseId // empty")"
   [[ -n "$release_run" ]] || sleep 5
 done
+[[ -n "$release_run" ]] || \
+  fail "No Release workflow run for $tag appeared within 120 seconds after the tag push."
 
 if ! gh run watch --exit-status "$release_run"; then
   fail "The Release workflow failed for $tag."

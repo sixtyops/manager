@@ -15,7 +15,8 @@ TAG = "v1.4.1-dev6"
 
 def release_run(tmp_path: Path, *, main_sha: str = SHA, ci: bool = True,
                 version: str = "1.4.1-dev6", tag_exists: bool = False,
-                verify: bool = True, yes: bool = True):
+                verify: bool = True, yes: bool = True,
+                ls_remote_error: bool = False):
     """Run the script with deterministic git, gh, and gpg stubs."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -26,7 +27,14 @@ case "$1" in
   fetch) exit 0 ;;
   rev-parse) printf '%s\n' "$MAIN_SHA" ;;
   show-ref) [[ "$TAG_EXISTS" == true ]] ;;
-  ls-remote) [[ "$TAG_EXISTS" == true ]] && printf 'object refs/tags/v1.4.1-dev6\n' ;;
+  ls-remote)
+    if [[ "$LS_REMOTE_ERROR" == true ]]; then exit 128; fi
+    if [[ "$TAG_EXISTS" == true ]]; then
+      printf 'object refs/tags/v1.4.1-dev6\n'
+      exit 0
+    fi
+    exit 2
+    ;;
   show)
     if [[ "$2" == *updater/__init__.py ]]; then
       printf '__version__ = "%s"\n' "$VERSION"
@@ -36,7 +44,7 @@ case "$1" in
     ;;
   describe) printf 'v1.4.1-dev5\n' ;;
   log) printf 'abc123 change\n' ;;
-  tag) exit 0 ;;
+  tag) gpg; exit 0 ;;
   *)
     if [[ "$*" == *"verify-tag "* ]]; then
       [[ "$VERIFY_TAG" == true ]]
@@ -53,8 +61,10 @@ case "$1" in
     if [[ "$2" == list ]]; then
       if [[ "$*" == *'--workflow CI '* ]]; then
         [[ "$CI_PASSED" == true ]] && printf '123\n'
-      else
+      elif [[ "$*" == *"headBranch == \"$RELEASE_TAG\""* && "$*" == *"fromdateiso8601"* ]]; then
         printf '456\n'
+      else
+        printf '455\n'
       fi
     fi
     ;;
@@ -74,7 +84,9 @@ exit 0
         "MAIN_SHA": main_sha,
         "CI_PASSED": str(ci).lower(),
         "VERSION": version,
+        "RELEASE_TAG": f"v{version}",
         "TAG_EXISTS": str(tag_exists).lower(),
+        "LS_REMOTE_ERROR": str(ls_remote_error).lower(),
         "VERIFY_TAG": str(verify).lower(),
     }
     args = ["bash", str(SCRIPT), SHA]
@@ -123,3 +135,22 @@ def test_happy_path_signs_verifies_and_pushes_tag_by_name(tmp_path):
     assert commands[pushing] == f"git push origin refs/tags/{TAG}"
     assert "gh run watch --exit-status 456" in commands
 
+
+def test_remote_tag_lookup_error_stops_before_signing(tmp_path):
+    result, commands = release_run(tmp_path, ls_remote_error=True)
+
+    assert result.returncode == 1
+    assert "Could not check whether tag" in result.stderr
+    assert "gpg" not in commands
+    assert not any(" tag -s " in line for line in commands)
+
+
+def test_release_run_for_another_tag_is_ignored(tmp_path):
+    result, commands = release_run(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    release_lookup = next(line for line in commands if "--workflow Release" in line)
+    assert f'headBranch == "{TAG}"' in release_lookup
+    assert "fromdateiso8601" in release_lookup
+    assert "gh run watch --exit-status 456" in commands
+    assert "gh run watch --exit-status 455" not in commands
