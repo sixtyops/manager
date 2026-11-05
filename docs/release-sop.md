@@ -68,6 +68,26 @@ trust model: [self-update-signing.md](self-update-signing.md).
 
 ## Dev release (`vX.Y.Z-devN`)
 
+### One-command path
+
+After pre-tag validation passes for the exact `origin/main` commit, the owner
+runs this command on the machine that holds the release key:
+
+```bash
+scripts/release-dev.sh <full-commit-sha>
+```
+
+The script fetches `origin`, checks that the commit is the current `main` head,
+checks CI and the dev version, and refuses an existing tag. It shows the
+version, commit, and changes since the last tag. The owner confirms with one
+`yes`; use `--yes` only when the owner has already authorized the release.
+The script signs and verifies the tag, pushes only that tag, watches its
+Release run, and prints the GitHub Release and GHCR tags. Only the owner signs
+and pushes release tags. The script does not move branches or use `--tags`.
+It warns if the website install snippet does not pin the new image tag.
+
+### Manual fallback
+
 1. Collect the pull request fragments into the changelog before the version
    bump: `python scripts/collect_changelog.py X.Y.Z-devN YYYY-MM-DD`. Review
    the new version section and confirm the fragment files were removed.
@@ -77,7 +97,7 @@ trust model: [self-update-signing.md](self-update-signing.md).
    version — clients refuse it.
 3. **Run the pre-tag validation above for the exact commit at `origin/main`.**
    Sign only after it passes.
-4. **Sign the tag at `origin/main` and verify before pushing:**
+4. **The owner signs the tag at `origin/main` and verifies before pushing:**
    ```bash
    git fetch origin
    git -c gpg.format=openpgp -c user.signingkey=E2C19E86B24A87283068AEFAF2D6F70883960DCE \
