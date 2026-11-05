@@ -1575,6 +1575,7 @@ async def add_device(
         device_id = db.upsert_switch(ip, username, password, tower_site_id)
         device_type = "switch"
         if poller:
+            poller.invalidate_client(ip, invalidate_cpe_sessions=False)
             await poller.poll_switch_now(ip)
     else:
         device_id = db.upsert_access_point(ip, username, password, tower_site_id)
