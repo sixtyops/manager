@@ -202,6 +202,47 @@ class TestAPsAPI:
 
 
 class TestSwitchesAPI:
+    def test_readding_switch_clears_backoff_and_polls_with_new_credentials(self, authed_client):
+        ip = "10.0.0.25"
+        db.upsert_switch(ip, "root", "oldpass")
+
+        from updater.poller import NetworkPoller
+
+        poller = NetworkPoller()
+        poller._cache_client(ip, MagicMock())
+        for _ in range(3):
+            poller._record_poll_failure(ip)
+
+        poll_client = MagicMock()
+        poll_client.connect = AsyncMock(return_value=True)
+        poll_client.get_ap_info = AsyncMock(return_value={
+            "model": "TNS-100", "system_name": "Test switch",
+        })
+        poll_client.get_device_info = AsyncMock(side_effect=RuntimeError("not available"))
+        poll_client.get_bridge_table = AsyncMock(return_value=[])
+
+        probe_client = MagicMock()
+        probe_client.login = AsyncMock(return_value=True)
+        probe_client.get_ap_info = AsyncMock(return_value={"model": "TNS-100"})
+        driver_factory = MagicMock(return_value=poll_client)
+
+        with patch("updater.app.get_poller", return_value=poller), \
+             patch("updater.app.TachyonClient", return_value=probe_client), \
+             patch("updater.poller.get_driver", return_value=driver_factory) as get_driver:
+            response = authed_client.post("/api/devices", data={
+                "ip": ip, "username": "newuser", "password": "newpass",
+            })
+
+        assert response.status_code == 200
+        assert poller.get_backoff_state(ip) == {
+            "consecutive_failures": 0,
+            "backoff_until": None,
+        }
+        get_driver.assert_called_once_with("tachyon")
+        driver_factory.assert_called_once_with(ip, "newuser", "newpass")
+        poll_client.connect.assert_awaited_once()
+        assert db.get_switch(ip)["username"] == "newuser"
+
     def test_switch_rows_include_poller_backoff_state(self, authed_client):
         db.upsert_switch("10.0.0.24", "root", "pass")
         mock_poller = MagicMock()
