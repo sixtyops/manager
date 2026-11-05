@@ -1,5 +1,6 @@
 """Edit login: save a new switch or AP login, then poll with it."""
 
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +39,8 @@ class TestSwitchLoginEdit:
         db.upsert_switch(SWITCH, "old-user", "old-pass")
         poller = NetworkPoller()
         poller._cache_client(SWITCH, MagicMock())
+        cpe_client = MagicMock()
+        poller._cpe_clients["192.0.2.42"] = (cpe_client, time.time())
         logins = []
 
         with patch("updater.app.get_poller", return_value=poller), \
@@ -46,6 +49,7 @@ class TestSwitchLoginEdit:
                                       data={"username": "new-user", "password": "new-pass"})
             assert saved.status_code == 200
             assert SWITCH not in poller._clients
+            assert poller._cpe_clients["192.0.2.42"][0] is cpe_client
             polled = authed_client.post(f"/api/switches/{SWITCH}/poll")
 
         assert polled.status_code == 200

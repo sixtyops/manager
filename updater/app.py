@@ -1761,7 +1761,7 @@ async def update_switch(
         db.log_audit(session["username"], "device.login_update", "switch", ip, None, None)
         poller = get_poller()
         if poller:
-            poller.invalidate_client(ip)
+            poller.invalidate_client(ip, invalidate_cpe_sessions=False)
 
     return {"success": True}
 
@@ -1771,7 +1771,7 @@ async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "
     """Delete a switch."""
     poller = get_poller()
     if poller:
-        poller.invalidate_client(ip)
+        poller.invalidate_client(ip, invalidate_cpe_sessions=False)
 
     db.delete_switch(ip)
     db.log_audit(session["username"], "device.delete", "switch", ip, None, None)
@@ -1847,7 +1847,9 @@ async def bulk_delete_devices(
     poller = get_poller()
     if poller:
         for ip in ips:
-            poller.invalidate_client(ip)
+            poller.invalidate_client(
+                ip, invalidate_cpe_sessions=device_type != "switch",
+            )
     try:
         count = db.bulk_delete_devices(device_type, ips)
     except ValueError as e:
