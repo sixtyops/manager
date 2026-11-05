@@ -210,6 +210,8 @@ class TestSwitchesAPI:
 
         poller = NetworkPoller()
         poller._cache_client(ip, MagicMock())
+        cpe_client = MagicMock()
+        poller._cache_cpe_client("10.0.0.26", cpe_client)
         for _ in range(3):
             poller._record_poll_failure(ip)
 
@@ -242,6 +244,7 @@ class TestSwitchesAPI:
         driver_factory.assert_called_once_with(ip, "newuser", "newpass")
         poll_client.connect.assert_awaited_once()
         assert db.get_switch(ip)["username"] == "newuser"
+        assert poller._get_cached_cpe_client("10.0.0.26") is cpe_client
 
     def test_switch_rows_include_poller_backoff_state(self, authed_client):
         db.upsert_switch("10.0.0.24", "root", "pass")
