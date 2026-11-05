@@ -1345,6 +1345,13 @@
             color: var(--danger);
         }
 
+        button.action-link {
+            background: transparent;
+            border: 0;
+            font-family: inherit;
+            line-height: inherit;
+        }
+
         .action-link.danger:hover {
             background: var(--danger-bg);
             color: var(--danger-text);
@@ -2450,10 +2457,16 @@
         .cfg-user-name, .cfg-user-pass, .cfg-user-level { padding: 6px 10px; font-size: var(--text-base); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--input-bg); color: var(--text); font-family: inherit; box-sizing: border-box; }
 
         /* Confirm dialog */
-        .confirm-modal { max-width: var(--modal-sm); }
+        .confirm-modal { max-width: min(var(--modal-sm), 92vw); }
         .confirm-modal h3 { margin: 0 0 10px 0; }
         .confirm-message { font-size: var(--text-base); color: var(--text-muted); line-height: 1.5; white-space: pre-line; }
         .confirm-actions { display: flex; justify-content: flex-end; gap: var(--space-4); margin-top: var(--space-6); }
+
+        /* Edit login dialog */
+        .device-login-fields { display: grid; gap: var(--space-5); margin-top: var(--space-6); }
+        .device-login-status { font-size: var(--text-base); line-height: 1.5; margin-top: var(--space-5); color: var(--text-muted); }
+        .device-login-status:empty { display: none; }
+        .device-login-status.error { color: var(--danger-text); }
 
         /* Tablet - drawer stacks */
         @media (max-width: 1024px) {
@@ -3839,6 +3852,30 @@
                 <button class="btn btn-sm btn-ghost" type="button" onclick="closeConfirmDialog(false)">Cancel</button>
                 <button class="btn btn-sm btn-danger" type="button" id="confirmAcceptBtn" onclick="closeConfirmDialog(true)">Confirm</button>
             </div>
+        </div>
+    </div>
+
+    <div class="backup-overlay" id="deviceLoginOverlay" onclick="if(event.target===this)closeDeviceLoginDialog()">
+        <div class="backup-modal confirm-modal" id="deviceLoginDialog" role="dialog" aria-modal="true" aria-labelledby="deviceLoginTitle" aria-describedby="deviceLoginMessage" onkeydown="handleDeviceLoginKeydown(event)">
+            <h3 id="deviceLoginTitle">Edit login</h3>
+            <p class="confirm-message" id="deviceLoginMessage"></p>
+            <form id="deviceLoginForm" onsubmit="event.preventDefault();saveDeviceLogin();">
+                <div class="device-login-fields">
+                    <div>
+                        <label class="u-label-xs" for="deviceLoginUsername">Username</label>
+                        <input class="u-input-compact" type="text" id="deviceLoginUsername" autocomplete="off" spellcheck="false" required>
+                    </div>
+                    <div>
+                        <label class="u-label-xs" for="deviceLoginPassword">Password</label>
+                        <input class="u-input-compact" type="password" id="deviceLoginPassword" autocomplete="new-password" required>
+                    </div>
+                </div>
+                <p class="device-login-status" id="deviceLoginStatus" role="status" aria-live="polite"></p>
+                <div class="confirm-actions">
+                    <button class="btn btn-sm btn-ghost" type="button" onclick="closeDeviceLoginDialog()">Cancel</button>
+                    <button class="btn btn-sm btn-primary" type="submit" id="deviceLoginSaveBtn">Save login</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -5378,6 +5415,11 @@
             return `<a class="action-link danger" onclick="requestDelete('${kind}','${id}',event)">Delete</a>`;
         }
 
+        function editLoginActionButton(type, ip) {
+            if (currentUserRole === 'viewer') return '';
+            return `<button type="button" class="action-link" data-edit-login="${type}:${ip}" onclick="editDeviceLogin('${type}','${ip}');event.stopPropagation();">Edit login</button>`;
+        }
+
         function requestDelete(kind, id, event) {
             if (event) event.stopPropagation();
             const key = `${kind}:${id}`;
@@ -5631,11 +5673,13 @@
             }
             if (type === 'ap') {
                 return `<a class="action-link" onclick="editDeviceNotes('ap','${id}');event.stopPropagation();">Notes</a>
+                    ${editLoginActionButton('ap', id)}
                     <a class="action-link" onclick="pollAPNow('${id}');event.stopPropagation();">Refresh</a>
                     ${deleteActionLink('ap', id)}`;
             }
             if (type === 'switch') {
                 return `<a class="action-link" onclick="editDeviceNotes('switch','${id}');event.stopPropagation();">Notes</a>
+                    ${editLoginActionButton('switch', id)}
                     ${deleteActionLink('switch', id)}`;
             }
             return '';
@@ -6670,6 +6714,136 @@
                 if (topoResp.ok) { topology = await topoResp.json(); rebuildTopologyIndex(); updateUI(); }
                 showToast('Notes updated');
             } catch (e) { showToast('Error: ' + e.message); }
+        }
+
+        let deviceLoginTarget = null;
+        let deviceLoginReturnFocus = null;
+        let deviceLoginRequest = 0;
+
+        function setDeviceLoginStatus(message, tone = '') {
+            const el = document.getElementById('deviceLoginStatus');
+            el.textContent = message;
+            el.className = `device-login-status ${tone}`.trim();
+        }
+
+        function editDeviceLogin(type, ip) {
+            let name = ip;
+            for (const site of (topology?.sites || [])) {
+                const dev = (type === 'ap' ? site.aps : site.switches)?.find(d => d.ip === ip);
+                if (dev) { name = dev.system_name || ip; break; }
+            }
+            const kind = type === 'ap' ? 'AP' : 'switch';
+            deviceLoginTarget = { type, ip };
+            deviceLoginReturnFocus = document.activeElement;
+            deviceLoginRequest++;
+            document.getElementById('deviceLoginTitle').textContent = `Edit login for ${kind} ${name}`;
+            document.getElementById('deviceLoginMessage').textContent =
+                `Enter the login that the ${kind} at ${ip} accepts. Manager saves it and uses it for the next poll. This does not change the login on the ${kind}.`;
+            document.getElementById('deviceLoginForm').reset();
+            document.getElementById('deviceLoginSaveBtn').disabled = false;
+            setDeviceLoginStatus('');
+            document.getElementById('deviceLoginOverlay').classList.add('open');
+            document.getElementById('deviceLoginUsername').focus();
+        }
+
+        function closeDeviceLoginDialog() {
+            const overlay = document.getElementById('deviceLoginOverlay');
+            if (!overlay.classList.contains('open')) return;
+            overlay.classList.remove('open');
+            document.getElementById('deviceLoginForm').reset();
+            deviceLoginRequest++;
+            // A topology refresh can replace the row button that opened the dialog.
+            let target = deviceLoginReturnFocus;
+            if (deviceLoginTarget && !target?.isConnected) {
+                target = document.querySelector(`[data-edit-login="${deviceLoginTarget.type}:${deviceLoginTarget.ip}"]`);
+            }
+            deviceLoginTarget = null;
+            deviceLoginReturnFocus = null;
+            target?.focus();
+        }
+
+        function handleDeviceLoginKeydown(event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeDeviceLoginDialog();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const controls = [...document.getElementById('deviceLoginDialog').querySelectorAll('input, button')]
+                .filter(el => !el.disabled);
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
+
+        async function saveDeviceLogin() {
+            if (!deviceLoginTarget) return;
+            const { type, ip } = deviceLoginTarget;
+            const kind = type === 'ap' ? 'AP' : 'switch';
+            const endpoint = type === 'ap' ? 'aps' : 'switches';
+            const usernameEl = document.getElementById('deviceLoginUsername');
+            const passwordEl = document.getElementById('deviceLoginPassword');
+            const saveBtn = document.getElementById('deviceLoginSaveBtn');
+            const username = usernameEl.value.trim();
+            const password = passwordEl.value;
+            if (!username || !password) {
+                setDeviceLoginStatus('Enter a username and a password.', 'error');
+                (username ? passwordEl : usernameEl).focus();
+                return;
+            }
+            const request = ++deviceLoginRequest;
+            const current = () => request === deviceLoginRequest;
+            const formData = new FormData();
+            formData.set('username', username);
+            formData.set('password', password);
+            // Keep the password in the field only until it is sent.
+            passwordEl.value = '';
+            saveBtn.disabled = true;
+            setDeviceLoginStatus('Saving login\u2026');
+            let saved = false;
+            let pollError = null;
+            try {
+                const resp = await fetch(`/api/${endpoint}/${encodeURIComponent(ip)}`, { method: 'PUT', body: formData });
+                const data = await resp.json().catch(() => ({}));
+                if (!current()) return;
+                // The AP endpoint saves a changed login, then polls; 502 means that poll failed.
+                if (type === 'ap' && resp.status === 502) {
+                    saved = true;
+                    pollError = data.detail || 'Unknown error';
+                } else if (!resp.ok) {
+                    setDeviceLoginStatus(`Login not saved: ${data.detail || 'Unknown error'}`, 'error');
+                    return;
+                } else {
+                    saved = true;
+                }
+                if (!pollError) {
+                    setDeviceLoginStatus(`Login saved. Polling the ${kind}\u2026`);
+                    const pollResp = await fetch(`/api/${endpoint}/${encodeURIComponent(ip)}/poll`, { method: 'POST' });
+                    const pollData = await pollResp.json().catch(() => ({}));
+                    if (!current()) return;
+                    if (!pollResp.ok) pollError = pollData.detail || 'Unknown error';
+                }
+                if (pollError) {
+                    setDeviceLoginStatus(`Login saved. Poll failed: ${pollError}`, 'error');
+                } else {
+                    closeDeviceLoginDialog();
+                    showToast(`Login saved for ${kind} ${ip}. Poll passed.`, 'success');
+                }
+            } catch (e) {
+                if (current()) setDeviceLoginStatus(`${saved ? 'Login saved. Poll failed' : 'Login not saved'}: ${e.message}`, 'error');
+            } finally {
+                if (current()) saveBtn.disabled = false;
+                if (saved) {
+                    const topoResp = await fetch('/api/topology').catch(() => null);
+                    if (topoResp?.ok) { topology = await topoResp.json(); rebuildTopologyIndex(); updateUI(); }
+                }
+            }
         }
 
         async function pollAPNow(ip) {
