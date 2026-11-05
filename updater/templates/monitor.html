@@ -2144,6 +2144,14 @@
             white-space: nowrap;
         }
 
+        /* Pause reason gets its own row so queue facts stay scannable. */
+        .status-bar-queue .status-bar-reason {
+            flex-basis: 100%;
+            max-width: none;
+            white-space: normal;
+        }
+        .status-bar-queue > :empty { display: none; }
+
         .status-bar-actions {
             display: flex;
             gap: 6px;
@@ -2186,7 +2194,7 @@
         .u-ml-auto { margin-left: auto; }
         .u-overflow-x-auto { overflow-x: auto; }
         .u-dot-neutral { background: var(--text-dim); }
-        .u-saved-indicator { font-size: var(--text-sm); color: var(--success); }
+        .u-saved-indicator { font-size: var(--text-sm); color: var(--success); opacity: 0; }
         .u-transition-opacity { transition: opacity var(--tr-slow); }
         .u-status-note { font-size: var(--text-sm); }
 
@@ -8713,15 +8721,17 @@
                 ? ''
                 : `${remaining} ${remaining === 1 ? 'device' : 'devices'} remaining`;
             const current = queue.current_device;
-            currentEl.textContent = current ? `Current: ${current.ip}` : '';
-            currentEl.title = current ? `${current.role || 'device'} · ${current.status || 'updating'}` : '';
+            const role = { ap: 'AP', cpe: 'CPE', switch: 'Switch' }[current && current.role] || 'Device';
+            const stage = current && (STAGE_LABELS[current.status] || current.status) || 'updating';
+            currentEl.textContent = current ? `Current: ${role} ${current.ip} (${stage})` : '';
             const when = value => Number.isNaN(Date.parse(value)) ? value : formatWhen(value);
             const cutoff = queue.cutoff_utc ? `Cutoff: ${when(queue.cutoff_utc)}` : '';
             const ramp = Number.isInteger(queue.ramp_ordinal) ? `Ramp window: ${queue.ramp_ordinal}` : '';
             cutoffEl.textContent = [cutoff, ramp].filter(Boolean).join(' · ');
             nextEl.textContent = queue.next_window ? `Next window: ${when(queue.next_window)}` : '';
-            reasonEl.textContent = queue.pause_reason || '';
-            reasonEl.title = queue.pause_reason || '';
+            // Skip the reason when the Auto-Update section already shows it.
+            const barReason = document.getElementById('barBlockReason').textContent;
+            reasonEl.textContent = queue.pause_reason && queue.pause_reason !== barReason ? queue.pause_reason : '';
         }
 
         async function toggleAutoSchedule(event) {
@@ -9347,7 +9357,7 @@
                 // Postal code
                 document.getElementById('drawerZipCode').value = s.zip_code || '';
 
-                // New-firmware canary hold & per-device cooldown
+                // Firmware Hold & per-device cooldown
                 document.getElementById('drawerCanaryHoldDays').value = s.firmware_canary_hold_days || '6';
                 document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days || '30';
 
@@ -9675,7 +9685,7 @@
                     if (inHold) {
                         const h = f.hold_remaining_hours;
                         const qLabel = h > 24 ? `${(h / 24).toFixed(0)}d` : `${h.toFixed(0)}h`;
-                        html += ` title="Canary hold clears in ${qLabel}"`;
+                        html += ` title="Firmware Hold clears in ${qLabel}"`;
                     }
                     html += `>`;
                     html += `${versionLabel}`;
