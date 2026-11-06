@@ -85,9 +85,10 @@ Pipeline:
    commit when the endpoint exposes one. The current endpoint exposes no
    commit, so this release check verifies the version only.
 3. The workflow runs the read-only integration lane shared with bench
-   integration mode. AP and switch IPs are optional; tests that need a missing
-   device skip. The lane excludes the device portal test and uses the shared
-   allowlist in `scripts/bench/readonly-tests.txt`.
+   integration mode. Set `SIXTYOPS_TEST_AP_IP` and
+   `SIXTYOPS_TEST_SWITCH_IP` as optional repository secrets. Tests that need a
+   missing device skip. The lane excludes the device portal test and uses the
+   shared allowlist in `scripts/bench/readonly-tests.txt`.
 4. **Signature gate:** the tag must carry a valid GPG signature from the
    trusted release key or the run fails and nothing publishes (see
    [self-update-signing.md](self-update-signing.md) and the runner notes in

@@ -1,6 +1,20 @@
 """Offline checks for release host version validation."""
 
+from pathlib import Path
+
 from scripts import check_release_instance
+
+
+def test_release_workflow_uses_installed_python_for_validation_and_lane():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "release.yml"
+    ).read_text()
+
+    assert ".venv/bin/python scripts/check_release_instance.py" in workflow
+    assert ".venv/bin/python -m pytest \\" in workflow
 
 
 def _configure(monkeypatch):

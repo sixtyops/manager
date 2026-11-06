@@ -17,10 +17,11 @@ endpoint reports a commit, the workflow also requires the tagged commit.
 The current endpoint reports no commit, so validation checks the version.
 
 The workflow then runs the read-only integration lane used by the bench
-wrapper. AP and switch IPs are optional; tests that need an unconfigured device
-skip. The workflow masks credentials and addresses in its logs. A failed
-version check or integration test stops publication. Do not run write, settings,
-scheduler, firmware, config push, or RADIUS rollout checks during release.
+wrapper. Set `SIXTYOPS_TEST_AP_IP` and `SIXTYOPS_TEST_SWITCH_IP` as optional
+repository secrets. Tests that need an unconfigured device skip. The workflow
+masks credentials and device addresses in its logs. A failed version check or
+integration test stops publication. Do not run write, settings, scheduler,
+firmware, config push, or RADIUS rollout checks during release.
 
 Every release is a **GPG-signed tag on `main`**: merge the
 version-bump PR first, then sign the tag at `origin/main` and push the tag by

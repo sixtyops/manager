@@ -99,16 +99,16 @@ jobs:
           export RELEASE_TAG
           RELEASE_COMMIT="$(git rev-parse HEAD)"
           export RELEASE_COMMIT
-          python3 scripts/check_release_instance.py
+          .venv/bin/python scripts/check_release_instance.py
 
       - name: Run read-only integration lane
         env:
           SIXTYOPS_TEST_URL: ${{ secrets.SIXTYOPS_TEST_URL }}
           SIXTYOPS_TEST_USER: ${{ secrets.SIXTYOPS_TEST_USER }}
           SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
-          SIXTYOPS_TEST_AP_IP: ${{ vars.SIXTYOPS_TEST_AP_IP || secrets.SIXTYOPS_TEST_AP_IP }}
-          SIXTYOPS_TEST_CONFIG_AP_IP: ${{ vars.SIXTYOPS_TEST_AP_IP || secrets.SIXTYOPS_TEST_AP_IP }}
-          SIXTYOPS_TEST_SWITCH_IP: ${{ vars.SIXTYOPS_TEST_SWITCH_IP || secrets.SIXTYOPS_TEST_SWITCH_IP }}
+          SIXTYOPS_TEST_AP_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
+          SIXTYOPS_TEST_CONFIG_AP_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
+          SIXTYOPS_TEST_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
         run: |
           set -euo pipefail
           for name in \
@@ -134,7 +134,7 @@ jobs:
             deselect_args+=(--deselect "$node")
           done
           . .venv/bin/activate
-          python3 -m pytest \
+          .venv/bin/python -m pytest \
             -p no:cacheprovider -o addopts= \
             -m "integration and dev_blocking and not slow" --timeout=900 \
             -rfEs --tb=short --show-capture=no \

@@ -910,6 +910,7 @@ All notable changes to this project are documented in this file.
 ## 1.3.0 - 2026-04-08
 
 ### Added
+- Release validation for automated API-level smoke testing against live deployments
 - "Dangerous" feature classification: 6 features that make sweeping network/auth changes are labeled with amber badges in the UI (config backup/restore, config templates, config compliance, config push, RADIUS, SSO/OIDC)
 - `/api/features` endpoint returning feature map with enabled/dangerous status
 - About panel in Settings (replaces License panel) showing version, instance ID, and GitHub link
