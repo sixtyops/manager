@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## 1.4.1-dev6 - 2026-11-06
+## 1.4.1-dev7 - 2026-11-06
 
 ### Highlights
 - The serial firmware queue replaces waves. New firmware uses 30-minute, then 120-minute, then full maintenance windows.
@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
 ### Known risks
 - TNA-305 is not supported yet ([#745](https://github.com/sixtyops/manager/issues/745)).
 - Scheduled rollouts have been proven on one lab AP only, not on a production site.
+- v1.4.1-dev6 was tagged but never published.
 
 ### Added
 - Admins can export an encrypted bridge archive from `POST /api/backup/bridge`. The archive keeps devices, users, settings, history, and the encryption key for the move to the new schema.
@@ -32,6 +33,10 @@ All notable changes to this project are documented in this file.
 - Record each saved device login in the audit log, and report a failed switch poll as an error.
 - Add an owner-run command to validate, sign, and publish a development release tag.
 - The command waits for the Release workflow and reports the published artifacts.
+
+### Fixed
+- Run the read-only integration lane before publishing a release.
+- Check the development Manager version against the release tag.
 
 ### Changed
 - Manager copies legacy CPEs into device rows.
