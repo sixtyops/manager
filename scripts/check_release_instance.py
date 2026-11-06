@@ -26,7 +26,6 @@ def check_release_instance() -> bool:
 
     host = os.environ["SIXTYOPS_TEST_URL"].rstrip("/")
     session = httpx.Client(
-        verify=False,
         timeout=30,
         follow_redirects=True,
         headers={"Origin": host},

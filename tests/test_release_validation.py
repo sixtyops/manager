@@ -71,6 +71,36 @@ def test_release_validation_fails_when_version_does_not_match(monkeypatch, capsy
     assert "version does not match" in capsys.readouterr().err
 
 
+def test_release_validation_keeps_tls_verification_enabled(monkeypatch):
+    _configure(monkeypatch)
+    client_kwargs = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"version": "1.2.3"}
+
+    class Session:
+        def __init__(self, **kwargs):
+            client_kwargs.update(kwargs)
+
+        def post(self, *args, **kwargs):
+            return Response()
+
+        def get(self, *args, **kwargs):
+            return Response()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(check_release_instance.httpx, "Client", Session)
+
+    assert check_release_instance.check_release_instance() is True
+    assert client_kwargs.get("verify", True) is not False
+
+
 def test_release_validation_checks_commit_when_manager_exposes_it(monkeypatch, capsys):
     _configure(monkeypatch)
 

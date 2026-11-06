@@ -194,9 +194,7 @@ def device_env():
 @pytest.fixture(scope="session")
 def test_ap(topology, device_env):
     """Dedicated AP for core device-polling and CPE lifecycle checks."""
-    ip = device_env["test_ap_ip"]
-    if not ip:
-        pytest.skip("SIXTYOPS_TEST_AP_IP is not configured")
+    ip = device_env["test_ap_ip"] or _require_env("SIXTYOPS_TEST_AP_IP")
     ap = _find_ap(topology, ip)
     if not ap:
         pytest.skip(f"SIXTYOPS_TEST_AP_IP={ip} was not found in live topology")
@@ -210,9 +208,7 @@ def test_ap(topology, device_env):
 @pytest.fixture(scope="session")
 def test_switch(topology, device_env):
     """Dedicated switch for polling and portal coverage."""
-    ip = device_env["test_switch_ip"]
-    if not ip:
-        pytest.skip("SIXTYOPS_TEST_SWITCH_IP is not configured")
+    ip = device_env["test_switch_ip"] or _require_env("SIXTYOPS_TEST_SWITCH_IP")
     switch = _find_switch(topology, ip)
     if not switch:
         pytest.skip(f"SIXTYOPS_TEST_SWITCH_IP={ip} was not found in live topology")
@@ -234,9 +230,7 @@ def firmware_ap(topology, device_env):
 @pytest.fixture(scope="session")
 def config_ap(topology, device_env):
     """Dedicated AP for config backup/push/rollback coverage."""
-    ip = device_env["config_ap_ip"]
-    if not ip:
-        pytest.skip("SIXTYOPS_TEST_CONFIG_AP_IP is not configured")
+    ip = device_env["config_ap_ip"] or _require_env("SIXTYOPS_TEST_CONFIG_AP_IP")
     ap = _find_ap(topology, ip)
     if not ap:
         pytest.skip(f"SIXTYOPS_TEST_CONFIG_AP_IP={ip} was not found in live topology")
