@@ -1,0 +1,1 @@
+tests/integration/test_system_surface.py::test_device_portal_surfaces_ap_switch_and_cpe

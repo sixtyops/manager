@@ -1,0 +1,5 @@
+tests/integration/test_smoke.py
+tests/integration/test_device_polling.py
+tests/integration/test_cpe_lifecycle.py
+tests/integration/test_config_backup.py
+tests/integration/test_system_surface.py

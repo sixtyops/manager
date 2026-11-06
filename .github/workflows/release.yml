@@ -79,49 +79,67 @@ jobs:
           pip install -r requirements.txt
           pytest -v --timeout=60
 
-      - name: Install release validation dependencies
-        run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install -r requirements.txt
-
       - name: Validate development instance
         env:
-          RELEASE_VALIDATION_HOST: ${{ secrets.SIXTYOPS_TEST_URL }}
-          RELEASE_VALIDATION_USERNAME: ${{ secrets.SIXTYOPS_TEST_USER }}
-          RELEASE_VALIDATION_PASSWORD: ${{ secrets.SIXTYOPS_TEST_PASS }}
-          RELEASE_VALIDATION_DEVICE_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
-          RELEASE_VALIDATION_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
-          RELEASE_VALIDATION_SKIP: ${{ secrets.SIXTYOPS_RELEASE_VALIDATION_SKIP }}
+          SIXTYOPS_TEST_URL: ${{ secrets.SIXTYOPS_TEST_URL }}
+          SIXTYOPS_TEST_USER: ${{ secrets.SIXTYOPS_TEST_USER }}
+          SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
         run: |
           set -euo pipefail
-          missing=()
-          for name in RELEASE_VALIDATION_HOST RELEASE_VALIDATION_USERNAME RELEASE_VALIDATION_PASSWORD; do
-            if [ -z "${!name}" ]; then
-              missing+=("$name")
-            fi
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            missing_csv="$(IFS=,; echo "${missing[*]}")"
-            echo "::error::Release validation cannot run. Configure repository secrets: $missing_csv"
-            exit 1
-          fi
-
-          # Mask secret inputs before the validator can print its host or user.
           for name in \
-            RELEASE_VALIDATION_HOST \
-            RELEASE_VALIDATION_USERNAME \
-            RELEASE_VALIDATION_PASSWORD \
-            RELEASE_VALIDATION_DEVICE_IP \
-            RELEASE_VALIDATION_SWITCH_IP \
-            RELEASE_VALIDATION_SKIP
+            SIXTYOPS_TEST_URL \
+            SIXTYOPS_TEST_USER \
+            SIXTYOPS_TEST_PASS
           do
             value="${!name}"
             if [ -n "$value" ]; then
               echo "::add-mask::$value"
             fi
           done
-          python3 scripts/validate_release.py
+          export RELEASE_TAG
+          RELEASE_COMMIT="$(git rev-parse HEAD)"
+          export RELEASE_COMMIT
+          .venv/bin/python scripts/check_release_instance.py
+
+      - name: Run read-only integration lane
+        env:
+          SIXTYOPS_TEST_URL: ${{ secrets.SIXTYOPS_TEST_URL }}
+          SIXTYOPS_TEST_USER: ${{ secrets.SIXTYOPS_TEST_USER }}
+          SIXTYOPS_TEST_PASS: ${{ secrets.SIXTYOPS_TEST_PASS }}
+          SIXTYOPS_TEST_AP_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
+          SIXTYOPS_TEST_CONFIG_AP_IP: ${{ secrets.SIXTYOPS_TEST_AP_IP }}
+          SIXTYOPS_TEST_SWITCH_IP: ${{ secrets.SIXTYOPS_TEST_SWITCH_IP }}
+        run: |
+          set -euo pipefail
+          for name in \
+            SIXTYOPS_TEST_URL \
+            SIXTYOPS_TEST_USER \
+            SIXTYOPS_TEST_PASS \
+            SIXTYOPS_TEST_AP_IP \
+            SIXTYOPS_TEST_CONFIG_AP_IP \
+            SIXTYOPS_TEST_SWITCH_IP
+          do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+          if [ -z "$SIXTYOPS_TEST_AP_IP" ] || [ -z "$SIXTYOPS_TEST_SWITCH_IP" ]; then
+            echo "AP or switch test IP is not configured; tests that need the missing device will skip."
+          fi
+          mapfile -t readonly_tests < scripts/bench/readonly-tests.txt
+          mapfile -t deselect_tests < scripts/bench/readonly-deselect.txt
+          deselect_args=()
+          for node in "${deselect_tests[@]}"; do
+            deselect_args+=(--deselect "$node")
+          done
+          . .venv/bin/activate
+          .venv/bin/python -m pytest \
+            -p no:cacheprovider -o addopts= \
+            -m "integration and dev_blocking and not slow" --timeout=900 \
+            -rfEs --tb=short --show-capture=no \
+            "${deselect_args[@]}" "${readonly_tests[@]}" 2>&1 \
+            | python3 scripts/bench/redact.py
 
   release:
     needs: [test]
