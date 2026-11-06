@@ -19,23 +19,6 @@
 set -euo pipefail
 set +x
 
-# Read-only integration test files. Each test in these files reads data or
-# starts a poll that the Manager scheduler also runs. No test here changes
-# device firmware, device configuration, or Manager settings or inventory.
-# tests/test_bench_wrapper.py checks this list.
-READONLY_TESTS=(
-  tests/integration/test_smoke.py
-  tests/integration/test_device_polling.py
-  tests/integration/test_cpe_lifecycle.py
-  tests/integration/test_config_backup.py
-  tests/integration/test_system_surface.py
-)
-
-# This test reads device logins from the device portal. Do not run it here.
-DESELECT=(
-  tests/integration/test_system_surface.py::test_device_portal_surfaces_ap_switch_and_cpe
-)
-
 PYTEST_MARKER="integration and dev_blocking and not slow"
 
 # The integration mode runs only against the authorized dev host.
@@ -105,6 +88,14 @@ fi
 [[ $duration_min =~ ^[1-9][0-9]{0,2}$ ]] || refuse "--duration-min must be a whole number from 1 to 999"
 
 bench_dir=$(physical_dir "$(dirname "$0")")
+READONLY_TESTS=()
+while IFS= read -r test_file; do
+  [ -n "$test_file" ] && READONLY_TESTS+=("$test_file")
+done < "$bench_dir/readonly-tests.txt"
+DESELECT=()
+while IFS= read -r test_node; do
+  [ -n "$test_node" ] && DESELECT+=("$test_node")
+done < "$bench_dir/readonly-deselect.txt"
 
 # 1. Exact-head proof. This runs before the script reads the access file.
 [[ $expected_sha =~ ^[0-9a-f]{40}$ ]] || refuse "the SHA must be a full 40-character lowercase commit ID"

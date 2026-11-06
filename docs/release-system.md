@@ -78,16 +78,24 @@ the app updater.
   - `confirm=RELEASE`
 
 Pipeline:
-1. Validation step (manual release only).
-2. Test step (`pytest -v`).
-3. **Signature gate:** the tag must carry a valid GPG signature from the
+1. Test step (`pytest -v`).
+2. Development-instance validation logs in with the `SIXTYOPS_TEST_URL`,
+   `SIXTYOPS_TEST_USER`, and `SIXTYOPS_TEST_PASS` repository secrets. It
+   requires `/api/system/info` to report the tag version and checks the tagged
+   commit when the endpoint exposes one. The current endpoint exposes no
+   commit, so this release check verifies the version only.
+3. The workflow runs the read-only integration lane shared with bench
+   integration mode. AP and switch IPs are optional; tests that need a missing
+   device skip. The lane excludes the device portal test and uses the shared
+   allowlist in `scripts/bench/readonly-tests.txt`.
+4. **Signature gate:** the tag must carry a valid GPG signature from the
    trusted release key or the run fails and nothing publishes (see
    [self-update-signing.md](self-update-signing.md) and the runner notes in
    [repo-hardening.md](repo-hardening.md)).
-4. GitHub Release creation:
+5. GitHub Release creation:
    - prerelease for dev tags
    - full release for manual stable flow
-5. GHCR image push:
+6. GHCR image push:
    - always pushes `ghcr.io/sixtyops/manager:<tag>` (dev pushes also move `:dev`)
    - stable flow also pushes `:latest`
 
