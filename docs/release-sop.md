@@ -55,6 +55,9 @@ trust model: [self-update-signing.md](self-update-signing.md).
 
 ## Dev release (`vX.Y.Z-devN`)
 
+Keep each dev release body short: include Highlights, Known risks, a link to
+the full change list, and the image line. Keep it under the in-app 2,000-character limit.
+
 ### One-command path
 
 The owner runs this command on the machine that holds the release key:
