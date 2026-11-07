@@ -34,6 +34,7 @@ GITHUB_REPO = os.environ.get("GITHUB_REPO", "sixtyops/manager")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 CHECK_INTERVAL = int(os.environ.get("AUTOUPDATE_CHECK_INTERVAL", 604800))  # 7 days
+MAX_RELEASE_NOTES_LENGTH = 2000
 
 # Appliance mode: use docker pull from GHCR instead of git-based updates
 APPLIANCE_MODE = os.environ.get("SIXTYOPS_APPLIANCE", "") == "1"
@@ -197,6 +198,30 @@ def parse_min_appliance_version(release_notes: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _truncate_release_notes(notes: str, release_url: str, tag_name: str) -> str:
+    """Fit release notes in the UI payload and link to the full release."""
+    if len(notes) <= MAX_RELEASE_NOTES_LENGTH:
+        return notes
+
+    full_release_url = release_url or (
+        f"https://github.com/{GITHUB_REPO}/releases/tag/{tag_name}"
+    )
+    full_release_link = f"[Full release notes]({full_release_url})"
+    suffix = f"\n\n{full_release_link}"
+    content_limit = MAX_RELEASE_NOTES_LENGTH - len(suffix)
+    cut_at = notes.rfind("\n", 0, content_limit + 1)
+    if cut_at < 0:
+        cut_at = next(
+            (index for index in range(content_limit - 1, -1, -1)
+             if notes[index].isspace()),
+            -1,
+        )
+    if cut_at < 0:
+        return full_release_link
+
+    return notes[:cut_at].rstrip() + suffix
+
+
 class ReleaseChecker:
     """Background service that checks GitHub for new releases."""
 
@@ -291,7 +316,9 @@ class ReleaseChecker:
             full_release_notes = data.get("body", "")
             result["latest_version"] = latest
             result["release_url"] = data.get("html_url", "")
-            result["release_notes"] = full_release_notes[:2000]  # Truncate for UI payload
+            result["release_notes"] = _truncate_release_notes(
+                full_release_notes, result["release_url"], tag_name
+            )
 
             # Compare versions (only flag upgrades, never downgrades)
             try:

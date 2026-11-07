@@ -55,7 +55,7 @@ class TestVersionComparison:
         with patch("updater.release_checker.SIXTYOPS_GH_TOKEN", "ghp_test_token"):
             yield
 
-    async def _check(self, current, latest_tag):
+    async def _check(self, current, latest_tag, body="notes"):
         with patch("updater.release_checker.__version__", current):
             from updater.release_checker import ReleaseChecker
 
@@ -65,7 +65,7 @@ class TestVersionComparison:
             mock_resp.json.return_value = {
                 "tag_name": latest_tag,
                 "html_url": "https://github.com/sixtyops/manager/releases/tag/" + latest_tag,
-                "body": "notes",
+                "body": body,
             }
 
             mock_client = AsyncMock()
@@ -99,6 +99,31 @@ class TestVersionComparison:
         """If version strings can't be parsed, don't flag an update."""
         result = await self._check("1.0.0", "vNOT_A_VERSION")
         assert result["update_available"] is False
+
+    @pytest.mark.asyncio
+    async def test_long_release_notes_end_at_line_boundary_with_full_link(self):
+        from updater.release_checker import MAX_RELEASE_NOTES_LENGTH
+
+        release_url = "https://github.com/sixtyops/manager/releases/tag/v1.0.1"
+        body = "\n".join(
+            f"Line {line_number}: " + ("word " * 85)
+            for line_number in range(1, 6)
+        )
+        result = await self._check("1.0.0", "v1.0.1", body=body)
+
+        notes = result["release_notes"]
+        assert len(notes) <= MAX_RELEASE_NOTES_LENGTH
+        assert notes.startswith("Line 1:")
+        assert "Line 4:" in notes
+        assert "Line 5:" not in notes
+        assert notes.endswith(f"[Full release notes]({release_url})")
+
+    @pytest.mark.asyncio
+    async def test_long_release_notes_without_whitespace_show_only_full_link(self):
+        release_url = "https://github.com/sixtyops/manager/releases/tag/v1.0.1"
+        result = await self._check("1.0.0", "v1.0.1", body="x" * 2001)
+
+        assert result["release_notes"] == f"[Full release notes]({release_url})"
 
     @pytest.mark.asyncio
     async def test_dev_channel_checks_all_releases(self, mock_db):
