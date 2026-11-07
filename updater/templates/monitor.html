@@ -659,6 +659,41 @@
             word-break: break-word;
             overflow-x: auto;
         }
+        .updates-steps { margin: 10px 0 0 0; padding-left: 1.4em; list-style: decimal; font-size: var(--text-sm); line-height: 1.5; }
+        .updates-step { margin-top: 10px; padding-left: var(--space-2); }
+        .updates-step:first-child { margin-top: 0; }
+        .updates-step::marker { font-weight: 600; }
+        .updates-step-text { margin: 0; }
+        .updates-option { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); }
+        .updates-option-label { margin: 0; font-weight: 600; }
+        .updates-cmd { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+        .updates-cmd-text {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 10px;
+            background: rgba(15,23,42,0.92);
+            color: #f8fafc;
+            border-radius: var(--radius-md);
+            font-size: var(--text-xs);
+            font-family: var(--font-mono);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        .updates-cmd .btn-sm { flex-shrink: 0; min-width: 64px; }
+        .updates-doc-link { margin: 10px 0 0 0; font-size: var(--text-sm); }
+        .updates-doc-link a { color: var(--primary-text); }
+        .updates-notes-toggle {
+            margin-top: 6px;
+            padding: 2px 0;
+            background: none;
+            border: none;
+            color: var(--primary-text);
+            font-size: var(--text-sm);
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+        }
+        .updates-notes-toggle:hover { text-decoration: underline; }
         /* `appearance: none` is required: without it, WebKit keeps the
            native button chrome painted over the green background, so the
            white label reads as faint white on light grey until :hover
@@ -732,6 +767,23 @@
         .release-notes-content a {
             word-break: break-all;
         }
+        /* Collapsed notes do not scroll, so the first line always shows.
+           The fade and the toggle below the box show that more text follows. */
+        .release-notes-content.is-collapsed {
+            position: relative;
+            overflow: hidden;
+        }
+        .release-notes-content.is-collapsed::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 48px;
+            background: linear-gradient(to bottom, rgba(239,246,255,0), var(--info-bg-subtle));
+            pointer-events: none;
+        }
+        .release-notes-content.is-expanded { max-height: none; }
 
         /* Layout */
         .container {
@@ -3277,6 +3329,7 @@
                                 <a id="appUpdateReleaseLink" href="#" target="_blank" class="updates-banner-link">View on GitHub</a>
                             </div>
                         <div id="appUpdateNotesContainer" class="release-notes-content hidden"></div>
+                        <button id="appUpdateNotesToggle" class="updates-notes-toggle hidden" type="button" aria-controls="appUpdateNotesContainer" aria-expanded="false" onclick="setAppUpdateNotesExpanded(this.getAttribute('aria-expanded') !== 'true')">Show all release notes</button>
                         <div id="appUpdatePathMessage" class="updates-banner-meta"></div>
                         <div id="appUpdateFeedback" class="hidden" aria-live="polite"></div>
                         <button class="updates-banner-btn" id="appUpdateActionBtn" type="button" onclick="applyAppUpdate()">Update Now</button>
@@ -8487,9 +8540,8 @@
         function setAppUpdateButtonState(inFlight, labelOverride = '') {
             const btn = document.getElementById('appUpdateActionBtn');
             if (!btn) return;
-            const baseLabel = appUpdatePath === 'manual' ? 'Show Update Steps' : 'Update Now';
             btn.disabled = !!inFlight;
-            btn.textContent = labelOverride || baseLabel;
+            btn.textContent = labelOverride || 'Update Now';
         }
 
         function clearAppUpdateFeedback() {
@@ -8504,20 +8556,102 @@
             if (!feedbackEl) return;
             const tone = options.tone || 'info';
             const commands = Array.isArray(options.commands) ? options.commands.filter(Boolean) : [];
+            const steps = Array.isArray(options.steps) ? options.steps : [];
             let html = '<div class="updates-banner-feedback ' + tone + '">'
                 + '<div class="updates-banner-feedback-message">' + escapeHtml(message || '') + '</div>';
-            if (commands.length) {
+            if (steps.length) {
+                let cmdIndex = 0;
+                const renderCommands = (cmds) => (Array.isArray(cmds) ? cmds : []).filter(Boolean).map(cmd => {
+                    const id = 'appUpdateCmd' + (cmdIndex++);
+                    return '<div class="updates-cmd"><code class="updates-cmd-text" id="' + id + '">' + escapeHtml(cmd) + '</code>'
+                        + '<button class="btn btn-sm" type="button" aria-label="Copy command" aria-describedby="' + id + '"'
+                        + ' onclick="copyAppUpdateCommand(this)">Copy</button></div>';
+                }).join('');
+                html += '<ol class="updates-steps">' + steps.map(step => {
+                    let item = '<li class="updates-step"><p class="updates-step-text">' + escapeHtml(step.text || '') + '</p>'
+                        + renderCommands(step.commands);
+                    (Array.isArray(step.options) ? step.options : []).forEach(opt => {
+                        item += '<div class="updates-option"><p class="updates-option-label">' + escapeHtml(opt.label || '') + '</p>'
+                            + '<p class="updates-step-text">' + escapeHtml(opt.text || '') + '</p>'
+                            + renderCommands(opt.commands) + '</div>';
+                    });
+                    return item + '</li>';
+                }).join('') + '</ol>';
+            } else if (commands.length) {
                 html += '<pre class="updates-banner-code">' + commands.map(cmd => escapeHtml(cmd)).join('\n') + '</pre>';
+            }
+            if (/^https:\/\/[^"<>\s]+$/.test(options.docUrl || '')) {
+                html += '<p class="updates-doc-link">Read the full steps in the '
+                    + '<a href="' + options.docUrl + '" target="_blank" rel="noopener noreferrer">deployment guide on GitHub</a>.</p>';
             }
             html += '</div>';
             feedbackEl.innerHTML = html;
             setHidden(feedbackEl, false);
         }
 
+        async function copyAppUpdateCommand(btn) {
+            const codeEl = document.getElementById(btn.getAttribute('aria-describedby'));
+            if (!codeEl) return;
+            try {
+                await copyTextToClipboard(codeEl.textContent);
+                btn.textContent = 'Copied';
+            } catch (e) {
+                btn.textContent = 'Copy failed';
+            }
+            clearTimeout(btn._resetTimer);
+            btn._resetTimer = setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        }
+
+        let appUpdateNotesSource = null;
+
+        function syncAppUpdateNotesToggle() {
+            const notes = document.getElementById('appUpdateNotesContainer');
+            const toggle = document.getElementById('appUpdateNotesToggle');
+            if (!notes || !toggle) return;
+            const expanded = notes.classList.contains('is-expanded');
+            const overflows = expanded || notes.scrollHeight > notes.clientHeight + 1;
+            notes.classList.toggle('is-collapsed', overflows && !expanded);
+            if (!expanded) notes.scrollTop = 0;
+            setHidden(toggle, notes.classList.contains('hidden') || !overflows);
+            toggle.setAttribute('aria-expanded', String(expanded));
+            toggle.textContent = expanded ? 'Show less' : 'Show all release notes';
+        }
+
+        function setAppUpdateNotesExpanded(expanded) {
+            const notes = document.getElementById('appUpdateNotesContainer');
+            if (!notes) return;
+            notes.classList.toggle('is-expanded', !!expanded);
+            syncAppUpdateNotesToggle();
+        }
+
+        (function initAppUpdateNotes() {
+            const notes = document.getElementById('appUpdateNotesContainer');
+            if (!notes) return;
+            // The box has no size while App Settings is closed. Measure again
+            // when it appears so the toggle matches the visible box.
+            if (window.ResizeObserver) new ResizeObserver(syncAppUpdateNotesToggle).observe(notes);
+            // Expand when keyboard focus reaches a link in the hidden part.
+            notes.addEventListener('focusin', () => {
+                if (notes.classList.contains('is-collapsed')) setAppUpdateNotesExpanded(true);
+            });
+        })();
+
         function syncAppUpdateBanner(result) {
             appUpdatePath = result.update_path || 'one_click';
             const pathEl = document.getElementById('appUpdatePathMessage');
             if (pathEl) pathEl.textContent = result.update_path_message || '';
+            // Manual installs apply updates on the host, so they get the steps
+            // and no Update Now button.
+            setHidden('appUpdateActionBtn', appUpdatePath === 'manual');
+            const manual = result.manual_update;
+            if (manual && Array.isArray(manual.steps)) {
+                renderAppUpdateFeedback(manual.message, {
+                    tone: 'info',
+                    commands: manual.commands,
+                    steps: manual.steps,
+                    docUrl: manual.doc_url,
+                });
+            }
             setAppUpdateButtonState(appUpdateRequestInFlight);
         }
 
@@ -8554,11 +8688,16 @@
                     document.getElementById('appUpdateReleaseLink').href = result.release_url || '#';
                     const notesContainer = document.getElementById('appUpdateNotesContainer');
                     if (notesContainer && result.release_notes) {
-                        notesContainer.innerHTML = renderReleaseNotes(result.release_notes);
+                        if (result.release_notes !== appUpdateNotesSource) {
+                            appUpdateNotesSource = result.release_notes;
+                            notesContainer.innerHTML = renderReleaseNotes(result.release_notes);
+                            notesContainer.classList.remove('is-expanded');
+                        }
                         setHidden(notesContainer, false);
                     } else if (notesContainer) {
                         setHidden(notesContainer, true);
                     }
+                    syncAppUpdateNotesToggle();
                     syncAppUpdateBanner(result);
                     setHidden(banner, false);
                     setDisplayClass(dot, 'visible', true);
@@ -8640,15 +8779,9 @@
             }
 
             appUpdateRequestInFlight = true;
-            const loadingLabel = appUpdatePath === 'manual' ? 'Loading Steps...' : 'Applying...';
-            setAppUpdateButtonState(true, loadingLabel);
-            setAppUpdateStatusMessage(appUpdatePath === 'manual' ? 'Loading update steps...' : 'Applying update...');
-            renderAppUpdateFeedback(
-                appUpdatePath === 'manual'
-                    ? 'Checking how this install should be updated...'
-                    : 'Preparing the app update and restart...',
-                { tone: 'info' }
-            );
+            setAppUpdateButtonState(true, 'Applying...');
+            setAppUpdateStatusMessage('Applying update...');
+            renderAppUpdateFeedback('Preparing the app update and restart...', { tone: 'info' });
             try {
                 const response = await fetch('/api/updates/apply', { method: 'POST' });
                 const result = await response.json();
@@ -8675,6 +8808,8 @@
                     renderAppUpdateFeedback(result.message || 'Run these steps on the host to update the app.', {
                         tone: 'info',
                         commands,
+                        steps: result.steps,
+                        docUrl: result.doc_url,
                     });
                     showToast('This install uses manual app update steps.', 'info', 4500);
                 } else if (result.action === 'blocked') {

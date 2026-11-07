@@ -507,12 +507,14 @@ Get current app update status.
     "can_update": true,
     "blocked_reason": "",
     "update_path": "one_click",
-    "update_path_message": "This install supports one-click app updates from the Settings page."
+    "update_path_message": "This install supports one-click app updates from the Settings page.",
+    "manual_update": null
   }
   ```
 - `can_update` is `false` during active firmware rollouts or maintenance windows
 - `docker_socket_available` reports only whether the Docker socket is visible to the app
 - `update_path` is the authoritative self-apply/manual signal: `one_click` when this install can self-apply updates, otherwise `manual`
+- `manual_update` is `null` unless `update_path` is `manual` and an update is available. Then it holds the `message`, `steps`, `doc_url`, and `commands` fields of the manual steps response below
 
 ### `POST /api/updates/check`
 Manually trigger a check for new releases on GitHub.
@@ -533,7 +535,7 @@ Manually trigger a check for new releases on GitHub.
 Apply the available app update using the install's supported path.
 
 - One-click applies use the managed install/appliance path
-- Manual installs return host commands instead of restarting in place
+- Manual installs return numbered host steps instead of restarting in place. `commands` repeats the step commands as one flat list, without option commands.
 - Blocked during active firmware rollouts or maintenance windows
 - **Response (success)**:
   ```json
@@ -563,11 +565,23 @@ Apply the available app update using the install's supported path.
     "action": "instructions",
     "manual": true,
     "message": "...",
+    "steps": [
+      {"text": "Pull the new image.", "commands": ["docker pull ghcr.io/sixtyops/manager:v0.2.0"]},
+      {
+        "text": "Start Manager with the new image. Use the option that matches your install.",
+        "commands": [],
+        "options": [
+          {"label": "Docker Compose", "text": "...", "commands": ["docker compose up -d"]},
+          {"label": "docker run", "text": "...", "commands": []}
+        ]
+      }
+    ],
+    "doc_url": "https://github.com/sixtyops/manager/blob/main/docs/deployment.md#updating-an-image-based-install",
     "commands": [
       "docker pull ghcr.io/sixtyops/manager:v0.2.0"
     ],
     "update_path": "manual",
-    "update_path_message": "This install uses manual app updates. Open the update steps and run them on the host."
+    "update_path_message": "This install uses manual app updates. Run the steps below on the host."
   }
   ```
 

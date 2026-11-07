@@ -384,6 +384,19 @@ class TestErrorPersistence:
 # apply_update guardrails
 # ---------------------------------------------------------------------------
 
+def _assert_no_comment_commands(result):
+    """Each manual-step command is one runnable line, never a comment."""
+    cmds = list(result["commands"])
+    for step in result["steps"]:
+        cmds += step["commands"]
+        for opt in step.get("options", []):
+            cmds += opt["commands"]
+    assert cmds
+    for cmd in cmds:
+        assert "\n" not in cmd
+        assert not cmd.lstrip().startswith("#")
+
+
 class TestApplyUpdateGuardrails:
     """Test that apply_update blocks when unsafe and uses correct tag."""
 
@@ -453,12 +466,20 @@ class TestApplyUpdateGuardrails:
         assert result["manual"] is True
         cmds = result["commands"]
         assert not any("git checkout" in cmd for cmd in cmds)
-        # The only runnable (non-comment) command must be the image pull — the
-        # recreate step is commented guidance, since we can't know if this
-        # install is compose- or `docker run`-managed (and a bare compose/run
-        # command would fail or attach no volumes).
-        runnable = [c for c in cmds if not c.lstrip().startswith("#")]
-        assert runnable == [f"docker pull {GHCR_IMAGE}:v1.0.2"]
+        # The flat list holds only the image pull. The recreate step depends on
+        # whether this install is compose- or `docker run`-managed, so it is a
+        # step with two labeled options instead.
+        assert cmds == [f"docker pull {GHCR_IMAGE}:v1.0.2"]
+        steps = result["steps"]
+        assert steps[0]["commands"] == [f"docker pull {GHCR_IMAGE}:v1.0.2"]
+        labels = [opt["label"] for opt in steps[1]["options"]]
+        assert labels == ["Docker Compose", "docker run"]
+        assert steps[1]["options"][0]["commands"] == ["docker compose up -d"]
+        assert result["doc_url"] == (
+            "https://github.com/sixtyops/manager/blob/main/docs/deployment.md"
+            "#updating-an-image-based-install"
+        )
+        _assert_no_comment_commands(result)
 
     @pytest.mark.asyncio
     async def test_manual_commands_source_install_uses_discovered_path(self):
@@ -480,6 +501,9 @@ class TestApplyUpdateGuardrails:
         assert any("git checkout v1.0.2" in cmd for cmd in cmds)
         assert any(cmd == "cd /srv/custom/sixtyops" for cmd in cmds)
         assert not any("/opt/sixtyops" in cmd for cmd in cmds)
+        assert result["steps"][0]["commands"] == ["cd /srv/custom/sixtyops"]
+        assert result["doc_url"].startswith("https://github.com/sixtyops/manager/blob/main/docs/deployment.md")
+        _assert_no_comment_commands(result)
 
     @pytest.mark.asyncio
     async def test_manual_commands_source_install_never_emits_container_repo_path(self):
@@ -497,9 +521,12 @@ class TestApplyUpdateGuardrails:
 
         assert result["success"] is False
         assert result["manual"] is True
-        assert all(cmd.lstrip().startswith("#") for cmd in result["commands"])
+        # The first step names the folder in words because its host path is unknown.
+        assert result["steps"][0]["commands"] == []
+        assert "docker-compose.yml" in result["steps"][0]["text"]
         assert not any("/app/repo" in cmd for cmd in result["commands"])
-        assert any("git fetch origin tag v1.0.2" in cmd for cmd in result["commands"])
+        assert "git fetch origin tag v1.0.2" in result["commands"]
+        _assert_no_comment_commands(result)
 
     def test_manual_source_host_dir_falls_back_to_opt_sixtyops(self):
         """The default managed install path is valid on the host even when
@@ -1478,6 +1505,44 @@ class TestApplianceMode:
             update_path, message = _classify_update_path()
         assert update_path == "manual"
         assert "manual" in message.lower()
+
+    def test_update_status_includes_manual_steps_for_image_install(self):
+        """A manual install gets the host steps with the status, so the UI can
+        show them without an Update Now button."""
+        from updater.release_checker import ReleaseChecker, GHCR_IMAGE
+        self._set_setting("autoupdate_available_version", "1.0.2")
+        checker = ReleaseChecker(broadcast_func=AsyncMock())
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
+             patch("updater.release_checker._get_repo_dir", return_value=None):
+            status = checker.get_update_status()
+        assert status["update_path"] == "manual"
+        manual = status["manual_update"]
+        assert manual["steps"][0]["commands"] == [f"docker pull {GHCR_IMAGE}:v1.0.2"]
+        assert manual["doc_url"].startswith("https://github.com/")
+
+    def test_update_status_has_no_manual_steps_for_one_click_install(self):
+        from updater.release_checker import ReleaseChecker
+        self._set_setting("autoupdate_available_version", "1.0.2")
+        checker = ReleaseChecker(broadcast_func=AsyncMock())
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=True), \
+             patch("updater.release_checker._get_repo_dir", return_value=Path("/app/repo")):
+            status = checker.get_update_status()
+        assert status["update_path"] == "one_click"
+        assert status["manual_update"] is None
+
+    def test_update_status_has_no_manual_steps_without_update(self):
+        from updater.release_checker import ReleaseChecker
+        checker = ReleaseChecker(broadcast_func=AsyncMock())
+        with patch("updater.release_checker.APPLIANCE_MODE", False), \
+             patch("updater.release_checker.db.get_active_rollout", return_value=None), \
+             patch("updater.release_checker._docker_socket_available", return_value=False), \
+             patch("updater.release_checker._get_repo_dir", return_value=None):
+            status = checker.get_update_status()
+        assert status["manual_update"] is None
 
     @pytest.mark.asyncio
     async def test_appliance_update_pulls_image(self):
