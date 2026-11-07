@@ -2,7 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
-## 1.4.1-dev6 - 2026-11-03
+## 1.4.1-dev7 - 2026-11-06
+
+### Highlights
+- The serial firmware queue replaces waves. New firmware uses 30-minute, then 120-minute, then full maintenance windows.
+- Scheduled firmware updates use one bank by default.
+- After an AP update, Manager reboots reachable CPEs that were connected before the update.
+- Manager confirms CPE serial numbers and can rediscover a moved CPE.
+- Operators can edit AP and switch logins from their device rows.
+- Owners can validate, sign, and publish a dev release with one command.
+
+### Known risks
+- TNA-305 is not supported yet ([#745](https://github.com/sixtyops/manager/issues/745)).
+- Scheduled rollouts have been proven on one lab AP only, not on a production site.
+- v1.4.1-dev6 was tagged but never published.
 
 ### Added
 - Admins can export an encrypted bridge archive from `POST /api/backup/bridge`. The archive keeps devices, users, settings, history, and the encryption key for the move to the new schema.
@@ -16,6 +29,14 @@ All notable changes to this project are documented in this file.
 - Manager records each device result before it advances to the next entry.
 - After an AP update recovers, Manager reboots reachable CPEs that were connected before the update.
 - Unreachable CPEs are skipped and logged.
+- Add an Edit login action to AP and switch rows. Manager saves the new login, polls the device, and shows both results.
+- Record each saved device login in the audit log, and report a failed switch poll as an error.
+- Add an owner-run command to validate, sign, and publish a development release tag.
+- The command waits for the Release workflow and reports the published artifacts.
+
+### Fixed
+- Run the read-only integration lane before publishing a release.
+- Check the development Manager version against the release tag.
 
 ### Changed
 - Manager copies legacy CPEs into device rows.
@@ -82,6 +103,14 @@ All notable changes to this project are documented in this file.
 - Manager saves and verifies the configuration snapshot before a pre-update reboot or firmware upload.
 - CPE migration maps newer legacy observations to the existing migrated device, resolves duplicate legacy rows without blocking startup, and keeps AP or switch IP conflicts.
 - The scheduler ignores legacy wave rollouts during queue admission. It keeps those rows as history and hides them from current scheduler status.
+- Skip firmware families that Manager does not support.
+- Use Tachyon's public TNA-303L page to find its stable firmware and checksum.
+- Show the role and update stage of the current queue device as text in the status bar.
+- Use "Firmware Hold" in hover text, and show the queue pause reason once, on its own row.
+- Re-adding a switch clears its cached client and poll backoff.
+- The next poll uses the saved credentials.
+- Keep CPE sessions when a switch login changes.
+- Reset the edited switch client and poll state only.
 
 ### Changed
 - Operators can set the firmware window ramp in settings, and scheduler status shows the persisted cutoff and ramp window ordinal.
@@ -886,7 +915,7 @@ All notable changes to this project are documented in this file.
 ## 1.3.0 - 2026-04-08
 
 ### Added
-- Release validation script (`scripts/validate_release.py`) for automated API-level smoke testing against live deployments
+- Release validation for automated API-level smoke testing against live deployments
 - "Dangerous" feature classification: 6 features that make sweeping network/auth changes are labeled with amber badges in the UI (config backup/restore, config templates, config compliance, config push, RADIUS, SSO/OIDC)
 - `/api/features` endpoint returning feature map with enabled/dangerous status
 - About panel in Settings (replaces License panel) showing version, instance ID, and GitHub link

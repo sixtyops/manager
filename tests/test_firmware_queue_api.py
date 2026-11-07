@@ -1,5 +1,6 @@
 """API and monitor contracts for serial firmware queue state."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -68,6 +69,17 @@ def test_monitor_uses_serial_queue_labels_without_wave_controls():
     assert "barResumeBtn" not in template
     assert "barCancelBtn" not in template
     assert "estimated_completion_date" not in template
+    assert "currentEl.textContent = current ? `Current: ${role} ${current.ip} (${stage})` : '';" in template
+    assert "currentEl.title" not in template
+
+
+def test_monitor_uses_firmware_hold_term_in_ui_text():
+    template = Path("updater/templates/monitor.html").read_text(encoding="utf-8")
+    # IDs and setting keys keep the legacy name; visible text must not.
+    text = re.sub(r"(drawerCanaryHoldDays|firmware_canary_hold_days)", "", template)
+
+    assert "canary" not in text.lower()
+    assert 'title="Firmware Hold clears in ${qLabel}"' in template
 
 
 def test_resolved_queue_failure_moves_first_in_later_window(mock_db):

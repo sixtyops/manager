@@ -1575,6 +1575,7 @@ async def add_device(
         device_id = db.upsert_switch(ip, username, password, tower_site_id)
         device_type = "switch"
         if poller:
+            poller.invalidate_client(ip, invalidate_cpe_sessions=False)
             await poller.poll_switch_now(ip)
     else:
         device_id = db.upsert_access_point(ip, username, password, tower_site_id)
@@ -1641,6 +1642,7 @@ async def update_ap(
     db.upsert_access_point(ip, new_username, new_password, new_site_id, **kwargs)
 
     if credentials_changed:
+        db.log_audit(session["username"], "device.login_update", "ap", ip, None, None)
         poller = get_poller()
         if poller:
             poller.invalidate_client(ip)
@@ -1756,9 +1758,10 @@ async def update_switch(
     db.upsert_switch(ip, new_username, new_password, new_site_id, **kwargs)
 
     if username or password:
+        db.log_audit(session["username"], "device.login_update", "switch", ip, None, None)
         poller = get_poller()
         if poller:
-            poller.invalidate_client(ip)
+            poller.invalidate_client(ip, invalidate_cpe_sessions=False)
 
     return {"success": True}
 
@@ -1768,7 +1771,7 @@ async def delete_switch(ip: str, session: dict = Depends(require_role("admin", "
     """Delete a switch."""
     poller = get_poller()
     if poller:
-        poller.invalidate_client(ip)
+        poller.invalidate_client(ip, invalidate_cpe_sessions=False)
 
     db.delete_switch(ip)
     db.log_audit(session["username"], "device.delete", "switch", ip, None, None)
@@ -1844,7 +1847,9 @@ async def bulk_delete_devices(
     poller = get_poller()
     if poller:
         for ip in ips:
-            poller.invalidate_client(ip)
+            poller.invalidate_client(
+                ip, invalidate_cpe_sessions=device_type != "switch",
+            )
     try:
         count = db.bulk_delete_devices(device_type, ips)
     except ValueError as e:
@@ -1884,6 +1889,9 @@ async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "op
     success = await poller.poll_switch_now(ip)
     if not success:
         raise HTTPException(404, f"Switch not found: {ip}")
+    last_error = (db.get_switch(ip) or {}).get("last_error")
+    if last_error:
+        raise HTTPException(502, last_error)
 
     return {"success": True}
 

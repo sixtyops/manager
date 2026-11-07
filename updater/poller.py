@@ -961,14 +961,15 @@ class NetworkPoller:
         except Exception as e:
             logger.debug(f"Failed to get bank info for CPE {cpe_ip}: {e}")
 
-    def invalidate_client(self, ip: str):
-        """Remove cached client (e.g., when credentials change)."""
+    def invalidate_client(self, ip: str, *, invalidate_cpe_sessions: bool = True):
+        """Remove a device client and, when needed, inherited CPE sessions."""
         self._client_credentials_generation[ip] = self._client_credentials_generation.get(ip, 0) + 1
         self._remove_cached_client(ip)
         self._clear_poll_backoff(ip)
         self._failure_counts.pop(ip, None)
-        # CPE sessions are keyed by CPE IP but inherit credentials from APs.
-        self.invalidate_cpe_clients()
+        # CPE sessions inherit credentials from APs, not switches.
+        if invalidate_cpe_sessions:
+            self.invalidate_cpe_clients()
 
     def get_latest_peer_snapshots(self) -> dict[str, dict]:
         """Return copies of successful AP peer reports and their poll times."""

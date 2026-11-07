@@ -7,36 +7,23 @@ release authority. Follow [Agent rules](../AGENTS.md#agent-rules).
 
 **Detail:** The steps below describe the approved release process.
 
-## Validate before signing
+## Release validation
 
-Before signing a tag, validate the exact `main` commit that you plan to tag
-against the development instance running that commit. Check out the candidate
-commit in a separate worktree and run the validator with the development host
-settings in the environment:
+The Release workflow checks the signed tag after it exists and before
+publication. It requires the `SIXTYOPS_TEST_URL`, `SIXTYOPS_TEST_USER`, and
+`SIXTYOPS_TEST_PASS` repository secrets. It logs in to the development
+Manager and requires `/api/system/info` to report the tag version. If that
+endpoint reports a commit, the workflow also requires the tagged commit.
+The current endpoint reports no commit, so validation checks the version.
 
-```bash
-git worktree add --detach /tmp/sixtyops-release-check <commit-sha>
-cd /tmp/sixtyops-release-check
-python scripts/validate_release.py
-```
+The workflow then runs the read-only integration lane used by the bench
+wrapper. Set `SIXTYOPS_TEST_AP_IP` and `SIXTYOPS_TEST_SWITCH_IP` as optional
+repository secrets. Tests that need an unconfigured device skip. The workflow
+masks credentials and device addresses in its logs. A failed version check or
+integration test stops publication. Do not run write, settings, scheduler,
+firmware, config push, or RADIUS rollout checks during release.
 
-Set `RELEASE_VALIDATION_HOST`, `RELEASE_VALIDATION_USERNAME`,
-`RELEASE_VALIDATION_DEVICE_IP`, `RELEASE_VALIDATION_SWITCH_IP`, and
-`RELEASE_VALIDATION_SKIP` in the environment when needed. Store the password
-in a private file with mode `600`, then set `RELEASE_VALIDATION_PASSWORD_FILE`
-to its path without printing its contents:
-
-```bash
-export RELEASE_VALIDATION_PASSWORD_FILE=/secure/path/manager-password
-```
-
-The validator reads the file without printing the password. Do not put
-credentials on the command line. Confirm the development instance runs
-`<commit-sha>` before starting validation. A failed validation stops the
-release. Fix forward on `main`, then validate the new commit before signing
-its tag.
-
-**Bottom line:** every release is a **GPG-signed tag on `main`**: merge the
+Every release is a **GPG-signed tag on `main`**: merge the
 version-bump PR first, then sign the tag at `origin/main` and push the tag by
 name. Dev tags start validation and publish only after it passes; stable tags
 need the manual workflow approval. Unsigned tags are refused by CI and by
@@ -68,6 +55,25 @@ trust model: [self-update-signing.md](self-update-signing.md).
 
 ## Dev release (`vX.Y.Z-devN`)
 
+### One-command path
+
+The owner runs this command on the machine that holds the release key:
+
+```bash
+scripts/release-dev.sh <full-commit-sha>
+```
+
+The script fetches `origin`, checks that the commit is the current `main` head,
+checks CI and the dev version, and refuses an existing tag. It shows the
+version, commit, and changes since the last tag. The owner confirms with one
+`yes`; use `--yes` only when the owner has already authorized the release.
+The script signs and verifies the tag, pushes only that tag, watches its
+Release run, and prints the GitHub Release and GHCR tags. Only the owner signs
+and pushes release tags. The script does not move branches or use `--tags`.
+It warns if the website install snippet does not pin the new image tag.
+
+### Manual fallback
+
 1. Collect the pull request fragments into the changelog before the version
    bump: `python scripts/collect_changelog.py X.Y.Z-devN YYYY-MM-DD`. Review
    the new version section and confirm the fragment files were removed.
@@ -75,9 +81,7 @@ trust model: [self-update-signing.md](self-update-signing.md).
    `pyproject.toml`, and the pinned image tag in `website/index.html`. Tagging
    before the bump is on `main` creates a tag whose code claims the wrong
    version — clients refuse it.
-3. **Run the pre-tag validation above for the exact commit at `origin/main`.**
-   Sign only after it passes.
-4. **Sign the tag at `origin/main` and verify before pushing:**
+3. **The owner signs the tag at `origin/main` and verifies before pushing:**
    ```bash
    git fetch origin
    git -c gpg.format=openpgp -c user.signingkey=E2C19E86B24A87283068AEFAF2D6F70883960DCE \
@@ -87,8 +91,8 @@ trust model: [self-update-signing.md](self-update-signing.md).
    ```
    The `-c` overrides force the GPG release key; without them git uses the
    machine's default (e.g. SSH/1Password) and produces a tag the gate rejects.
-3. The tag push auto-runs **Release**: tests and development-instance
-   validation → signature gate → GitHub pre-release →
+4. The tag push auto-runs **Release**: tests, development-instance version
+   check, and read-only integration lane → signature gate → GitHub pre-release →
    `ghcr.io/sixtyops/manager:vX.Y.Z-devN` + `:dev`. The signed tag must exist
    to start validation. The workflow creates no GitHub Release or GHCR image,
    and does not move `:dev`, until validation passes. Watch it under Actions

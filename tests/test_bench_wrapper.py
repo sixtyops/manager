@@ -11,6 +11,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 WRAPPER = REPO / "scripts" / "bench" / "run-readonly-bench.sh"
+READONLY_TESTS = REPO / "scripts" / "bench" / "readonly-tests.txt"
+DESELECT_TESTS = REPO / "scripts" / "bench" / "readonly-deselect.txt"
 
 # Integration files that change devices or Manager state. None of them may
 # be in the wrapper allowlist.
@@ -36,11 +38,8 @@ ALLOWED_POSTS = {
 PORTAL_TEST = "tests/integration/test_system_surface.py::test_device_portal_surfaces_ap_switch_and_cpe"
 
 
-def _bash_array(name):
-    source = WRAPPER.read_text()
-    match = re.search(rf"^{name}=\(\n(.*?)^\)$", source, re.MULTILINE | re.DOTALL)
-    assert match, f"{name} array not found in the wrapper"
-    return [line.strip() for line in match.group(1).splitlines() if line.strip()]
+def _read_list(path):
+    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
 
 
 def _run(sha, tmp_path):
@@ -88,7 +87,7 @@ def test_wrapper_refuses_short_sha(tmp_path):
 
 
 def test_allowlist_has_no_write_test():
-    allowlist = _bash_array("READONLY_TESTS")
+    allowlist = _read_list(READONLY_TESTS)
 
     assert allowlist, "the allowlist is empty"
     assert not set(allowlist) & WRITE_TESTS
@@ -107,7 +106,16 @@ def test_allowlist_has_no_write_test():
 
 
 def test_portal_credential_test_is_deselected():
-    assert PORTAL_TEST in _bash_array("DESELECT")
+    assert PORTAL_TEST in _read_list(DESELECT_TESTS)
+
+
+def test_bench_and_release_share_the_readonly_allowlist():
+    wrapper = WRAPPER.read_text()
+    workflow = (REPO / ".github" / "workflows" / "release.yml").read_text()
+    assert '"$bench_dir/readonly-tests.txt"' in wrapper
+    assert '"$bench_dir/readonly-deselect.txt"' in wrapper
+    assert "scripts/bench/readonly-tests.txt" in workflow
+    assert "scripts/bench/readonly-deselect.txt" in workflow
 
 
 def test_wrapper_has_no_tracing_or_environment_dump():

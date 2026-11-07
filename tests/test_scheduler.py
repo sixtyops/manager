@@ -1,7 +1,7 @@
 """Tests for updater.scheduler."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +9,7 @@ import pytest
 
 from updater import app as app_module
 from updater import database as db
+from updater import scheduler as scheduler_module
 from updater.scheduler import (
     AutoUpdateScheduler,
     _cpe_auth_block_reason,
@@ -740,6 +741,13 @@ class TestSchedulerStartFailure:
 
 def test_status_reads_persisted_cutoff_and_ramp_ordinal_for_current_target(tmp_path, monkeypatch):
     """Status reports timing from the real SQLite row for the pending target."""
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            fixed = datetime(2026, 6, 23, 12, tzinfo=timezone.utc)
+            return fixed if tz is None else fixed.astimezone(tz)
+
+    monkeypatch.setattr(scheduler_module, "datetime", FixedDateTime)
     database_path = tmp_path / "scheduler-status.db"
     monkeypatch.setattr(db, "DB_PATH", database_path)
     db.init_db()
@@ -765,7 +773,9 @@ def test_status_reads_persisted_cutoff_and_ramp_ordinal_for_current_target(tmp_p
 
     from updater import rollout_gate
 
-    current_key = rollout_gate.firmware_window_key(db.get_all_settings(), datetime.now())
+    current_key = rollout_gate.firmware_window_key(
+        db.get_all_settings(), datetime(2026, 6, 23, 12, tzinfo=timezone.utc)
+    )
     assert current_key is not None
     previous_key = (current_key[0], "2000-01-01")
     cutoff_utc = "2099-01-01T00:00:00+00:00"
