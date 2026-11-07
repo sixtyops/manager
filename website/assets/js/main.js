@@ -2,7 +2,9 @@
 
 document.addEventListener('DOMContentLoaded', () => {
 
-  // Scroll-triggered fade-in
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Scroll-triggered fade-in (skipped when the visitor asks for reduced motion)
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {
@@ -12,10 +14,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }, { threshold: 0.1 });
 
-  document.querySelectorAll('[data-animate]').forEach(el => {
-    el.style.opacity = '0';
-    observer.observe(el);
-  });
+  if (!reduceMotion) {
+    document.querySelectorAll('[data-animate]').forEach(el => {
+      el.style.opacity = '0';
+      observer.observe(el);
+    });
+  }
 
   // Smooth scroll for anchor links
   document.querySelectorAll('a[href^="#"]').forEach(link => {
@@ -27,7 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         const offset = 56; // nav height
         const y = target.getBoundingClientRect().top + window.pageYOffset - offset;
-        window.scrollTo({ top: y, behavior: 'smooth' });
+        window.scrollTo({ top: y, behavior: reduceMotion ? 'auto' : 'smooth' });
       }
     });
   });

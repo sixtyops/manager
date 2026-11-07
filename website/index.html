@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SixtyOps — Hands-Off Tachyon Network Management</title>
-  <meta name="description" content="SixtyOps keeps your Tachyon wireless devices auto-updated, configs backed up, and maintenance running on schedule. Hands-off ISP network management.">
-  <meta property="og:title" content="SixtyOps — Hands-Off Tachyon Network Management">
-  <meta property="og:description" content="Auto-update firmware, back up configs, and schedule maintenance windows for your entire Tachyon network.">
+  <title>SixtyOps — Tachyon Firmware Management</title>
+  <meta name="description" content="Schedule firmware updates for supported Tachyon access points, CPEs, and switches. SixtyOps also tracks device status and configuration changes on your network.">
+  <meta property="og:title" content="SixtyOps — Tachyon Firmware Management">
+  <meta property="og:description" content="Schedule firmware updates for supported Tachyon access points, CPEs, and switches. SixtyOps also tracks device status and configuration changes on your network.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://sixtyops.net">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230D9488'/><svg x='2' y='2' width='28' height='28' viewBox='0 0 28 28' fill='none'><rect x='3' y='8' width='2.5' height='12' rx='1' fill='white' opacity='0.9'/><rect x='7.5' y='6' width='2.5' height='16' rx='1' fill='white'/><rect x='12' y='4' width='2.5' height='20' rx='1' fill='white'/><path d='M17 10 L25 6' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.5'/><path d='M17 14 L26 14' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.8'/><path d='M17 18 L25 22' stroke='white' stroke-width='1.5' stroke-linecap='round' opacity='0.5'/></svg></svg>">
@@ -73,7 +73,7 @@
           Your Tachyon Network, On Autopilot
         </h1>
         <p class="mt-6 text-lg text-slate-500 leading-relaxed max-w-2xl">
-          SixtyOps keeps your wireless devices updated, configs backed up, and maintenance running on schedule&mdash;so you can focus on growing your ISP.
+          Schedule firmware updates for supported Tachyon access points, CPEs, and switches. SixtyOps also tracks device status and configuration changes on your network.
         </p>
         <div class="mt-8 flex items-center gap-6">
           <a href="#download" class="text-brand-700 hover:text-brand-800 font-medium text-sm transition-colors">Install Now &darr;</a>
@@ -198,14 +198,12 @@
             <span style="font-size:12px; font-weight:600">Auto-Update</span>
             <span class="status-badge idle">Idle</span>
             <span style="font-size:11px; color:#10b981; flex:1">3 pending &middot; 3:00&ndash;4:00 on tue,wed,thu</span>
-            <div class="phase-track hidden sm:flex" style="gap:0; max-width:200px">
-              <div class="phase-dot completed" style="width:32px; height:32px; font-size:8px"><span>Canary</span></div>
-              <div class="phase-line completed"></div>
-              <div class="phase-dot active" style="width:32px; height:32px; font-size:8px">10%</div>
-              <div class="phase-line pending"></div>
-              <div class="phase-dot pending" style="width:32px; height:32px; font-size:8px">50%</div>
-              <div class="phase-line pending"></div>
-              <div class="phase-dot pending" style="width:32px; height:32px; font-size:8px">100%</div>
+            <div class="ramp-track w-full">
+              <span class="ramp-label">Serial queue</span>
+              <span class="ramp-step done"><span aria-hidden="true">&#10003;</span> Firmware Hold</span>
+              <span class="ramp-step next"><span aria-hidden="true">&#9679;</span> 30-minute first window</span>
+              <span class="ramp-step">120-minute second window</span>
+              <span class="ramp-step">Full maintenance window</span>
             </div>
           </div>
         </div>
@@ -239,7 +237,7 @@
             </li>
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
-              Add devices by IP&mdash;auto-discovery handles the rest
+              Add APs and switches by IP. SixtyOps finds their CPEs from the AP.
             </li>
           </ul>
         </div>
@@ -359,11 +357,7 @@
                 </div>
                 <div>
                   <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Update Mode</div>
-                  <span class="mock-select">Single Bank (recommended)</span>
-                </div>
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Parallel</div>
-                  <span class="mock-input">2</span>
+                  <span class="mock-select">Single bank (recommended)</span>
                 </div>
               </div>
 
@@ -372,7 +366,7 @@
                 <div class="flex flex-wrap items-center gap-x-5 gap-y-2" style="font-size:11px; color:#374151">
                   <span class="flex items-center gap-1.5"><span class="mock-toggle off"></span> Beta Firmware</span>
                   <span class="flex items-center gap-1.5"><span class="mock-toggle on"></span> Allow Downgrade</span>
-                  <span class="flex items-center gap-1.5"><span class="mock-toggle on"></span> Disable below <strong>14</strong> &deg;F</span>
+                  <span class="flex items-center gap-1.5"><span class="mock-toggle on"></span> Weather Guard below <strong>14</strong> &deg;F</span>
                 </div>
               </div>
 
@@ -403,7 +397,7 @@
             </li>
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
-              Temperature-based hold &mdash; no updates in extreme weather
+              Weather Guard holds updates below a set temperature
             </li>
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
@@ -411,7 +405,7 @@
             </li>
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
-              Configurable parallelism and single/dual-bank modes
+              Scheduled updates use one bank. Manual updates can use both banks.
             </li>
           </ul>
         </div>
@@ -420,33 +414,33 @@
   </section>
 
 
-  <!-- ════════ FEATURE 3: Gradual Rollout ════════ -->
+  <!-- ════════ FEATURE 3: Serial Firmware Updates ════════ -->
   <section class="section-rule py-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="grid lg:grid-cols-2 gap-12 items-center">
         <div data-animate>
           <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">03 &mdash; safe by default</p>
-          <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-4">Gradual Rollouts That Protect Your Network</h2>
+          <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-4">Serial Firmware Updates</h2>
           <p class="text-slate-500 mb-6 leading-relaxed">
-            Firmware doesn't go to every device at once. A staged rollout&mdash;canary first, then 10%, 50%, 100%&mdash;with automatic pause if anything goes wrong.
+            SixtyOps updates one device at a time during the maintenance window. It updates CPEs first, then APs, then switches. By default, SixtyOps limits the first window for new firmware to 30 minutes and the second to 120 minutes. Later windows use the full scheduled window.
           </p>
           <ul class="space-y-2 text-sm text-slate-600">
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
-              Health checks pass at each stage before advancing
+              Checks each device before it starts
             </li>
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
-              Automatic pause on failure detection
+              Confirms recovery before the next device
             </li>
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
-              Resume or cancel mid-rollout with one click
+              Stops the queue when a device fails recovery checks
             </li>
           </ul>
         </div>
 
-        <!-- Mockup: Rollout phase panel -->
+        <!-- Mockup: Serial queue panel -->
         <div class="app-frame" data-animate>
           <div class="app-frame-bar">
             <div class="app-frame-dot" style="background:#ef4444"></div>
@@ -455,61 +449,55 @@
           </div>
           <div class="app-frame-body">
             <div class="mock-card p-5">
-              <div class="flex items-center gap-3 mb-5">
+              <div class="flex items-center gap-3 mb-4">
                 <span class="autoupdate-toggle on" style="width:36px; height:20px"></span>
                 <span style="font-size:13px; font-weight:700">Auto-Update</span>
                 <span class="status-badge active">Running</span>
-                <span style="font-size:11px; color:#10b981">3 pending</span>
+                <span style="font-size:11px; color:#047857">2 pending</span>
               </div>
 
-              <!-- Large phase indicator -->
-              <div class="phase-track mb-4 justify-center" style="gap:0">
-                <div class="phase-dot completed"><span style="font-size:9px">Canary</span></div>
-                <div class="phase-line completed" style="min-width:40px"></div>
-                <div class="phase-dot active"><span>10%</span></div>
-                <div class="phase-line pending" style="min-width:40px"></div>
-                <div class="phase-dot pending"><span>50%</span></div>
-                <div class="phase-line pending" style="min-width:40px"></div>
-                <div class="phase-dot pending"><span>100%</span></div>
+              <div class="ramp-track mb-5" style="font-size:11px">
+                <span class="ramp-step done"><span aria-hidden="true">&#10003;</span> Firmware Hold</span>
+                <span class="ramp-step next"><span aria-hidden="true">&#9679;</span> 30-minute first window</span>
+                <span class="ramp-step">120-minute second window</span>
+                <span class="ramp-step">Full maintenance window</span>
               </div>
 
-              <!-- Phase labels -->
-              <div class="flex justify-between px-2 mb-6" style="font-size:9px; color:#9ca3af">
-                <span>1 device &middot; Feb 18</span>
-                <span>2 of 5</span>
-                <span></span>
-                <span></span>
-              </div>
-
-              <!-- Live device update list -->
+              <!-- Serial device queue: CPEs, then APs, then switches -->
               <div class="space-y-2">
                 <div class="flex items-center gap-3 bg-green-50 rounded-lg p-2.5 border border-green-100">
-                  <span class="status-dot status-online"></span>
-                  <span style="font-size:11px; font-weight:500; flex:1">TNA-303X-AP01</span>
+                  <span class="device-badge cpe-good" style="margin-right:0">C</span>
+                  <span style="font-size:11px; font-weight:500; flex:1">NewCustomer</span>
                   <span style="font-size:10px; background:#d1fae5; color:#065f46; padding:2px 8px; border-radius:10px">Updated</span>
                 </div>
                 <div class="flex items-center gap-3 bg-teal-50 rounded-lg p-2.5 border border-teal-100">
-                  <span class="inline-block w-2 h-2 rounded-full bg-teal-500" style="animation: phasePulse 2s infinite"></span>
-                  <span style="font-size:11px; font-weight:500; flex:1">TNA-301-AP02</span>
-                  <span style="font-size:10px; background:#CCFBF1; color:#0F766E; padding:2px 8px; border-radius:10px">Updating...</span>
+                  <span class="device-badge ap" style="margin-right:0">A</span>
+                  <span style="font-size:11px; font-weight:500; flex:1">tw35-ap-test</span>
+                  <span style="font-size:10px; background:#CCFBF1; color:#0F766E; padding:2px 8px; border-radius:10px">Updating</span>
                 </div>
                 <div class="flex items-center gap-3 bg-slate-50 rounded-lg p-2.5 border border-slate-100">
-                  <span class="status-dot" style="background:#d1d5db"></span>
-                  <span style="font-size:11px; font-weight:500; flex:1; color:#6b7280">TNA-302-AP03</span>
+                  <span class="device-badge switch" style="margin-right:0">SW</span>
+                  <span style="font-size:11px; font-weight:500; flex:1; color:#6b7280">north-ridge-sw1</span>
                   <span style="font-size:10px; background:#f1f5f9; color:#64748b; padding:2px 8px; border-radius:10px">Queued</span>
                 </div>
               </div>
 
-              <!-- Controls -->
-              <div class="flex items-center justify-between mt-4 pt-3 border-t border-slate-100">
-                <span style="font-size:11px; color:#6b7280">Stage 2 of 4 &mdash; est. &lt; 1 min remaining</span>
-                <div class="flex gap-2">
-                  <span style="font-size:10px; background:#fef3c7; color:#92400e; padding:3px 10px; border-radius:6px; font-weight:500; cursor:default">Pause</span>
-                  <span style="font-size:10px; background:#fee2e2; color:#991b1b; padding:3px 10px; border-radius:6px; font-weight:500; cursor:default">Cancel</span>
-                </div>
+              <div class="mt-4 pt-3 border-t border-slate-100" style="font-size:11px; color:#6b7280">
+                One device at a time &middot; New starts stop at 3:30 AM
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-8 mt-14 pt-10 border-t border-slate-200 text-sm" data-animate>
+        <div>
+          <h3 class="font-semibold text-slate-900 mb-2">Firmware Hold</h3>
+          <p class="text-slate-500 leading-relaxed">New firmware waits for the Firmware Hold to clear before scheduled fleet updates begin. An operator can update one device manually to confirm the firmware before the fleet queue starts.</p>
+        </div>
+        <div>
+          <h3 class="font-semibold text-slate-900 mb-2">CPEs and AP recovery</h3>
+          <p class="text-slate-500 leading-relaxed">Before each Tachyon firmware write, SixtyOps checks the device serial. During CPE recovery, if a CPE returns at a different IP or under a different AP, SixtyOps can find it in recent AP peer reports and confirm its serial before continuing. After an AP update, SixtyOps reboots reachable CPEs saved from the AP peer list. It checks that each saved CPE returns to the peer list by MAC and confirms its eth0 link is up if it was up before the update.</p>
         </div>
       </div>
     </div>
@@ -635,7 +623,7 @@
             </li>
             <li class="flex items-start gap-2">
               <span class="text-brand-600 mt-0.5">&mdash;</span>
-              Works with all Tachyon APs, SMs, and switches
+              Works with supported Tachyon APs, SMs, and switches
             </li>
           </ul>
         </div>
@@ -724,7 +712,7 @@
   <section class="section-rule py-10">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6">
-        <span class="font-mono text-xs text-slate-400 uppercase tracking-wider">Supported</span>
+        <span class="font-mono text-xs text-slate-500 uppercase tracking-wider">Supported models</span>
         <div class="flex flex-wrap justify-center gap-2">
           <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-301</span>
           <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-302</span>
@@ -733,6 +721,7 @@
           <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNA-303L-65</span>
           <span class="px-3 py-1 border border-slate-200 rounded text-xs font-mono text-slate-600">TNS-100</span>
         </div>
+        <span class="text-xs text-slate-500">TNA-305 is not supported yet.</span>
       </div>
     </div>
   </section>
@@ -744,7 +733,7 @@
       <div class="max-w-3xl mx-auto mb-12">
         <p class="font-mono text-xs text-slate-400 tracking-wide mb-3">// source-available, self-hosted</p>
         <h2 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Runs On Your Infrastructure</h2>
-        <p class="mt-3 text-slate-500">A single Docker container on your own VM. Source available under ELv2. Free during the design-partner alpha &mdash; per-AP and per-switch licensing arrives at general availability. Subscriber radios (SMs) are always free.</p>
+        <p class="mt-3 text-slate-500">Run SixtyOps on your own Linux server with Docker Compose. Source available under ELv2. Free during the design-partner alpha &mdash; per-AP and per-switch licensing arrives at general availability. Subscriber radios (SMs) are always free.</p>
       </div>
 
       <div class="max-w-3xl mx-auto">
@@ -760,7 +749,7 @@
             </div>
             <div class="flex items-start gap-2 text-slate-600">
               <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
-              Gradual rollout &amp; maintenance windows
+              Serial firmware updates &amp; maintenance windows
             </div>
             <div class="flex items-start gap-2 text-slate-600">
               <svg class="w-4 h-4 text-brand-600 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
@@ -795,14 +784,14 @@
               <span class="font-medium text-slate-900 text-sm">Where does SixtyOps run?</span>
               <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 1 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
             </button>
-            <div id="faq-location-panel" x-show="openFaq === 1" x-collapse class="pb-4 text-sm text-slate-500">On your infrastructure as a Docker container. Your data stays on your network&mdash;we never see your device configs or credentials.</div>
+            <div id="faq-location-panel" x-show="openFaq === 1" x-collapse class="pb-4 text-sm text-slate-500">On your own Linux server with Docker Compose. Your data stays on your network&mdash;we never see your device configs or credentials.</div>
           </div>
           <div>
             <button aria-expanded="false" :aria-expanded="openFaq === 2" aria-controls="faq-safety-panel" @click="openFaq = openFaq === 2 ? null : 2" class="w-full flex items-center justify-between py-4 text-left">
               <span class="font-medium text-slate-900 text-sm">What are "dangerous" features?</span>
               <svg class="w-4 h-4 text-slate-400 transition-transform shrink-0 ml-4" :class="openFaq === 2 && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
             </button>
-            <div id="faq-safety-panel" x-show="openFaq === 2" x-collapse class="pb-4 text-sm text-slate-500">Some features (config push, compliance enforcement, backup/restore, RADIUS, SSO) can make sweeping changes across your network. They're fully functional but labeled "dangerous" in the UI so you know to test carefully before relying on them in production.</div>
+            <div id="faq-safety-panel" x-show="openFaq === 2" x-collapse class="pb-4 text-sm text-slate-500">Config push, config templates, config compliance, backup and restore, RADIUS, and SSO can change network settings. The UI marks them "Dangerous". Review each change before you apply it.</div>
           </div>
           <div>
             <button aria-expanded="false" :aria-expanded="openFaq === 3" aria-controls="faq-pricing-panel" @click="openFaq = openFaq === 3 ? null : 3" class="w-full flex items-center justify-between py-4 text-left">
@@ -837,7 +826,20 @@ curl -sSL https://raw.githubusercontent.com/sixtyops/manager/main/scripts/instal
   | sudo bash
 
 <span class="text-slate-500"># Then open https://&lt;your-server&gt; and create your admin password.
-# Need another distro or a pinned-image/manual setup? Use the deployment docs below.</span></pre>
+# Need another distro or a manual setup? Use the deployment docs below.</span></pre>
+      </div>
+
+      <div class="bg-slate-900 rounded-lg p-5 sm:p-6 mb-6 overflow-x-auto">
+        <div class="mb-3 text-xs font-mono text-slate-400">
+          Container image: <span class="text-slate-100">ghcr.io/sixtyops/manager:v1.4.1-dev7</span>
+        </div>
+<pre class="font-mono text-sm leading-relaxed text-slate-100 whitespace-pre"><span class="text-slate-500"># Image-based install: you pull new tags and bring your own TLS proxy</span>
+docker run -d --name sixtyops --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v sixtyops-data:/app/data \
+  -v sixtyops-firmware:/app/firmware \
+  -v sixtyops-backups:/app/backups \
+  ghcr.io/sixtyops/manager:v1.4.1-dev7</pre>
       </div>
 
       <p class="text-sm text-slate-500 text-center">

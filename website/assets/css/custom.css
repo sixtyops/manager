@@ -2,6 +2,22 @@
 
 html { scroll-behavior: smooth; }
 
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid #0D9488;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  [data-animate] { opacity: 1 !important; }
+}
+
 /* Fade-in animation */
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(16px); }
@@ -209,18 +225,6 @@ html { scroll-behavior: smooth; }
   color: #374151;
   display: inline-block;
 }
-.mock-input {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  padding: 5px 10px;
-  font-size: 11px;
-  color: #374151;
-  width: 48px;
-  text-align: center;
-  display: inline-block;
-}
-
 .mock-toggle {
   width: 32px;
   height: 18px;
@@ -263,40 +267,28 @@ html { scroll-behavior: smooth; }
   font-size: 10px;
 }
 
-/* ─── Rollout phase indicator ─── */
-.phase-track {
+/* ─── Serial queue window strip ─── */
+.ramp-track {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-}
-.phase-dot {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  gap: 6px;
   font-size: 10px;
-  font-weight: 700;
-  flex-shrink: 0;
-  z-index: 1;
 }
-.phase-dot.completed { background: #10b981; color: white; }
-.phase-dot.active {
-  background: #0D9488;
-  color: white;
-  box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.2);
-  animation: phasePulse 2s infinite;
+.ramp-label { font-weight: 600; color: #374151; margin-right: 2px; }
+.ramp-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #4b5563;
+  white-space: nowrap;
 }
-.phase-dot.pending { background: #e5e7eb; color: #9ca3af; }
-.phase-line { height: 2px; flex: 1; min-width: 12px; }
-.phase-line.completed { background: #10b981; }
-.phase-line.pending { background: #e5e7eb; }
-
-@keyframes phasePulse {
-  0%, 100% { box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.2); }
-  50% { box-shadow: 0 0 0 8px rgba(13, 148, 136, 0.1); }
-}
+.ramp-step.done { background: #d1fae5; border-color: #a7f3d0; color: #065f46; }
+.ramp-step.next { background: #CCFBF1; border-color: #5eead4; color: #0F766E; font-weight: 600; }
 
 /* ─── Config backup mockup ─── */
 .backup-row {
