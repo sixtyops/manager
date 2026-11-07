@@ -16,6 +16,7 @@ FIRMWARE = "tna-30x-2.0.0-r200.bin"
 def _configure_preview(mock_db, *, schedule_enabled="true", safety_ready="true"):
     db.set_settings({
         "schedule_enabled": schedule_enabled,
+        "weather_check_enabled": "false",
         "scheduled_rollout_safety_ready": safety_ready,
         "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
         "schedule_start_hour": "3",
@@ -198,6 +199,7 @@ def test_preview_reports_cooldown_as_hold_for_behind_device(viewer_client, mock_
 
 def _fixed_preview(mock_db, *, now=None):
     _configure_preview(mock_db)
+    db.set_setting("firmware_canary_hold_days", "0")
     fixed_now = now or datetime(2026, 11, 2, 10, 0, tzinfo=timezone.utc)
     scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
     return scheduler, db.get_all_settings(), fixed_now
@@ -351,7 +353,7 @@ def test_preview_includes_unsupported_model_as_held_when_target_selected(mock_db
 
     supported = next(item for item in preview["devices"] if item["ip"] == "192.0.2.10")
     assert supported["held"] is True
-    assert "unsupported" in supported["hold_reason"].lower()
+    assert "unknown model" in supported["hold_reason"].lower()
 
 
 def test_preview_keeps_unreadable_selected_target_and_holds_update_queue(mock_db):
@@ -469,7 +471,7 @@ def test_preview_holds_all_update_rows_when_duplicate_address_breaks_queue(mock_
     assert "duplicate management address" in next(
         item["hold_reason"] for item in update_rows if item["ip"] == "192.0.2.10 "
     )
-    assert "Scheduled queue held" in next(
+    assert "Pending queue held" in next(
         item["hold_reason"] for item in update_rows if item["ip"] == "192.0.2.20"
     )
 
@@ -500,3 +502,150 @@ def test_preview_ignores_missing_hash_for_already_held_family(mock_db, monkeypat
     held = next(item for item in preview["devices"] if item["ip"] == "192.0.2.20")
     assert held["held"] is True
     assert "Firmware hold" in held["hold_reason"]
+
+
+async def _run_preview_scheduler(scheduler, now, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    monkeypatch.setattr(
+        app_module.services, "validate_time_sources",
+        AsyncMock(return_value=(True, now.astimezone(ZoneInfo("America/Chicago")))),
+    )
+    await scheduler._check_and_run_locked()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["no_primary", "recovery", "missing_recovery", "weather"])
+async def test_preview_matches_scheduler_global_admission(mock_db, monkeypatch, scenario):
+    _configure_preview(mock_db)
+    db.set_settings({"firmware_canary_hold_days": "0", "temperature_unit": "c"})
+    now = datetime(2026, 11, 2, 9, 5, tzinfo=timezone.utc)
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="job"))
+    if scenario == "no_primary":
+        firmware = "tna-303l-2.0.0-r200.bin"
+        db.set_settings({"selected_firmware_30x": "", "selected_firmware_303l": firmware})
+        db.register_firmware(firmware, sha256="b" * 64)
+        db.upsert_access_point(
+            "192.0.2.20", "operator", "test", enabled=True,
+            model="TNA-303L", firmware_version="1.0.0",
+        )
+    if scenario in ("recovery", "missing_recovery"):
+        if scenario == "recovery":
+            db.upsert_access_point(
+                "192.0.2.20", "operator", "test", enabled=True,
+                model="TNA-301", firmware_version="2.0.0.200",
+            )
+        stop = db.stop_firmware_window(
+            ("firmware", "2026-11-01"), "prior", "192.0.2.20", "scheduled_update", "failed",
+        )
+        db.resolve_firmware_window_stop(stop["id"], "operator", "reviewed")
+    if scenario == "weather":
+        db.set_setting("weather_check_enabled", "true")
+        monkeypatch.setattr(
+            app_module.services, "check_weather_ok",
+            AsyncMock(return_value=(False, {"temperature_c": -50})),
+        )
+        unchecked = scheduler.get_preview(db.get_all_settings(), now, "America/Chicago")
+        assert "unverified" in unchecked["hold_reason"]
+        assert all(row["held"] for row in unchecked["devices"] if row["needs_update"])
+
+    await _run_preview_scheduler(scheduler, now, monkeypatch)
+    before = _snapshot(mock_db)
+    preview = scheduler.get_preview(db.get_all_settings(), now, "America/Chicago")
+
+    assert scheduler.start_update_func.await_count == 0
+    assert preview["hold_reason"] == scheduler._block_reason
+    assert all(row["held"] for row in preview["devices"] if row["needs_update"])
+    if scenario == "recovery":
+        assert all(row["held"] for row in preview["devices"])
+    assert _snapshot(mock_db) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("excluded_data", [
+    {"model": "UNKNOWN"},
+    {"firmware_version": None},
+    {"ip": "192.0.2.10"},
+])
+async def test_preview_excluded_cpe_does_not_block_scheduler(mock_db, monkeypatch, excluded_data):
+    _configure_preview(mock_db)
+    db.set_setting("firmware_canary_hold_days", "0")
+    db.upsert_cpe("192.0.2.10", {
+        "ip": "192.0.2.11", "model": "TNA-301", "firmware_version": "1.0.0",
+        "auth_status": "failed", **excluded_data,
+    })
+    now = datetime(2026, 11, 2, 9, 5, tzinfo=timezone.utc)
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="job"))
+    preview = scheduler.get_preview(db.get_all_settings(), now, "America/Chicago")
+    await _run_preview_scheduler(scheduler, now, monkeypatch)
+
+    assert preview["hold_reason"] is None
+    assert len(preview["devices"]) == 2
+    eligible = [row for row in preview["devices"] if row["needs_update"] and not row["held"]]
+    actual = scheduler.start_update_func.await_args.kwargs["device_entries"]
+    assert [(row["ip"], row["role"]) for row in eligible] == [
+        (entry["ip"], entry["role"]) for entry in actual
+    ] == [("192.0.2.10", "ap")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hold_kind", ["firmware", "cooldown"])
+async def test_preview_projects_expiring_holds_to_window(mock_db, monkeypatch, hold_kind):
+    _configure_preview(mock_db)
+    now = datetime(2026, 11, 7, 15, tzinfo=timezone.utc)
+    db.set_settings({"schedule_days": "mon", "firmware_canary_hold_days": "0"})
+    if hold_kind == "firmware":
+        db.set_setting("firmware_canary_hold_days", "1")
+        with db.get_db() as conn:
+            conn.execute("UPDATE firmware_registry SET added_at = ?", (now.replace(tzinfo=None).isoformat(),))
+    else:
+        db.set_setting("firmware_update_cooldown_days", "1")
+        with db.get_db() as conn:
+            conn.execute("UPDATE access_points SET last_firmware_update = ?", (now.replace(tzinfo=None).isoformat(),))
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="job"))
+    settings = db.get_all_settings()
+    preview = scheduler.get_preview(settings, now, "America/Chicago")
+    projected = datetime.fromisoformat(preview["window_start"])
+
+    class WindowDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return projected.astimezone(tz) if tz else projected.astimezone(timezone.utc).replace(tzinfo=None)
+
+    monkeypatch.setattr("updater.database.datetime", WindowDateTime)
+    monkeypatch.setattr("updater.scheduler.datetime", WindowDateTime)
+    await _run_preview_scheduler(scheduler, projected, monkeypatch)
+
+    assert preview["hold_reason"] is None
+    assert preview["devices"][0]["held"] is False
+    assert scheduler.start_update_func.await_count == 1
+    assert scheduler.start_update_func.await_args.kwargs["device_entries"][0]["ip"] == preview["devices"][0]["ip"]
+
+
+@pytest.mark.asyncio
+async def test_preview_at_target_recovery_timing_matches_admission(mock_db, monkeypatch):
+    _configure_preview(mock_db)
+    db.set_setting("firmware_canary_hold_days", "0")
+    db.upsert_access_point(
+        "192.0.2.10", "operator", "test", enabled=True,
+        model="TNA-301", firmware_version="2.0.0.200",
+    )
+    stop = db.stop_firmware_window(
+        ("firmware", "2026-11-01"), "prior", "192.0.2.10", "scheduled_update", "failed",
+        expected_serial="TEST-SERIAL",
+    )
+    db.resolve_firmware_window_stop(stop["id"], "operator", "reviewed")
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="job"))
+    now = datetime(2026, 11, 2, 9, 5, tzinfo=timezone.utc)
+    preview = scheduler.get_preview(db.get_all_settings(), now, "America/Chicago")
+    await _run_preview_scheduler(scheduler, now, monkeypatch)
+
+    actual = scheduler.start_update_func.await_args.kwargs["device_entries"]
+    assert actual[0]["verify_recovery_if_current"] is True
+    assert preview["devices"][0]["needs_update"] is False
+    assert preview["devices"][0]["held"] is False
+    assert preview["ramp_limit_minutes"] == 30
+    with db.get_db() as conn:
+        timing = conn.execute("SELECT ordinal, cutoff_utc FROM firmware_window_timing WHERE family='tna-30x'").fetchone()
+    assert preview["family_timing"]["tna-30x"]["ramp_ordinal"] == timing["ordinal"]
+    assert preview["family_timing"]["tna-30x"]["cutoff_utc"] == timing["cutoff_utc"]
