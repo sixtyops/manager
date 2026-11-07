@@ -25,6 +25,7 @@ def test_schedule_safety_reason_is_visible_and_clears_after_readiness(state):
     script = r'''
 const assert = require('node:assert/strict'), vm = require('node:vm');
 const [source, state, reason] = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const toggleStates = [];
 const elements = Object.fromEntries(['barAutoToggle', 'barStateBadge', 'barBlockReason',
     'barDeviceCountSection', 'barRolloutSection'].map(id => [id, {
         textContent: '', title: '', innerHTML: '', classList: {add(){}}, hidden: false
@@ -35,6 +36,7 @@ const context = {
     lastAutoState: 'disabled', setToggleActive() {},
     setHidden(element, hidden) {if (element) element.hidden = hidden;},
     updateBarDeviceCount() {}, renderQueueStatus() {},
+    renderScheduledUpdatesToggle(on) {toggleStates.push(on);},
 };
 vm.createContext(context);
 vm.runInContext(source, context);
@@ -46,6 +48,7 @@ assert.ok(elements.barStateBadge.innerHTML.includes(state === 'disabled' ? 'Off'
 context.updateSchedulerUI({state: 'idle', safety_block_reason: null});
 assert.equal(elements.barBlockReason.textContent.includes(reason), false);
 assert.equal(elements.barBlockReason.title.includes(reason), false);
+assert.deepEqual(toggleStates, [false, true]);
 '''
     result = subprocess.run(
         [node, "-e", script], input=json.dumps([source.group(), state, SCHEDULED_ROLLOUT_SAFETY_REASON]),

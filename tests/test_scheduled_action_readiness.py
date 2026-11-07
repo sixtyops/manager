@@ -9,6 +9,7 @@ import pytest
 
 from updater import app as app_module
 from updater import database as db
+from updater import rollout_gate
 from updater.vendors.tachyon import TachyonDriver
 from updater.vendors.tachyon.client import SmokeTestResult, UpdateResult
 from tests.test_strict_smoke_canary import _make_job
@@ -171,7 +172,7 @@ async def test_runtime_guard_rechecks_after_time_validation(runtime_mocks, monke
     monkeypatch.setattr(app_module.services, "validate_time_sources", validate)
     allowed, reason = await app_module._scheduled_job_guard(scheduled_job())
     assert not allowed
-    assert "safety qualification" in reason
+    assert reason == rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON
 
 
 @pytest.mark.asyncio

@@ -3034,6 +3034,11 @@
                                 <option value="22">10 PM</option><option value="23">11 PM</option>
                             </select></div>
                         </div>
+                        <div class="toggle-sm-row" style="margin-top:8px;">
+                            <button class="toggle-sm" id="drawerScheduledUpdatesToggle" type="button" aria-label="Scheduled updates for this network" aria-pressed="false" aria-describedby="drawerScheduledUpdatesState" onclick="toggleScheduledUpdates()" data-min-role-disable="admin" title="Only an admin can change this."></button>
+                            <span class="toggle-sm-label">Scheduled updates</span>
+                            <span class="u-text-xxs-dim" id="drawerScheduledUpdatesState">Off until an admin turns them on</span>
+                        </div>
                     </div>
 
                     <div class="drawer-col">
@@ -3898,11 +3903,11 @@
     </div>
 
     <div class="backup-overlay" id="confirmOverlay" onclick="if(event.target===this)closeConfirmDialog(false)">
-        <div class="backup-modal confirm-modal">
+        <div class="backup-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
             <h3 id="confirmTitle">Confirm Action</h3>
             <p class="confirm-message" id="confirmMessage"></p>
             <div class="confirm-actions">
-                <button class="btn btn-sm btn-ghost" type="button" onclick="closeConfirmDialog(false)">Cancel</button>
+                <button class="btn btn-sm btn-ghost" type="button" id="confirmCancelBtn" onclick="closeConfirmDialog(false)">Cancel</button>
                 <button class="btn btn-sm btn-danger" type="button" id="confirmAcceptBtn" onclick="closeConfirmDialog(true)">Confirm</button>
             </div>
         </div>
@@ -4040,7 +4045,8 @@
                     inputs.forEach(lock);
                 } else {
                     container.classList.remove('viewer-locked-tree');
-                    inputs.forEach(unlock);
+                    // A control with its own minimum role keeps the lock set above.
+                    inputs.forEach(el => { if (!el.dataset.minRoleDisable) unlock(el); });
                 }
             });
         }
@@ -4059,6 +4065,7 @@
         let licenseState = { tier: 'pro', status: 'active', features: {}, is_pro: true, should_nag: false, feature_info: {} };
         let _confirmResolve = null;
         let _confirmKeyHandler = null;
+        let _confirmReturnFocus = null;
 
         function showToast(message, type = 'info', timeoutMs = 3600) {
             const container = document.getElementById('toastContainer');
@@ -4151,6 +4158,8 @@
             acceptBtn.classList.toggle('btn-danger', !!options.danger);
             acceptBtn.classList.toggle('btn-primary', !options.danger);
             overlay.classList.add('open');
+            _confirmReturnFocus = document.activeElement;
+            document.getElementById('confirmCancelBtn')?.focus();
 
             return new Promise(resolve => {
                 _confirmResolve = resolve;
@@ -4164,6 +4173,8 @@
         function closeConfirmDialog(result) {
             const overlay = document.getElementById('confirmOverlay');
             if (overlay) overlay.classList.remove('open');
+            if (_confirmReturnFocus && _confirmReturnFocus.focus) _confirmReturnFocus.focus();
+            _confirmReturnFocus = null;
             if (_confirmKeyHandler) {
                 document.removeEventListener('keydown', _confirmKeyHandler);
                 _confirmKeyHandler = null;
@@ -8895,6 +8906,7 @@
             badge.className = 'status-badge status-bar-badge';
             reason.textContent = status.safety_block_reason || '';
             reason.title = status.safety_block_reason || '';
+            renderScheduledUpdatesToggle(!status.safety_block_reason);
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
@@ -9041,6 +9053,112 @@
             // Skip the reason when the Auto-Update section already shows it.
             const barReason = document.getElementById('barBlockReason').textContent;
             reasonEl.textContent = queue.pause_reason && queue.pause_reason !== barReason ? queue.pause_reason : '';
+        }
+
+        function renderScheduledUpdatesToggle(on) {
+            setToggleActive('drawerScheduledUpdatesToggle', on);
+            const stateEl = document.getElementById('drawerScheduledUpdatesState');
+            if (stateEl) stateEl.textContent = on ? 'On' : 'Off until an admin turns them on';
+        }
+
+        function formatHour(hour) {
+            return `${hour % 12 || 12} ${hour < 12 ? 'AM' : 'PM'}`;
+        }
+
+        // Match the scheduler: use the network time zone, and count today's
+        // window until its end hour.
+        function nextWindowText(settings, timeZone) {
+            const days = String(settings.schedule_days || '').split(',').map(d => d.trim().toLowerCase().slice(0, 3));
+            const start = parseInt(settings.schedule_start_hour, 10);
+            const end = parseInt(settings.schedule_end_hour, 10);
+            if (!days.some(Boolean) || Number.isNaN(start) || Number.isNaN(end)) return 'none (no maintenance days are set)';
+            const hours = `${formatHour(start)} to ${formatHour(end)}`;
+            const now = Date.now();
+            for (let offset = 0; offset < 8; offset++) {
+                const when = new Date(now + offset * 86400000);
+                const weekday = when.toLocaleDateString('en-US', { timeZone, weekday: 'short' }).toLowerCase();
+                if (!days.includes(weekday)) continue;
+                if (offset === 0) {
+                    const hour = parseInt(when.toLocaleTimeString('en-US', { timeZone, hour: 'numeric', hourCycle: 'h23' }), 10);
+                    if (hour >= end) continue;
+                    if (hour >= start) return `now, until ${formatHour(end)} (${timeZone})`;
+                    return `today, ${hours} (${timeZone})`;
+                }
+                const day = offset === 1 ? 'tomorrow'
+                    : when.toLocaleDateString('en-US', { timeZone, weekday: 'short', month: 'short', day: 'numeric' });
+                return `${day}, ${hours} (${timeZone})`;
+            }
+            return 'none';
+        }
+
+        function scheduleScopeText(settings) {
+            const scope = settings.schedule_scope || 'all';
+            const ids = String(settings.schedule_scope_data || '').split(',').map(v => v.trim()).filter(Boolean);
+            const list = (names) => names.length > 10
+                ? `${names.slice(0, 10).join(', ')}, and ${names.length - 10} more`
+                : names.join(', ');
+            if (scope === 'all') return 'all sites and devices';
+            if (scope === 'sites') {
+                if (!ids.length) return 'no sites (the site list is empty)';
+                const names = ids.map(id => _siteIndex.get(Number(id))?.name || `site ${id}`);
+                return `${ids.length} ${ids.length === 1 ? 'site' : 'sites'}: ${list(names)}`;
+            }
+            if (scope === 'aps') {
+                if (!ids.length) return 'no APs (the AP list is empty)';
+                const names = ids.map(ip => {
+                    const name = _apIndex.get(ip)?.ap?.system_name;
+                    return name ? `${name} (${ip})` : ip;
+                });
+                return `${ids.length} ${ids.length === 1 ? 'AP' : 'APs'} and their CPEs: ${list(names)}`;
+            }
+            return `unknown scope "${scope}". Scheduled updates select no devices`;
+        }
+
+        async function toggleScheduledUpdates() {
+            if (currentUserRole !== 'admin') return;
+            const toggle = document.getElementById('drawerScheduledUpdatesToggle');
+            const turnOn = !toggle.classList.contains('active');
+            if (turnOn) {
+                let settings;
+                try {
+                    await ensureDrawerTopologyLoaded();
+                    const resp = await fetch('/api/settings');
+                    if (!resp.ok) throw new Error();
+                    settings = (await resp.json()).settings;
+                } catch (e) {
+                    showToast('Could not read the schedule. Try again.', 'error');
+                    return;
+                }
+                const lines = [
+                    'Manager will update devices that need the selected firmware in each maintenance window, one device at a time.',
+                    '',
+                    `Scope: ${scheduleScopeText(settings)}`,
+                    `Next window: ${nextWindowText(settings, clockTimezone)}`,
+                ];
+                if (settings.schedule_enabled !== 'true') {
+                    lines.push('', 'Auto-Update is off. Scheduled updates start only when Auto-Update is on.');
+                }
+                const ok = await showConfirmDialog(lines.join('\n'), {
+                    title: 'Turn on scheduled updates?',
+                    confirmText: 'Turn on scheduled updates',
+                });
+                if (!ok) return;
+            }
+            try {
+                const resp = await fetch('/api/settings/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scheduled_rollout_safety_ready: turnOn ? 'true' : 'false' }),
+                });
+                if (!resp.ok) {
+                    showToast(await readSaveError(resp, 'Could not change scheduled updates'), 'error');
+                    return;
+                }
+                renderScheduledUpdatesToggle(turnOn);
+                showToast(turnOn ? 'Scheduled updates are on.' : 'Scheduled updates are off. Manual updates still work.', 'success');
+            } catch (e) {
+                showToast('Could not change scheduled updates. Check the connection and try again.', 'error');
+            }
         }
 
         async function toggleAutoSchedule(event) {

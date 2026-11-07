@@ -85,6 +85,17 @@ def test_admin_records_readiness_and_schedule_toggle_preserves_it(authed_client,
     assert db.get_setting("scheduled_rollout_safety_ready") == "true"
 
 
+def test_scheduled_updates_change_writes_audit_entry(authed_client, mock_db):
+    db.set_settings({"schedule_scope": "sites", "schedule_scope_data": "1,2"})
+    assert authed_client.post("/api/settings/save", json={"scheduled_rollout_safety_ready": "true"}).status_code == 200
+    assert authed_client.post("/api/settings/save", json={"scheduled_rollout_safety_ready": "false"}).status_code == 200
+    entries = db.get_audit_log(action="settings.scheduled_updates")
+    assert sorted(e["details"] for e in entries) == [
+        "Turned off scheduled updates. Scope: sites (1,2).",
+        "Turned on scheduled updates. Scope: sites (1,2).",
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("boundary", ["time", "weather", "broadcast"])
 async def test_revocation_during_tick_holds_new_admission(

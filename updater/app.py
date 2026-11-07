@@ -2484,6 +2484,14 @@ async def save_settings_and_reevaluate(request: Request, session: dict = Depends
     audit_keys = sorted(set(filtered) | set(fw_keys))
     db.log_audit(session["username"], "settings.update", "settings", None,
                  f"Updated keys: {', '.join(audit_keys)}", _client_ip(request))
+    if "scheduled_rollout_safety_ready" in filtered:
+        turned = "on" if filtered["scheduled_rollout_safety_ready"] == "true" else "off"
+        scope = db.get_setting("schedule_scope", "all") or "all"
+        scope_data = db.get_setting("schedule_scope_data", "") if scope != "all" else ""
+        db.log_audit(session["username"], "settings.scheduled_updates", "settings", None,
+                     f"Turned {turned} scheduled updates. Scope: {scope}"
+                     + (f" ({scope_data})" if scope_data else "") + ".",
+                     _client_ip(request))
 
     await _refresh_firmware_targets()
 
