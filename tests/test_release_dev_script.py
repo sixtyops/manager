@@ -16,16 +16,38 @@ TAG = "v1.4.1-dev6"
 def release_run(tmp_path: Path, *, main_sha: str = SHA, ci: bool = True,
                 version: str = "1.4.1-dev6", tag_exists: bool = False,
                 verify: bool = True, yes: bool = True,
-                ls_remote_error: bool = False):
+                ls_remote_error: bool = False, docs_head: bool = False,
+                mixed_head: bool = False, rename_head: bool = False,
+                diff_error: bool = False):
     """Run the script with deterministic git, gh, and gpg stubs."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "commands.log"
     git = r'''#!/usr/bin/env bash
+[[ "${GIT_PAGER-unset}" == cat ]] || exit 91
 printf 'git %s\n' "$*" >> "$COMMAND_LOG"
 case "$1" in
   fetch) exit 0 ;;
-  rev-parse) printf '%s\n' "$MAIN_SHA" ;;
+  rev-parse)
+    if [[ "$3" == *'^1' ]]; then
+      [[ "$3" == "$PARENT_SHA^1" ]] || printf '%s\n' "$PARENT_SHA"
+    else
+      printf '%s\n' "$MAIN_SHA"
+    fi
+    ;;
+  --no-pager)
+    [[ "$2" == diff ]] || exit 0
+    if [[ "$DIFF_ERROR" == true ]]; then
+      printf 'simulated diff error\n' >&2
+      exit 128
+    elif [[ "$RENAME_HEAD" == true ]]; then
+      printf 'src/change.py\0docs/change.py\0'
+    elif [[ "$MIXED_HEAD" == true ]]; then
+      printf 'src/change.py\0'
+    else
+      printf 'docs/change.md\0'
+    fi
+    ;;
   show-ref) [[ "$TAG_EXISTS" == true ]] ;;
   ls-remote)
     if [[ "$LS_REMOTE_ERROR" == true ]]; then exit 128; fi
@@ -60,7 +82,11 @@ case "$1" in
   run)
     if [[ "$2" == list ]]; then
       if [[ "$*" == *'--workflow CI '* ]]; then
-        [[ "$CI_PASSED" == true ]] && printf '123\n'
+        if [[ "$*" == *"--commit $MAIN_SHA"* ]]; then
+          [[ "$DOCS_HEAD" == true ]] || [[ "$CI_PASSED" != true ]] || printf 'completed\tsuccess\n'
+        else
+          [[ "$CI_PASSED" != true ]] || printf 'completed\tsuccess\n'
+        fi
       elif [[ "$*" == *"headBranch == \"$RELEASE_TAG\""* && "$*" == *"fromdateiso8601"* ]]; then
         printf '456\n'
       else
@@ -85,6 +111,11 @@ exit 0
         "CI_PASSED": str(ci).lower(),
         "VERSION": version,
         "RELEASE_TAG": f"v{version}",
+        "DOCS_HEAD": str(docs_head).lower(),
+        "MIXED_HEAD": str(mixed_head).lower(),
+        "RENAME_HEAD": str(rename_head).lower(),
+        "DIFF_ERROR": str(diff_error).lower(),
+        "PARENT_SHA": "b" * 40,
         "TAG_EXISTS": str(tag_exists).lower(),
         "LS_REMOTE_ERROR": str(ls_remote_error).lower(),
         "VERIFY_TAG": str(verify).lower(),
@@ -154,3 +185,44 @@ def test_release_run_for_another_tag_is_ignored(tmp_path):
     assert "fromdateiso8601" in release_lookup
     assert "gh run watch --exit-status 456" in commands
     assert "gh run watch --exit-status 455" not in commands
+
+
+def test_docs_only_head_uses_nearest_completed_ci(tmp_path):
+    result, commands = release_run(tmp_path, docs_head=True)
+
+    assert result.returncode == 0, result.stderr
+    assert f"Trusted CI from commit: {'b' * 40}" in result.stdout
+    assert any("diff --name-only --no-renames -z" in line for line in commands)
+
+
+def test_mixed_head_without_ci_is_refused(tmp_path):
+    result, commands = release_run(tmp_path, docs_head=True, mixed_head=True)
+
+    assert result.returncode == 1
+    assert "changes non-ignored path: src/change.py" in result.stderr
+    assert not any(" tag -s " in line for line in commands)
+
+
+def test_rename_out_of_docs_without_ci_is_refused(tmp_path):
+    result, commands = release_run(tmp_path, docs_head=True, rename_head=True)
+
+    assert result.returncode == 1
+    assert "changes non-ignored path: src/change.py" in result.stderr
+    assert "Trusted CI from commit" not in result.stdout
+    assert not any(" tag -s " in line for line in commands)
+
+
+def test_diff_error_without_ci_is_refused(tmp_path):
+    result, commands = release_run(tmp_path, docs_head=True, diff_error=True)
+
+    assert result.returncode == 1
+    assert "Could not check changed paths" in result.stderr
+    assert "Trusted CI from commit" not in result.stdout
+    assert not any(" tag -s " in line for line in commands)
+
+
+def test_git_output_commands_disable_pagers(tmp_path):
+    result, commands = release_run(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert any("git --no-pager log" in line for line in commands)
