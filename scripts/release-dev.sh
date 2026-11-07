@@ -55,8 +55,14 @@ while [[ -n "$ci_sha" ]]; do
   [[ -n "$parent" ]] || fail "CI has not passed on this commit or any first-parent ancestor."
 
   # Read paths-ignore from CI so policy changes do not silently diverge here.
-  while IFS= read -r changed_path; do
-    [[ -n "$changed_path" ]] || continue
+  changed_paths_file="$(mktemp)" || fail "Could not create a temporary file for changed paths."
+  if ! git --no-pager diff --name-only --no-renames -z \
+    "$ci_sha^1" "$ci_sha" > "$changed_paths_file"; then
+    rm -f "$changed_paths_file"
+    fail "Could not check changed paths for commit $ci_sha."
+  fi
+  non_ignored_path=""
+  while IFS= read -r -d '' changed_path; do
     ignored=false
     while IFS= read -r ignore_pattern; do
       case "$ignore_pattern" in
@@ -65,8 +71,14 @@ while [[ -n "$ci_sha" ]]; do
         *) [[ "$changed_path" == "$ignore_pattern" ]] && ignored=true ;;
       esac
     done <<< "$ignore_patterns"
-    [[ "$ignored" == true ]] || fail "CI is missing for $sha and commit $ci_sha..$parent changes non-ignored path: $changed_path."
-  done < <(git diff --name-only "$ci_sha^1" "$ci_sha")
+    if [[ "$ignored" != true ]]; then
+      non_ignored_path="$changed_path"
+      break
+    fi
+  done < "$changed_paths_file"
+  rm -f "$changed_paths_file"
+  [[ -z "$non_ignored_path" ]] || \
+    fail "CI is missing for $sha and commit $ci_sha..$parent changes non-ignored path: $non_ignored_path."
   ci_sha="$parent"
 done
 
