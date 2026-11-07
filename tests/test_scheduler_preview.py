@@ -649,3 +649,50 @@ async def test_preview_at_target_recovery_timing_matches_admission(mock_db, monk
         timing = conn.execute("SELECT ordinal, cutoff_utc FROM firmware_window_timing WHERE family='tna-30x'").fetchone()
     assert preview["family_timing"]["tna-30x"]["ramp_ordinal"] == timing["ordinal"]
     assert preview["family_timing"]["tna-30x"]["cutoff_utc"] == timing["cutoff_utc"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hold_kind", ["cooldown", "firmware"])
+@pytest.mark.parametrize("age_hours", [23, 25])
+async def test_preview_local_timestamp_boundary_matches_scheduler(
+    mock_db, monkeypatch, hold_kind, age_hours,
+):
+    from datetime import timedelta
+
+    _configure_preview(mock_db)
+    now = datetime.now(timezone.utc)
+    saved_local = (datetime.now() - timedelta(hours=age_hours)).isoformat()
+    db.set_settings({
+        "firmware_canary_hold_days": "0", "firmware_update_cooldown_days": "0",
+        "schedule_start_hour": str(now.hour),
+        "schedule_end_hour": str((now.hour + 3) % 24), "timezone": "UTC",
+        "firmware_window_ramp_minutes": "[120, 120]",
+    })
+    if hold_kind == "cooldown":
+        db.set_setting("firmware_update_cooldown_days", "1")
+        with db.get_db() as conn:
+            conn.execute("UPDATE devices SET last_firmware_update = ?", (saved_local,))
+    else:
+        db.set_setting("firmware_canary_hold_days", "1")
+        with db.get_db() as conn:
+            conn.execute("UPDATE firmware_registry SET added_at = ?", (saved_local,))
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="job"))
+    settings = db.get_all_settings()
+    before = _snapshot(mock_db)
+    preview = scheduler.get_preview(settings, now, "UTC")
+    assert _snapshot(mock_db) == before
+    actual, state, reason = scheduler._queue_admission_decision(
+        settings, False, None, ("firmware", now.date().isoformat()),
+    )
+    monkeypatch.setattr(
+        app_module.services, "validate_time_sources", AsyncMock(return_value=(True, now)),
+    )
+    await scheduler._check_and_run_locked()
+
+    expected_held = age_hours < 24
+    assert preview["devices"][0]["held"] == expected_held
+    assert bool(actual) == (not expected_held)
+    assert scheduler.start_update_func.await_count == int(not expected_held)
+    if expected_held:
+        assert scheduler._state == state
+        assert scheduler._block_reason == reason

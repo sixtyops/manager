@@ -243,18 +243,25 @@ def _device_needs_update(
     return classify_device_version(current_version, target_version, allow_downgrade).needs_update
 
 
+def _stored_timestamp_clock(value: str, evaluation_time: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    """Evaluate naive stored timestamps in host-local time and aware ones in their zone."""
+    stored = datetime.fromisoformat(value)
+    if evaluation_time is None:
+        now = datetime.now(stored.tzinfo) if stored.tzinfo else datetime.now()
+    elif stored.tzinfo is None:
+        now = evaluation_time.astimezone().replace(tzinfo=None)
+    else:
+        now = evaluation_time.astimezone(stored.tzinfo)
+    return stored, now
+
+
 def _device_cooldown_reason(device: dict, cooldown_days: int, evaluation_time: Optional[datetime] = None) -> Optional[str]:
     """Return the queue hold reason when an otherwise-behind device is cooling down."""
     last_update_iso = device.get("last_firmware_update")
     if cooldown_days <= 0 or not last_update_iso:
         return None
     try:
-        last_update = datetime.fromisoformat(last_update_iso)
-        now = evaluation_time or (datetime.now(last_update.tzinfo) if last_update.tzinfo else datetime.now())
-        if evaluation_time is not None:
-            if last_update.tzinfo is None:
-                last_update = last_update.replace(tzinfo=timezone.utc)
-            now = evaluation_time.astimezone(timezone.utc)
+        last_update, now = _stored_timestamp_clock(last_update_iso, evaluation_time)
         if now - last_update < timedelta(days=cooldown_days):
             return f"Device is in the {cooldown_days}-day firmware update cooldown"
     except (ValueError, TypeError):
@@ -985,11 +992,9 @@ class AutoUpdateScheduler:
                 continue
             info = db.get_firmware_hold_info(fname, hold_days)
             cleared_by_time = bool(info.get("cleared", True))
-            if evaluation_time is not None and info.get("clears_at"):
-                clears_at = datetime.fromisoformat(info["clears_at"])
-                if clears_at.tzinfo is None:
-                    clears_at = clears_at.replace(tzinfo=timezone.utc)
-                cleared_by_time = evaluation_time >= clears_at
+            if info.get("clears_at"):
+                clears_at, hold_now = _stored_timestamp_clock(info["clears_at"], evaluation_time)
+                cleared_by_time = hold_now >= clears_at
             prover = confirmed_by.get(fam)
             is_held = (not cleared_by_time) and (prover is None)
             family_holds[fam] = {
