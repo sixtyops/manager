@@ -211,13 +211,13 @@ def _truncate_release_notes(notes: str, release_url: str, tag_name: str) -> str:
     content_limit = MAX_RELEASE_NOTES_LENGTH - len(suffix)
     cut_at = notes.rfind("\n", 0, content_limit + 1)
     if cut_at < 0:
-        # A release body without line breaks still must not end mid-word.
-        cut_at = max(
-            notes.rfind(" ", 0, content_limit + 1),
-            notes.rfind("\t", 0, content_limit + 1),
+        cut_at = next(
+            (index for index in range(content_limit - 1, -1, -1)
+             if notes[index].isspace()),
+            -1,
         )
     if cut_at < 0:
-        cut_at = content_limit
+        return full_release_link
 
     return notes[:cut_at].rstrip() + suffix
 

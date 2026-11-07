@@ -119,6 +119,13 @@ class TestVersionComparison:
         assert notes.endswith(f"[Full release notes]({release_url})")
 
     @pytest.mark.asyncio
+    async def test_long_release_notes_without_whitespace_show_only_full_link(self):
+        release_url = "https://github.com/sixtyops/manager/releases/tag/v1.0.1"
+        result = await self._check("1.0.0", "v1.0.1", body="x" * 2001)
+
+        assert result["release_notes"] == f"[Full release notes]({release_url})"
+
+    @pytest.mark.asyncio
     async def test_dev_channel_checks_all_releases(self, mock_db):
         """Dev channel should hit /releases (all) not /releases/latest."""
         from updater import database
