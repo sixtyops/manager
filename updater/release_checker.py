@@ -409,7 +409,14 @@ class ReleaseChecker:
             "appliance_version": get_appliance_version(),
             "update_path": update_path,
             "update_path_message": update_path_message,
+            "manual_update": None,
         }
+        # Manual installs show the host steps with the update, so the
+        # operator never presses a button that cannot apply it.
+        if update_path == UPDATE_PATH_MANUAL and status["update_available"]:
+            status["manual_update"] = _manual_update_instructions(
+                f"v{status['available_version']}", _get_repo_dir()
+            )
 
         # Check if available update requires a newer appliance
         if APPLIANCE_MODE and status["update_available"]:
@@ -460,7 +467,7 @@ def _classify_update_path() -> tuple[str, str]:
 
     return (
         UPDATE_PATH_MANUAL,
-        "This install uses manual app updates. Open the update steps and run them on the host.",
+        "This install uses manual app updates. Run the steps below on the host.",
     )
 
 
@@ -592,65 +599,84 @@ def _get_manual_source_host_dir(repo_dir: Optional[Path]) -> Optional[str]:
     return None
 
 
+DEPLOYMENT_DOC_URL = f"https://github.com/{GITHUB_REPO}/blob/main/docs/deployment.md"
+
+
 def _manual_update_instructions(target_tag: str, repo_dir: Optional[Path]) -> dict:
-    """Manual host commands for when in-app apply can't run, tailored to the
+    """Manual host steps for when in-app apply can't run, tailored to the
     deployment style.
 
-    Image-based installs (no git repo mounted — e.g. the website `docker run`
-    quickstart) update by pulling the new image and recreating the container;
-    git/source installs update with git + a compose build. Handing an image
-    install the git commands (the previous behaviour) is useless — there is no
-    source tree to check out.
+    Image-based installs (no git repo mounted, e.g. the website `docker run`
+    quickstart) update by pulling the new image and recreating the container.
+    Git/source installs update with git and a compose build.
+
+    `steps` is the ordered list the UI shows. Each step has `text` and
+    `commands`, one runnable command per entry. A step can instead offer
+    labeled `options` when the right command depends on how the host runs
+    Manager. `commands` repeats the step commands, without option commands,
+    for API clients that read a flat list.
     """
     if repo_dir is None:
         # Image-based deploy with no Docker socket: we can't inspect our own
         # container to know whether it's compose- or `docker run`-managed, so
-        # the only command we can guarantee is the pull. The recreate step is
-        # install-specific — present it as commented guidance so pasting the
-        # block only ever runs the (always-safe) pull, never a command that
-        # fails (compose with no compose file) or attaches no volumes (a bare
-        # `docker run`). Full steps live in docs/deployment.md.
+        # the recreate step offers both styles as labeled options. Only the
+        # pull goes into the flat `commands` list, so a client that runs that
+        # list never runs compose without a compose file or a bare
+        # `docker run` that attaches no volumes.
         image = f"{GHCR_IMAGE}:{target_tag}"
-        return {
-            "manual": True,
-            "message": (
-                "Image-based install — pull the new image, then recreate the "
-                "container with it (the recreate step depends on how you run it; "
-                "full procedure in docs/deployment.md):"
-            ),
-            "commands": [
-                f"docker pull {image}",
-                "# then recreate the container with the new image:",
-                "#   compose-managed:    docker compose up -d",
-                "#   plain `docker run`: remove the old container, then re-run your",
-                f"#   original `docker run` with {image} (same -v / -p / -e flags)",
-            ],
-        }
-    host_dir = _get_manual_source_host_dir(repo_dir)
-    if not host_dir:
-        return {
-            "manual": True,
-            "message": (
-                "Git repo mounted but the host deployment path could not be "
-                "detected. On the host, open your Manager deployment directory "
-                "(the folder with `.git` and `docker-compose.yml`), then run "
-                "these commands from there:"
-            ),
-            "commands": [
-                f"# git fetch origin tag {target_tag}",
-                f"# git checkout {target_tag}",
-                "# docker compose up -d --build",
-            ],
-        }
+        steps = [
+            {"text": "Pull the new image.", "commands": [f"docker pull {image}"]},
+            {
+                "text": "Start Manager with the new image. Use the option that matches your install.",
+                "commands": [],
+                "options": [
+                    {
+                        "label": "Docker Compose",
+                        "text": (
+                            f"In your compose file, set the image to {image}. "
+                            "Then run this command in the same folder."
+                        ),
+                        "commands": ["docker compose up -d"],
+                    },
+                    {
+                        "label": "docker run",
+                        "text": (
+                            "Stop the old container and keep it for rollback. Then run "
+                            f"your original docker run command with {image}. "
+                            "Use the same -v, -p, and -e flags."
+                        ),
+                        "commands": [],
+                    },
+                ],
+            },
+        ]
+        message = "This install runs the Manager Docker image. The app cannot update itself."
+        doc_url = f"{DEPLOYMENT_DOC_URL}#updating-an-image-based-install"
+    else:
+        message = "Manager cannot reach Docker on this host. The app cannot update itself."
+        host_dir = _get_manual_source_host_dir(repo_dir)
+        if host_dir:
+            open_step = {"text": "Open the Manager folder.", "commands": [f"cd {host_dir}"]}
+        else:
+            open_step = {
+                "text": "Open your Manager folder. It contains .git and docker-compose.yml.",
+                "commands": [],
+            }
+        steps = [
+            open_step,
+            {
+                "text": "Get the new version.",
+                "commands": [f"git fetch origin tag {target_tag}", f"git checkout {target_tag}"],
+            },
+            {"text": "Build and start Manager.", "commands": ["docker compose up -d --build"]},
+        ]
+        doc_url = DEPLOYMENT_DOC_URL
     return {
         "manual": True,
-        "message": "Git repo mounted but Docker socket unavailable — run on the host:",
-        "commands": [
-            f"cd {host_dir}",
-            f"git fetch origin tag {target_tag}",
-            f"git checkout {target_tag}",
-            "docker compose up -d --build",
-        ],
+        "message": message,
+        "steps": steps,
+        "doc_url": doc_url,
+        "commands": [cmd for step in steps for cmd in step["commands"]],
     }
 
 

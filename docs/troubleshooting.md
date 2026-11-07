@@ -189,11 +189,11 @@ Browsers warn about an expired certificate, or **Settings > HTTPS** shows
 
 ---
 
-## 5. Update button shows steps instead of updating
+## 5. Update panel shows steps instead of an Update Now button
 
 ### Symptom
-In **Settings → Updates**, the app shows update steps instead of restarting
-itself, or the update banner says this install uses manual app updates.
+In **Settings → Updates**, the update banner says this install uses manual app
+updates. It shows numbered host steps and no **Update Now** button.
 
 ### What it means
 This is expected when the manager is not running in the managed install shape.
@@ -205,8 +205,8 @@ Ubuntu.
 ### What to do
 - If you want one-click app updates, move to the managed install path from
   [docs/deployment.md](deployment.md): Debian 12 + `install.sh`.
-- If you prefer an image-based or custom install, use the manual commands
-  shown in the update banner. That path is supported; it just does not
+- If you prefer an image-based or custom install, run the steps shown in the
+  update banner on the host. That path is supported; it just does not
   self-apply from the UI.
 
 ---
