@@ -2204,6 +2204,11 @@
         }
 
         /* Pause reason gets its own row so queue facts stay scannable. */
+        /* Show the whole hold reason. It tells the operator what to do. */
+        #barBlockReason {
+            max-width: 560px;
+            white-space: normal;
+        }
         .status-bar-queue .status-bar-reason {
             flex-basis: 100%;
             max-width: none;
@@ -9708,7 +9713,8 @@
         document.addEventListener('click', function(e) {
             const drawer = document.getElementById('bottomDrawer');
             if (!drawer || !drawer.classList.contains('open')) return;
-            if (e.target.closest('.bottom-drawer')) return;
+            // A dialog opened from the drawer keeps the drawer open.
+            if (e.target.closest('.bottom-drawer, .backup-overlay')) return;
             drawer.classList.remove('open');
             requestAnimationFrame(() => {
                 setTimeout(() => {
