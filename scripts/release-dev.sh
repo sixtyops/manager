@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Keep all git output non-interactive, including commands that may use a pager.
+export GIT_PAGER=cat
+
 readonly RELEASE_KEY="E2C19E86B24A87283068AEFAF2D6F70883960DCE"
 readonly REPOSITORY="sixtyops/manager"
 
@@ -34,10 +37,38 @@ git fetch origin
 main_sha="$(git rev-parse --verify 'origin/main^{commit}')"
 [[ "$sha" == "$main_sha" ]] || fail "Commit is not the current origin/main head."
 
-ci_run="$(gh run list --repo "$REPOSITORY" --workflow CI --commit "$sha" \
-  --json databaseId,headSha,status,conclusion,createdAt \
-  --jq '[.[] | select(.headSha == "'"$sha"'")] | sort_by(.createdAt) | last | select(.status == "completed" and .conclusion == "success") | .databaseId')"
-[[ -n "$ci_run" ]] || fail "CI has not passed on this commit."
+ci_result=""
+ci_sha="$sha"
+ignore_patterns="$(awk 'BEGIN { found=0 } /^[[:space:]]+paths-ignore:/ && !found { found=1; next } found && /^[[:space:]]+- / { sub(/^[[:space:]]+- [\047\"]?/, ""); sub(/[\047\"].*$/, ""); print; next } found { exit }' .github/workflows/ci.yml)"
+[[ -n "$ignore_patterns" ]] || fail "Could not read paths-ignore from .github/workflows/ci.yml."
+while [[ -n "$ci_sha" ]]; do
+  ci_result="$(gh run list --repo "$REPOSITORY" --workflow CI --commit "$ci_sha" \
+    --json headSha,status,conclusion,createdAt \
+    --jq '[.[] | select(.headSha == "'"$ci_sha"'" and .status == "completed")] | sort_by(.createdAt) | last | if . then [.status,.conclusion] | @tsv else empty end')"
+  if [[ -n "$ci_result" ]]; then
+    [[ "$ci_result" == $'completed\tsuccess' ]] || \
+      fail "CI did not succeed on commit $ci_sha."
+    printf 'Trusted CI from commit: %s\n' "$ci_sha"
+    break
+  fi
+  parent="$(git rev-parse --verify "$ci_sha^1" 2>/dev/null || true)"
+  [[ -n "$parent" ]] || fail "CI has not passed on this commit or any first-parent ancestor."
+
+  # Read paths-ignore from CI so policy changes do not silently diverge here.
+  while IFS= read -r changed_path; do
+    [[ -n "$changed_path" ]] || continue
+    ignored=false
+    while IFS= read -r ignore_pattern; do
+      case "$ignore_pattern" in
+        */\*\*) [[ "$changed_path" == "${ignore_pattern%/**}"/* ]] && ignored=true ;;
+        \*.md) [[ "$changed_path" != */* && "$changed_path" == *.md ]] && ignored=true ;;
+        *) [[ "$changed_path" == "$ignore_pattern" ]] && ignored=true ;;
+      esac
+    done <<< "$ignore_patterns"
+    [[ "$ignored" == true ]] || fail "CI is missing for $sha and commit $ci_sha..$parent changes non-ignored path: $changed_path."
+  done < <(git diff --name-only "$ci_sha^1" "$ci_sha")
+  ci_sha="$parent"
+done
 
 version=""
 while IFS= read -r line; do
@@ -65,9 +96,9 @@ last_tag="$(git describe --tags --abbrev=0 "$sha" 2>/dev/null || true)"
 printf 'Version: %s\nCommit: %s\n' "$version" "$sha"
 printf 'Commits since %s:\n' "${last_tag:-the start of history}"
 if [[ -n "$last_tag" ]]; then
-  git log --oneline "${last_tag}..${sha}"
+  git --no-pager log --oneline "${last_tag}..${sha}"
 else
-  git log --oneline "$sha"
+  git --no-pager log --oneline "$sha"
 fi
 
 if [[ "$yes" != true ]]; then
