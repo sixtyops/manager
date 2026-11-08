@@ -591,7 +591,15 @@ class NetworkPoller:
             # columns (last_config_poll_at/status/error) populated by the
             # config poller every cycle.
             from updater import link_budget
-            held_cpe_ips = set()
+            peer_macs_by_ip = {}
+            for cpe in cpes:
+                mac = db._normalize_cpe_radio_mac(cpe.mac)
+                if cpe.ip and mac:
+                    peer_macs_by_ip.setdefault(cpe.ip, set()).add(mac)
+            held_cpe_ips = {peer_ip for peer_ip, macs in peer_macs_by_ip.items()
+                            if len(macs) > 1}
+            for _ in held_cpe_ips:
+                logger.warning("Held CPE observations: conflicting radio MACs in one AP poll")
             for cpe in cpes:
                 if cpe.ip in held_cpe_ips:
                     continue
