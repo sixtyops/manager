@@ -591,7 +591,10 @@ class NetworkPoller:
             # columns (last_config_poll_at/status/error) populated by the
             # config poller every cycle.
             from updater import link_budget
+            held_cpe_ips = set()
             for cpe in cpes:
+                if cpe.ip in held_cpe_ips:
+                    continue
                 # Derive how much rain this link can tolerate before signal
                 # drops below the MCS1 floor. Skipped (None) when any input
                 # is missing — frontend falls back to legacy dBm bucketing.
@@ -626,13 +629,15 @@ class NetworkPoller:
                     "antenna_kit": cpe.antenna_kit,
                     "max_rain_mm_hr": cpe.max_rain_mm_hr,
                 }
-                db.upsert_cpe(ip, cpe_data)
+                if db.upsert_cpe(ip, cpe_data) is False:
+                    held_cpe_ips.add(cpe.ip)
             db.prune_stale_cpes(ip, [cpe.ip for cpe in cpes if cpe.ip])
 
             logger.debug(f"Polled {ip}: {len(cpes)} CPEs")
 
             # Probe CPE auth and fetch bank info concurrently
-            cpe_ips_to_probe = [cpe.ip for cpe in cpes if cpe.ip]
+            cpe_ips_to_probe = [cpe.ip for cpe in cpes
+                                if cpe.ip and cpe.ip not in held_cpe_ips]
             if cpe_ips_to_probe:
                 cpe_sem = asyncio.Semaphore(3)
 

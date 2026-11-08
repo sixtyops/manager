@@ -1594,8 +1594,8 @@ def relocate_cpe_cache(old_ap_ip: str, old_ip: str, new_ap_ip: str, new_ip: str,
         return True
 
 
-def upsert_cpe(ap_ip: str, cpe_data: dict):
-    """Update or insert a CPE record."""
+def upsert_cpe(ap_ip: str, cpe_data: dict) -> bool:
+    """Update a CPE observation. Return False when an identity conflict holds it."""
     with get_db() as db:
         # Polls update only the observed (ap_ip, ip) key. A MAC match at
         # another location does not prove that the rows are one device.
@@ -1610,7 +1610,7 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
         stored_mac = _normalize_cpe_radio_mac(target["mac"]) if target else None
         if radio_mac and stored_mac and stored_mac != radio_mac:
             logger.warning("Held CPE cache row %s: conflicting radio MAC", target["id"])
-            return
+            return False
         # Missing peer evidence must not erase a previously observed valid MAC.
         mac = target["mac"] if stored_mac and not radio_mac else cpe_data.get("mac")
         db.execute("""
@@ -1655,6 +1655,7 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
             cpe_data.get("antenna_kit"), cpe_data.get("max_rain_mm_hr"),
             datetime.now().isoformat()
         ))
+        return True
 
 
 def update_ap_radio_params(ip: str, channel: Optional[int], bandwidth_mhz: Optional[int],
