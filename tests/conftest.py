@@ -94,6 +94,18 @@ def memory_db():
     conn.close()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def initialized_test_database(tmp_path_factory):
+    """Initialize the shared file DB explicitly after test modules import."""
+    from updater import database
+
+    original_path = database.DB_PATH
+    database.DB_PATH = tmp_path_factory.mktemp("manager-db") / "sixtyops.db"
+    database.init_db()
+    yield
+    database.DB_PATH = original_path
+
+
 @pytest.fixture
 def mock_db(memory_db):
     """Monkeypatch database.get_db to use in-memory DB."""

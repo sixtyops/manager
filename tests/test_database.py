@@ -430,10 +430,116 @@ class TestCPECache:
 
     def test_upsert_updates(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
+        original_id = db.get_cpes_for_ap("10.0.0.1")[0]["id"]
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "red"})
         cpes = db.get_cpes_for_ap("10.0.0.1")
         assert len(cpes) == 1
         assert cpes[0]["signal_health"] == "red"
+        assert cpes[0]["id"] == original_id
+
+    @pytest.mark.parametrize("missing_mac", [None, "", "invalid"])
+    def test_upsert_fills_missing_mac(self, mock_db, missing_mac):
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": missing_mac})
+        original_id = db.get_cpes_for_ap("10.0.0.1")[0]["id"]
+
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "updated",
+        })
+
+        rows = db.get_cpes_for_ap("10.0.0.1")
+        assert len(rows) == 1
+        assert rows[0]["id"] == original_id
+        assert rows[0]["mac"] == "00:11:22:33:44:55"
+        assert rows[0]["system_name"] == "updated"
+
+    @pytest.mark.parametrize("missing_mac", [None, "", "invalid"])
+    def test_upsert_keeps_known_mac_through_missing_observation(self, mock_db, missing_mac):
+        mac = "00:11:22:33:44:55"
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": mac})
+        original_id = db.get_cpes_for_ap("10.0.0.1")[0]["id"]
+
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": missing_mac, "system_name": "intermediate",
+        })
+        intermediate = db.get_cpes_for_ap("10.0.0.1")[0]
+        assert intermediate["mac"] == mac
+        assert intermediate["system_name"] == "intermediate"
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": mac, "system_name": "latest",
+        })
+
+        rows = db.get_cpes_for_ap("10.0.0.1")
+        assert len(rows) == 1
+        assert rows[0]["id"] == original_id
+        assert rows[0]["mac"] == mac
+        assert rows[0]["system_name"] == "latest"
+
+    def test_upsert_holds_conflicting_mac_and_continues_poll_writes(self, mock_db, caplog):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "original",
+        })
+        before = db.get_cpes_for_ap("10.0.0.1")[0]
+        peers = [
+            {"ip": "192.0.2.50", "mac": "00:11:22:33:44:66", "system_name": "conflict"},
+            {"ip": "192.0.2.51", "mac": "00:11:22:33:44:77", "system_name": "next peer"},
+        ]
+
+        with caplog.at_level("WARNING", logger=db.__name__):
+            for peer in peers:
+                db.upsert_cpe("10.0.0.1", peer)
+
+        rows = db.get_cpes_for_ap("10.0.0.1")
+        assert len(rows) == 2
+        assert rows[0] == before
+        assert rows[1]["system_name"] == "next peer"
+        assert f"Held CPE cache row {before['id']}: conflicting radio MAC" in caplog.text
+
+    def test_upsert_preserves_observations_when_parent_changes(self, mock_db):
+        mac = "00:11:22:33:44:55"
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": mac, "system_name": "old"})
+        db.upsert_cpe("10.0.0.2", {"ip": "192.0.2.50", "mac": mac, "system_name": "new"})
+
+        rows = mock_db.execute("SELECT ap_ip,ip,system_name FROM cpe_cache").fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "old"),
+            ("10.0.0.2", "192.0.2.50", "new"),
+        ]
+
+    def test_upsert_preserves_distinct_hardware_that_reuses_an_ip(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "first",
+        })
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:66", "system_name": "second",
+        })
+
+        rows = mock_db.execute(
+            "SELECT ap_ip,ip,mac,system_name FROM cpe_cache ORDER BY ap_ip"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "00:11:22:33:44:55", "first"),
+            ("10.0.0.2", "192.0.2.50", "00:11:22:33:44:66", "second"),
+        ]
+
+    def test_upsert_updates_only_its_key_with_matching_mac_elsewhere(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "old",
+        })
+        mock_db.execute(
+            "INSERT INTO cpe_cache(ap_ip,ip,mac,system_name) VALUES (?,?,?,?)",
+            ("10.0.0.2", "192.0.2.50", "00-11-22-33-44-55", "duplicate"),
+        )
+        mock_db.commit()
+
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.50", "mac": "001122334455", "system_name": "latest",
+        })
+
+        rows = mock_db.execute("SELECT ap_ip,ip,mac,system_name FROM cpe_cache").fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "00:11:22:33:44:55", "old"),
+            ("10.0.0.2", "192.0.2.50", "001122334455", "latest"),
+        ]
 
     def test_clear(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
@@ -580,7 +686,12 @@ class TestCPECache:
 
     def test_relocation_rejects_ambiguous_source_ownership(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.10", "mac": "00:11:22:33:44:55"})
-        db.upsert_cpe("10.0.0.9", {"ip": "192.0.2.10", "mac": "00:11:22:33:44:55"})
+        # Separate observations of one MAC do not prove device identity.
+        mock_db.execute(
+            "INSERT INTO cpe_cache(ap_ip,ip,mac) VALUES (?,?,?)",
+            ("10.0.0.9", "192.0.2.10", "00:11:22:33:44:55"),
+        )
+        mock_db.commit()
 
         with pytest.raises(ValueError, match="source ownership"):
             db.relocate_cpe_cache(

@@ -1,5 +1,7 @@
 """S4a migration tests for legacy CPE cache rows."""
 
+import importlib
+import os
 import sqlite3
 
 import pytest
@@ -57,7 +59,7 @@ def _legacy_database(path, cpes, devices=()):
 
 def _cpe(ap_ip, ip, name):
     return (
-        ap_ip, ip, f"AA:BB:CC:00:00:{name[-1:]}", name, "TNA-301", "1.2.3",
+        ap_ip, ip, f"AA:BB:CC:00:00:0{name[-1:]}", name, "TNA-301", "1.2.3",
         12.5, -51.0, -49.0, -47.0, 300.0, 250.0, 9, 86400, "green",
         "2026-10-28T10:00:00", "2026-10-27T10:00:00", "ok", None,
         -60.0, 22.0, 1, 2, "wide", 8.5, "ok", "1.2.3", "1.2.2", 1,
@@ -111,64 +113,61 @@ def test_startup_copies_every_legacy_cpe_and_repeats_without_duplicates(tmp_path
     assert _read(path, "SELECT COUNT(*) AS n FROM cpe_cache")[0]["n"] == 2
 
 
-def test_startup_keeps_newest_cpe_row_when_legacy_parents_collide(tmp_path, monkeypatch, caplog):
-    path = tmp_path / "duplicate-cpe.db"
-    monkeypatch.setattr(database, "DB_PATH", path)
+def test_import_does_not_reconcile_duplicate_legacy_cache_rows(tmp_path, monkeypatch):
+    path = tmp_path / "duplicate-cache.db"
     older = list(_cpe("192.0.2.1", "192.0.2.101", "CPE1"))
-    older[15] = "2026-10-27T10:00:00"
-    older[6] = 10.0
     newer = list(_cpe("192.0.2.2", "192.0.2.101", "CPE2"))
-    newer[15] = "2026-10-28T10:00:00"
-    newer[6] = 25.0
+    newer[15] = "2026-10-29T10:00:00"
     _legacy_database(path, [tuple(older), tuple(newer)],
                      [("192.0.2.1", "ap"), ("192.0.2.2", "ap")])
+    before = [tuple(row) for row in _read(path, "SELECT id,ap_ip,ip,last_updated FROM cpe_cache ORDER BY id")]
 
-    with caplog.at_level("WARNING", logger=database.__name__):
-        database.init_db()
-
-    cpe = _read(path, "SELECT id,ip,parent_device_id,system_name,last_seen FROM devices WHERE role='cpe'")
-    metrics = _read(path, "SELECT device_id,link_distance FROM link_metrics")
-    cache = _read(path, "SELECT id,ap_ip,ip FROM cpe_cache")
-    mapping = _read(path, "SELECT old_cpe_id,device_id FROM cpe_migration_map")
-    assert len(cpe) == len(metrics) == len(cache) == len(mapping) == 1
-    assert cpe[0]["parent_device_id"] == 2
-    assert cpe[0]["system_name"] == "CPE2"
-    assert cpe[0]["last_seen"] == "2026-10-28T10:00:00"
-    assert metrics[0]["device_id"] == cpe[0]["id"]
-    assert metrics[0]["link_distance"] == 25.0
-    assert tuple(cache[0]) == (2, "192.0.2.2", "192.0.2.101")
-    assert mapping[0]["old_cpe_id"] == 2
-    collision_logs = [record.getMessage() for record in caplog.records
-                      if "Resolved duplicate legacy CPE rows" in record.getMessage()]
-    assert len(collision_logs) == 1
-    assert "192.0.2.101" not in collision_logs[0]
-
-    database.init_db()
-    assert _read(path, "SELECT id,ip,parent_device_id,system_name,last_seen FROM devices WHERE role='cpe'") == cpe
-    assert len(_read(path, "SELECT * FROM link_metrics")) == 1
-    assert len(_read(path, "SELECT * FROM cpe_migration_map")) == 1
-    assert _read(path, "SELECT id,ap_ip,ip FROM cpe_cache") == cache
+    database_bytes = path.read_bytes()
+    old_db_path = database.DB_PATH
+    monkeypatch.setenv("SIXTYOPS_DB_PATH", str(path))
+    try:
+        importlib.reload(database)
+        after = [tuple(row) for row in _read(path, "SELECT id,ap_ip,ip,last_updated FROM cpe_cache ORDER BY id")]
+        assert after == before
+        assert path.read_bytes() == database_bytes
+    finally:
+        monkeypatch.delenv("SIXTYOPS_DB_PATH", raising=False)
+        importlib.reload(database)
+        database.DB_PATH = old_db_path
 
 
-def test_startup_duplicate_parent_tie_keeps_lower_legacy_id(tmp_path, monkeypatch):
-    path = tmp_path / "duplicate-cpe-tie.db"
+@pytest.mark.parametrize("same_ip", [True, False])
+@pytest.mark.parametrize("same_mac", [True, False])
+def test_startup_holds_conflicting_observations_without_merging(
+    tmp_path, monkeypatch, caplog, same_ip, same_mac,
+):
+    path = tmp_path / "conflicting-cpe.db"
     monkeypatch.setattr(database, "DB_PATH", path)
-    first = list(_cpe("192.0.2.1", "192.0.2.101", "CPE1"))
-    second = list(_cpe("192.0.2.2", "192.0.2.101", "CPE2"))
-    _legacy_database(path, [tuple(first), tuple(second)],
+    first = _cpe("192.0.2.1", "192.0.2.101", "CPE1")
+    second = list(_cpe("192.0.2.2", "192.0.2.101" if same_ip else "192.0.2.102", "CPE2"))
+    if same_mac:
+        second[2] = first[2].lower().replace(":", "-")
+    second[15] = "2026-10-29T10:00:00"
+    _legacy_database(path, [first, tuple(second)],
                      [("192.0.2.1", "ap"), ("192.0.2.2", "ap")])
+    before = [tuple(row) for row in _read(path, "SELECT * FROM cpe_cache ORDER BY id")]
 
-    database.init_db()
-
-    cpe = _read(path, "SELECT parent_device_id,system_name FROM devices WHERE role='cpe'")
-    assert len(cpe) == 1
-    assert cpe[0]["parent_device_id"] == 1
-    assert cpe[0]["system_name"] == "CPE1"
-    assert [tuple(row) for row in _read(path, "SELECT id FROM cpe_cache")] == [(1,)]
+    for _ in range(2):
+        with caplog.at_level("WARNING", logger=database.__name__):
+            database.init_db()
+        assert [tuple(row) for row in _read(path, "SELECT * FROM cpe_cache ORDER BY id")] == before
+        count = 0 if same_ip or same_mac else 2
+        assert len(_read(path, "SELECT id FROM devices WHERE role='cpe'")) == count
+        assert len(_read(path, "SELECT * FROM cpe_migration_map")) == count
+        assert len(_read(path, "SELECT * FROM link_metrics")) == count
+    if same_ip or same_mac:
+        logs = [r.getMessage() for r in caplog.records if "Held legacy CPE row" in r.getMessage()]
+        assert len(logs) == 4
+        assert all("192.0.2." not in message for message in logs)
 
 
 @pytest.mark.parametrize("pending_is_newer", [True, False])
-def test_startup_maps_roamed_row_to_already_migrated_cpe(tmp_path, monkeypatch, caplog, pending_is_newer):
+def test_startup_holds_roamed_row_without_changing_migrated_cpe(tmp_path, monkeypatch, caplog, pending_is_newer):
     path = tmp_path / "roamed-cpe.db"
     monkeypatch.setattr(database, "DB_PATH", path)
     first = _cpe("192.0.2.1", "192.0.2.101", "CPE1")
@@ -185,6 +184,7 @@ def test_startup_maps_roamed_row_to_already_migrated_cpe(tmp_path, monkeypatch, 
     device_before = tuple(_read(path, f"SELECT {device_fields} FROM devices WHERE role='cpe'")[0])
     metrics_before = tuple(_read(path, "SELECT * FROM link_metrics")[0])
     pending = list(_cpe("192.0.2.2", "192.0.2.101", "CPE2"))
+    pending[2] = first[2]
     pending[15] = "2026-10-29T10:00:00" if pending_is_newer else "2026-10-27T10:00:00"
     pending[6] = 25.0
     conn = sqlite3.connect(path)
@@ -206,19 +206,45 @@ def test_startup_maps_roamed_row_to_already_migrated_cpe(tmp_path, monkeypatch, 
     metrics = _read(path, "SELECT device_id,link_distance FROM link_metrics")
     mapping = _read(path, "SELECT old_cpe_id,device_id FROM cpe_migration_map ORDER BY old_cpe_id")
     assert len(cpe) == len(metrics) == 1
-    assert len(mapping) == 2 and mapping[0]["device_id"] == mapping[1]["device_id"] == cpe[0]["id"]
-    assert cpe[0]["ip"] == first[1]
-    assert cpe[0]["system_name"] == first[3] and cpe[0]["mac"] == first[2]
-    assert cpe[0]["parent_device_id"] == (2 if pending_is_newer else 1)
-    assert cpe[0]["last_seen"] == (pending[15] if pending_is_newer else first[15])
-    assert metrics[0]["link_distance"] == (25.0 if pending_is_newer else first[6])
-    if not pending_is_newer:
-        assert tuple(_read(path, f"SELECT {device_fields} FROM devices WHERE role='cpe'")[0]) == device_before
-        assert tuple(_read(path, "SELECT * FROM link_metrics")[0]) == metrics_before
-    case_logs = [record.getMessage() for record in caplog.records
-                 if "migrated CPE" in record.getMessage()]
+    assert len(mapping) == 1
+    assert mapping[0]["old_cpe_id"] == 1
+    assert mapping[0]["device_id"] == cpe[0]["id"]
+    assert tuple(_read(path, f"SELECT {device_fields} FROM devices WHERE role='cpe'")[0]) == device_before
+    assert tuple(_read(path, "SELECT * FROM link_metrics")[0]) == metrics_before
+    assert len(_read(path, "SELECT * FROM cpe_cache")) == 2
+    case_logs = [r.getMessage() for r in caplog.records if "Held legacy CPE row" in r.getMessage()]
     assert len(case_logs) == 1
     assert "192.0.2.101" not in case_logs[0]
+
+
+@pytest.mark.parametrize("new_ip", ["192.0.2.101", "192.0.2.102"])
+def test_moved_observation_stays_separate_after_restart(tmp_path, monkeypatch, new_ip):
+    path = tmp_path / "moved-cpe.db"
+    first = _cpe("192.0.2.1", "192.0.2.101", "CPE1")
+    _legacy_database(path, [first], [("192.0.2.1", "ap"), ("192.0.2.2", "ap")])
+    monkeypatch.setattr(database, "DB_PATH", path)
+
+    database.init_db()
+    before = _read(path, "SELECT id,parent_device_id,firmware_version FROM devices WHERE role='cpe'")[0]
+    assert before["parent_device_id"] == 1
+    assert before["firmware_version"] == "1.2.3"
+
+    database.upsert_cpe("192.0.2.2", {
+        "ip": new_ip, "mac": first[2], "system_name": "CPE1",
+        "model": first[4], "firmware_version": "2.0.0",
+    })
+    database.init_db()
+
+    device = _read(path, "SELECT id,parent_device_id,firmware_version,last_seen FROM devices WHERE role='cpe'")
+    cache = _read(path, "SELECT ap_ip,ip,mac,firmware_version FROM cpe_cache")
+    mapping = _read(path, "SELECT device_id FROM cpe_migration_map ORDER BY old_cpe_id")
+    assert len(device) == 1 and len(cache) == 2
+    assert device[0]["id"] == before["id"]
+    assert device[0]["parent_device_id"] == 1
+    assert device[0]["firmware_version"] == "1.2.3"
+    assert {row["ap_ip"] for row in cache} == {"192.0.2.1", "192.0.2.2"}
+    assert len(mapping) == 1
+    assert {row["device_id"] for row in mapping} == {device[0]["id"]}
 
 
 @pytest.mark.parametrize("conflict_role", ["ap", "switch"])

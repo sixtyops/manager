@@ -27,7 +27,7 @@ PORT="${PORT:-8000}"
 # admin user on startup, and the seed script refuses a configured database.
 # Keep configured databases from reaching the real poller unless they contain
 # the known development seed. Refusals fail closed and explain how to reset.
-python3 -c "import updater.database"
+python3 -c "from updater import database; database.init_db()"
 if ! python3 scripts/seed_dev_data.py; then
     echo "dev.sh: refusing to start against this database. Use ./dev.sh --fresh to replace it."
     exit 1

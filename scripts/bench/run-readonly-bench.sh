@@ -184,7 +184,7 @@ if [ "$mode" != integration ]; then
   git archive HEAD > "$archive_file"
   tar -x -f "$archive_file" -C "$code_dir"
   if [ "$mode" != local-switch ]; then
-    (cd "$code_dir" && "$python" -c "import updater.poller" >/dev/null 2>&1) || refuse "the commit dependencies are not installed for this Python (set SIXTYOPS_BENCH_PYTHON)"
+    (cd "$code_dir" && "$python" -c "from updater import database; database.init_db(); import updater.poller" >/dev/null 2>&1) || refuse "the commit dependencies are not installed for this Python (set SIXTYOPS_BENCH_PYTHON)"
   fi
 fi
 

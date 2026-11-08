@@ -70,6 +70,94 @@ def _instrument(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_poll_ap_skips_all_writes_for_held_peer_and_processes_other_peer(
+    fake_devices, mock_db, monkeypatch, caplog,
+):
+    normal_ip = "192.0.2.3"
+    db.upsert_cpe(AP, {
+        "ip": CPE, "mac": "00:11:22:33:44:55", "system_name": "held device",
+        "auth_status": "unreachable", "firmware_version": "old firmware",
+    })
+    db.update_cpe_bank_info(AP, CPE, "old bank1", "old bank2", 1)
+    mock_db.execute("UPDATE cpe_cache SET bank_last_fetched='2020-01-01T00:00:00'")
+    mock_db.commit()
+    before = dict(mock_db.execute("SELECT * FROM cpe_cache WHERE ip=?", (CPE,)).fetchone())
+    monkeypatch.setattr(TachyonClient, "get_connected_cpes", AsyncMock(return_value=[
+        CPEInfo(ip=CPE, mac="00:11:22:33:44:66", system_name="conflicting device"),
+        CPEInfo(ip=normal_ip, mac="00:11:22:33:44:77", system_name="normal device"),
+    ]))
+    poller = NetworkPoller()
+    auth_probe = AsyncMock(wraps=poller._probe_cpe_auth)
+    bank_fetch = AsyncMock(wraps=poller._maybe_fetch_cpe_banks)
+    monkeypatch.setattr(poller, "_probe_cpe_auth", auth_probe)
+    monkeypatch.setattr(poller, "_maybe_fetch_cpe_banks", bank_fetch)
+
+    with caplog.at_level("WARNING", logger=db.__name__):
+        await poller._poll_ap(db.get_access_point(AP))
+
+    rows = {row["ip"]: row for row in db.get_cpes_for_ap(AP)}
+    assert rows[CPE] == before
+    assert rows[normal_ip]["system_name"] == "normal device"
+    assert rows[normal_ip]["auth_status"] == "ok"
+    assert rows[normal_ip]["bank1_version"] == "1.0"
+    assert rows[normal_ip]["bank2_version"] == "1.0"
+    assert rows[normal_ip]["active_bank"] == 1
+    auth_probe.assert_awaited_once()
+    assert auth_probe.await_args.args[0] == normal_ip
+    bank_fetch.assert_awaited_once()
+    assert bank_fetch.await_args.args[:2] == (AP, normal_ip)
+    assert CPE not in fake_devices
+    assert normal_ip in fake_devices
+    assert db.get_access_point(AP)["last_error"] is None
+    conflicts = [r.getMessage() for r in caplog.records if "Held CPE cache row" in r.getMessage()]
+    assert conflicts == [f"Held CPE cache row {before['id']}: conflicting radio MAC"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cached_mac", ["absent", None, "invalid", "00:11:22:33:44:55"])
+@pytest.mark.parametrize("reverse_peers", [False, True])
+async def test_poll_ap_holds_every_observation_with_conflicting_peer_macs(
+    fake_devices, mock_db, monkeypatch, caplog, cached_mac, reverse_peers,
+):
+    normal_ip = "192.0.2.3"
+    if cached_mac != "absent":
+        db.upsert_cpe(AP, {"ip": CPE, "mac": cached_mac, "system_name": "original"})
+        db.update_cpe_bank_info(AP, CPE, "old bank1", "old bank2", 1)
+    before = [dict(row) for row in mock_db.execute("SELECT * FROM cpe_cache WHERE ip=?", (CPE,))]
+    peers = [
+        CPEInfo(ip=CPE, mac="00:11:22:33:44:55", system_name="first observation"),
+        CPEInfo(ip=CPE, mac="00:11:22:33:44:66", system_name="second observation"),
+    ]
+    if reverse_peers:
+        peers.reverse()
+    peers.append(CPEInfo(ip=normal_ip, mac="00:11:22:33:44:77", system_name="normal device"))
+    monkeypatch.setattr(TachyonClient, "get_connected_cpes", AsyncMock(return_value=peers))
+    poller = NetworkPoller()
+    auth_probe = AsyncMock(wraps=poller._probe_cpe_auth)
+    bank_fetch = AsyncMock(wraps=poller._maybe_fetch_cpe_banks)
+    monkeypatch.setattr(poller, "_probe_cpe_auth", auth_probe)
+    monkeypatch.setattr(poller, "_maybe_fetch_cpe_banks", bank_fetch)
+
+    with caplog.at_level("WARNING", logger=poller_module.__name__):
+        await poller._poll_ap(db.get_access_point(AP))
+
+    assert [dict(row) for row in mock_db.execute("SELECT * FROM cpe_cache WHERE ip=?", (CPE,))] == before
+    normal = next(row for row in db.get_cpes_for_ap(AP) if row["ip"] == normal_ip)
+    assert normal["system_name"] == "normal device"
+    assert normal["auth_status"] == "ok"
+    assert normal["bank1_version"] == "1.0"
+    auth_probe.assert_awaited_once()
+    assert auth_probe.await_args.args[0] == normal_ip
+    bank_fetch.assert_awaited_once()
+    assert bank_fetch.await_args.args[:2] == (AP, normal_ip)
+    assert CPE not in fake_devices
+    assert normal_ip in fake_devices
+    assert db.get_access_point(AP)["last_error"] is None
+    conflicts = [r.getMessage() for r in caplog.records if "Held CPE" in r.getMessage()]
+    assert conflicts == ["Held CPE observations: conflicting radio MACs in one AP poll"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("instrumented", [False, True])
 async def test_poller_alone_counts_logins_and_reuse(fake_devices, monkeypatch, instrumented):
     recorder = _instrument(monkeypatch) if instrumented else None
