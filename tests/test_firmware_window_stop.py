@@ -1084,3 +1084,38 @@ async def test_unreachable_ap_stop_records_pre_update_management_settings(
         "pre-update management VLAN 12, IP mode static"
     )
     assert "192.0.2.1" not in stop["reason"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_callback_timeout_stop_records_pre_update_management_settings(
+    mock_db, monkeypatch, utc_window_clock,
+):
+    async def timeout(self, *args, **kwargs):
+        return app_module.UpdateResult(
+            ip=self.ip, success=False, error="Recovery callback timed out",
+        )
+
+    monkeypatch.setattr(_ManagementDeviceClient, "update_firmware", timeout)
+    await test_unreachable_ap_stop_records_pre_update_management_settings(
+        mock_db, monkeypatch, utc_window_clock,
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_flash_auth_failure_stop_records_pre_update_management_settings(
+    mock_db, monkeypatch, utc_window_clock,
+):
+    async def update_firmware(self, *args, **kwargs):
+        self.updated = True
+        return app_module.UpdateResult(
+            ip=self.ip, success=True, old_version="1.0.0.100", new_version="2.0.0.1",
+        )
+
+    async def connect(self):
+        return not self.updated
+
+    monkeypatch.setattr(_ManagementDeviceClient, "update_firmware", update_firmware)
+    monkeypatch.setattr(_ManagementDeviceClient, "connect", connect)
+    await test_unreachable_ap_stop_records_pre_update_management_settings(
+        mock_db, monkeypatch, utc_window_clock,
+    )

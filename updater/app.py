@@ -6582,6 +6582,17 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             device_status.status = "failed"
             device_status.error = result.error
             device_status.progress_message = result.error
+            if (
+                ap_management_baseline is not None
+                and "authentication failed after firmware reboot" in result.error.lower()
+            ):
+                result.error = (
+                    "Device did not return on its management address after update; "
+                    f"pre-update management VLAN {ap_management_baseline['vlan']}, "
+                    f"IP mode {ap_management_baseline['ip_mode']}"
+                )
+                device_status.error = result.error
+                device_status.progress_message = result.error
             _stop_firmware_window(job, ip, "recovery", result.error)
 
     smoke_clean_pass = False
@@ -6689,6 +6700,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             and result.error
             and ("did not come back online" in result.error.lower()
                  or "did not return" in result.error.lower()
+                 or "recovery callback timed out" in result.error.lower()
+                 or "recovery deadline" in result.error.lower()
                  or "authentication failed after firmware reboot" in result.error.lower())
         ):
             result.error = (
