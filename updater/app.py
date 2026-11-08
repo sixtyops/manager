@@ -647,6 +647,7 @@ def _migrate_users_template_password_hashing() -> None:
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop background tasks."""
     # Startup
+    db.init_db()
     db.delete_setting("backup_sftp_password")
     init_vendors()
     ensure_admin_user()

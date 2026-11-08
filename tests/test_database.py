@@ -435,6 +435,13 @@ class TestCPECache:
         assert len(cpes) == 1
         assert cpes[0]["signal_health"] == "red"
 
+    def test_upsert_reuses_cpe_identity_when_parent_changes(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "system_name": "old"})
+        db.upsert_cpe("10.0.0.2", {"ip": "192.0.2.50", "system_name": "new"})
+
+        rows = mock_db.execute("SELECT ap_ip,ip,system_name FROM cpe_cache").fetchall()
+        assert [tuple(row) for row in rows] == [("10.0.0.2", "192.0.2.50", "new")]
+
     def test_clear(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
         db.clear_cpes_for_ap("10.0.0.1")
@@ -580,7 +587,13 @@ class TestCPECache:
 
     def test_relocation_rejects_ambiguous_source_ownership(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.10", "mac": "00:11:22:33:44:55"})
-        db.upsert_cpe("10.0.0.9", {"ip": "192.0.2.10", "mac": "00:11:22:33:44:55"})
+        # Simulate an ambiguous legacy state; the poller upsert no longer
+        # creates a second row for the same CPE identity.
+        mock_db.execute(
+            "INSERT INTO cpe_cache(ap_ip,ip,mac) VALUES (?,?,?)",
+            ("10.0.0.9", "192.0.2.10", "00:11:22:33:44:55"),
+        )
+        mock_db.commit()
 
         with pytest.raises(ValueError, match="source ownership"):
             db.relocate_cpe_cache(

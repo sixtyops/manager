@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -18,7 +19,9 @@ from .logging_filter import register_secret
 logger = logging.getLogger(__name__)
 
 # Database file location
-DB_PATH = Path(__file__).parent.parent / "data" / "sixtyops.db"
+DB_PATH = Path(os.environ.get(
+    "SIXTYOPS_DB_PATH", Path(__file__).parent.parent / "data" / "sixtyops.db"
+))
 
 # Settings cache — short TTL to reduce DB hits during poll cycles
 _settings_cache: Optional[dict] = None
@@ -1624,6 +1627,20 @@ def relocate_cpe_cache(old_ap_ip: str, old_ip: str, new_ap_ip: str, new_ip: str,
 def upsert_cpe(ap_ip: str, cpe_data: dict):
     """Update or insert a CPE record."""
     with get_db() as db:
+        # A CPE can move between APs. The migration and device model identify
+        # it by IP, so keep one cache row for that identity across parents.
+        # Begin the write transaction before checking so concurrent AP polls
+        # cannot both insert the same CPE.
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        existing = db.execute(
+            "SELECT id FROM cpe_cache WHERE ip = ? ORDER BY last_updated DESC, id LIMIT 1",
+            (cpe_data.get("ip"),),
+        ).fetchone()
+        if existing:
+            db.execute("DELETE FROM cpe_cache WHERE ip = ? AND id != ?",
+                       (cpe_data.get("ip"), existing["id"]))
+            db.execute("UPDATE cpe_cache SET ap_ip = ? WHERE id = ?", (ap_ip, existing["id"]))
         db.execute("""
             INSERT INTO cpe_cache (ap_ip, ip, mac, system_name, model, firmware_version,
                                    link_distance, rx_power, combined_signal, last_local_rssi,
@@ -3748,7 +3765,3 @@ def resolve_device_group(group_id: int) -> list[str]:
         where = " AND ".join(clauses)
         rows = conn.execute(f"SELECT ip FROM devices WHERE {where}", params).fetchall()
         return [r[0] for r in rows]
-
-
-# Initialize on import
-init_db()

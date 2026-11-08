@@ -1,5 +1,7 @@
 """S4a migration tests for legacy CPE cache rows."""
 
+import importlib
+import os
 import sqlite3
 
 import pytest
@@ -109,6 +111,27 @@ def test_startup_copies_every_legacy_cpe_and_repeats_without_duplicates(tmp_path
     assert len(_read(path, "SELECT * FROM cpe_migration_map")) == 2
     assert len(_read(path, "SELECT * FROM link_metrics")) == 2
     assert _read(path, "SELECT COUNT(*) AS n FROM cpe_cache")[0]["n"] == 2
+
+
+def test_import_does_not_reconcile_duplicate_legacy_cache_rows(tmp_path, monkeypatch):
+    path = tmp_path / "duplicate-cache.db"
+    older = list(_cpe("192.0.2.1", "192.0.2.101", "CPE1"))
+    newer = list(_cpe("192.0.2.2", "192.0.2.101", "CPE2"))
+    newer[15] = "2026-10-29T10:00:00"
+    _legacy_database(path, [tuple(older), tuple(newer)],
+                     [("192.0.2.1", "ap"), ("192.0.2.2", "ap")])
+    before = [tuple(row) for row in _read(path, "SELECT id,ap_ip,ip,last_updated FROM cpe_cache ORDER BY id")]
+
+    old_db_path = database.DB_PATH
+    monkeypatch.setenv("SIXTYOPS_DB_PATH", str(path))
+    try:
+        importlib.reload(database)
+        after = [tuple(row) for row in _read(path, "SELECT id,ap_ip,ip,last_updated FROM cpe_cache ORDER BY id")]
+        assert after == before
+    finally:
+        monkeypatch.delenv("SIXTYOPS_DB_PATH", raising=False)
+        importlib.reload(database)
+        database.DB_PATH = old_db_path
 
 
 def test_startup_keeps_newest_cpe_row_when_legacy_parents_collide(tmp_path, monkeypatch, caplog):
