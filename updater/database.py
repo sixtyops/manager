@@ -1607,9 +1607,12 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
             "SELECT id,mac FROM cpe_cache WHERE ap_ip = ? AND ip = ?",
             (ap_ip, cpe_ip),
         ).fetchone()
-        if (radio_mac and target and
-                _normalize_cpe_radio_mac(target["mac"]) != radio_mac):
-            raise ValueError("CPE cache location has conflicting hardware identity")
+        stored_mac = _normalize_cpe_radio_mac(target["mac"]) if target else None
+        if radio_mac and stored_mac and stored_mac != radio_mac:
+            logger.warning("Held CPE cache row %s: conflicting radio MAC", target["id"])
+            return
+        # Missing peer evidence must not erase a previously observed valid MAC.
+        mac = target["mac"] if stored_mac and not radio_mac else cpe_data.get("mac")
         db.execute("""
             INSERT INTO cpe_cache (ap_ip, ip, mac, system_name, model, firmware_version,
                                    link_distance, rx_power, combined_signal, last_local_rssi,
@@ -1640,7 +1643,7 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
                 max_rain_mm_hr = excluded.max_rain_mm_hr,
                 last_updated = excluded.last_updated
         """, (
-            ap_ip, cpe_data.get("ip"), cpe_data.get("mac"), cpe_data.get("system_name"),
+            ap_ip, cpe_data.get("ip"), mac, cpe_data.get("system_name"),
             cpe_data.get("model"), cpe_data.get("firmware_version"),
             cpe_data.get("link_distance"), cpe_data.get("rx_power"),
             cpe_data.get("combined_signal"), cpe_data.get("last_local_rssi"),
