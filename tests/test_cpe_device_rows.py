@@ -59,7 +59,7 @@ def _legacy_database(path, cpes, devices=()):
 
 def _cpe(ap_ip, ip, name):
     return (
-        ap_ip, ip, f"AA:BB:CC:00:00:{name[-1:]}", name, "TNA-301", "1.2.3",
+        ap_ip, ip, f"AA:BB:CC:00:00:0{name[-1:]}", name, "TNA-301", "1.2.3",
         12.5, -51.0, -49.0, -47.0, 300.0, 250.0, 9, 86400, "green",
         "2026-10-28T10:00:00", "2026-10-27T10:00:00", "ok", None,
         -60.0, 22.0, 1, 2, "wide", 8.5, "ok", "1.2.3", "1.2.2", 1,
@@ -141,6 +141,7 @@ def test_startup_keeps_newest_cpe_row_when_legacy_parents_collide(tmp_path, monk
     older[15] = "2026-10-27T10:00:00"
     older[6] = 10.0
     newer = list(_cpe("192.0.2.2", "192.0.2.101", "CPE2"))
+    newer[2] = older[2]
     newer[15] = "2026-10-28T10:00:00"
     newer[6] = 25.0
     _legacy_database(path, [tuple(older), tuple(newer)],
@@ -178,6 +179,7 @@ def test_startup_duplicate_parent_tie_keeps_lower_legacy_id(tmp_path, monkeypatc
     monkeypatch.setattr(database, "DB_PATH", path)
     first = list(_cpe("192.0.2.1", "192.0.2.101", "CPE1"))
     second = list(_cpe("192.0.2.2", "192.0.2.101", "CPE2"))
+    second[2] = first[2]
     _legacy_database(path, [tuple(first), tuple(second)],
                      [("192.0.2.1", "ap"), ("192.0.2.2", "ap")])
 
@@ -188,6 +190,24 @@ def test_startup_duplicate_parent_tie_keeps_lower_legacy_id(tmp_path, monkeypatc
     assert cpe[0]["parent_device_id"] == 1
     assert cpe[0]["system_name"] == "CPE1"
     assert [tuple(row) for row in _read(path, "SELECT id FROM cpe_cache")] == [(1,)]
+
+
+def test_startup_fails_closed_for_distinct_hardware_reusing_an_ip(tmp_path, monkeypatch):
+    path = tmp_path / "reused-ip.db"
+    first = _cpe("192.0.2.1", "192.0.2.101", "CPE1")
+    second = _cpe("192.0.2.2", "192.0.2.101", "CPE2")
+    second = (*second[:15], "2026-10-29T10:00:00", *second[16:])
+    _legacy_database(path, [first, second], [("192.0.2.1", "ap"), ("192.0.2.2", "ap")])
+    monkeypatch.setattr(database, "DB_PATH", path)
+
+    with pytest.raises(ValueError, match="conflicting hardware identity"):
+        database.init_db()
+
+    assert [tuple(row) for row in _read(path, "SELECT ap_ip,ip,mac FROM cpe_cache ORDER BY id")] == [
+        (first[0], first[1], first[2]),
+        (second[0], second[1], second[2]),
+    ]
+    assert _read(path, "SELECT id FROM devices WHERE role='cpe'") == []
 
 
 @pytest.mark.parametrize("pending_is_newer", [True, False])
@@ -208,6 +228,7 @@ def test_startup_maps_roamed_row_to_already_migrated_cpe(tmp_path, monkeypatch, 
     device_before = tuple(_read(path, f"SELECT {device_fields} FROM devices WHERE role='cpe'")[0])
     metrics_before = tuple(_read(path, "SELECT * FROM link_metrics")[0])
     pending = list(_cpe("192.0.2.2", "192.0.2.101", "CPE2"))
+    pending[2] = first[2]
     pending[15] = "2026-10-29T10:00:00" if pending_is_newer else "2026-10-27T10:00:00"
     pending[6] = 25.0
     conn = sqlite3.connect(path)
@@ -242,6 +263,35 @@ def test_startup_maps_roamed_row_to_already_migrated_cpe(tmp_path, monkeypatch, 
                  if "migrated CPE" in record.getMessage()]
     assert len(case_logs) == 1
     assert "192.0.2.101" not in case_logs[0]
+
+
+def test_moved_cpe_reconciles_after_restart(tmp_path, monkeypatch):
+    path = tmp_path / "moved-cpe.db"
+    first = _cpe("192.0.2.1", "192.0.2.101", "CPE1")
+    _legacy_database(path, [first], [("192.0.2.1", "ap"), ("192.0.2.2", "ap")])
+    monkeypatch.setattr(database, "DB_PATH", path)
+
+    database.init_db()
+    before = _read(path, "SELECT id,parent_device_id,firmware_version FROM devices WHERE role='cpe'")[0]
+    assert before["parent_device_id"] == 1
+    assert before["firmware_version"] == "1.2.3"
+
+    database.upsert_cpe("192.0.2.2", {
+        "ip": first[1], "mac": first[2], "system_name": "CPE1",
+        "model": first[4], "firmware_version": "2.0.0",
+    })
+    database.init_db()
+
+    device = _read(path, "SELECT id,parent_device_id,firmware_version,last_seen FROM devices WHERE role='cpe'")
+    cache = _read(path, "SELECT ap_ip,ip,mac,firmware_version FROM cpe_cache")
+    mapping = _read(path, "SELECT device_id FROM cpe_migration_map ORDER BY old_cpe_id")
+    assert len(device) == len(cache) == 1
+    assert device[0]["id"] == before["id"]
+    assert device[0]["parent_device_id"] == 2
+    assert device[0]["firmware_version"] == "2.0.0"
+    assert cache[0]["ap_ip"] == "192.0.2.2"
+    assert cache[0]["firmware_version"] == "2.0.0"
+    assert {row["device_id"] for row in mapping} == {device[0]["id"]}
 
 
 @pytest.mark.parametrize("conflict_role", ["ap", "switch"])

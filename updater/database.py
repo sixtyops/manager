@@ -102,7 +102,7 @@ def _migrate_cpe_rows(db):
             row for row in legacy_rows
             if not db.execute("SELECT 1 FROM cpe_migration_map WHERE old_cpe_id=?", (row["id"],)).fetchone()
         ]
-        rows_by_ip = {}
+        rows_by_identity = {}
         parents_by_id = {}
         for row in pending_rows:
             parent = db.execute("SELECT id,username,password FROM devices WHERE ip=? AND role='ap'",
@@ -110,11 +110,13 @@ def _migrate_cpe_rows(db):
             if not parent:
                 raise ValueError(f"CPE migration row {row['id']} has no AP parent at {row['ap_ip']}")
             parents_by_id[row["id"]] = parent
-            rows_by_ip.setdefault(row["ip"], []).append(row)
+            radio_mac = _normalize_cpe_radio_mac(row["mac"])
+            identity = ("mac", radio_mac) if radio_mac else ("row", row["id"])
+            rows_by_identity.setdefault(identity, []).append(row)
 
         canonical_ids = set()
         dropped_ids = set()
-        for rows in rows_by_ip.values():
+        for rows in rows_by_identity.values():
             parent_ids = {parents_by_id[row["id"]]["id"] for row in rows}
             if len(rows) > 1 and len(parent_ids) > 1:
                 # ISO last_updated values sort chronologically; the lower stable
@@ -130,24 +132,43 @@ def _migrate_cpe_rows(db):
             if old_id in dropped_ids:
                 continue
             parent = parents_by_id[old_id]
-            owner = db.execute("SELECT id,role FROM devices WHERE ip=?", (row["ip"],)).fetchone()
+            owner = db.execute(
+                "SELECT id,role FROM devices WHERE ip=?", (row["ip"],)
+            ).fetchone()
+            if not owner:
+                radio_mac = _normalize_cpe_radio_mac(row["mac"])
+                if radio_mac:
+                    owner = db.execute(
+                        "SELECT id,role FROM devices WHERE role='cpe' "
+                        "AND UPPER(REPLACE(REPLACE(TRIM(mac), ':', ''), '-', '')) = ?",
+                        (radio_mac.replace(":", ""),),
+                    ).fetchone()
             if owner:
                 prior = db.execute(
                     "SELECT old_cpe_id,device_id FROM cpe_migration_map WHERE device_id=?",
                     (owner["id"],),
                 ).fetchone()
                 if owner["role"] == "cpe" and prior:
+                    existing_mac = db.execute(
+                        "SELECT mac FROM devices WHERE id=?", (owner["id"],)
+                    ).fetchone()["mac"]
+                    if (_normalize_cpe_radio_mac(existing_mac) is None or
+                            _normalize_cpe_radio_mac(existing_mac) !=
+                            _normalize_cpe_radio_mac(row["mac"])):
+                        raise ValueError(
+                            f"CPE migration collision has conflicting hardware identity at IP {row['ip']}"
+                        )
                     existing = db.execute(
                         "SELECT last_seen FROM devices WHERE id=?", (owner["id"],)
                     ).fetchone()
                     values = {name: row[name] for name in source_columns}
                     if (values.get("last_updated") or "") > (existing["last_seen"] or ""):
                         db.execute(
-                            """UPDATE devices SET parent_device_id=?, firmware_version=?, last_seen=?,
+                            """UPDATE devices SET ip=?, parent_device_id=?, firmware_version=?, last_seen=?,
                                bank1_version=?, bank2_version=?, active_bank=?, bank_last_fetched=?,
                                last_config_poll_at=?, last_config_poll_status=?, last_config_poll_error=?,
                                auth_status=? WHERE id=?""",
-                            (parent["id"], row["firmware_version"], values.get("last_updated"),
+                            (row["ip"], parent["id"], row["firmware_version"], values.get("last_updated"),
                              values.get("bank1_version"), values.get("bank2_version"),
                              values.get("active_bank"), values.get("bank_last_fetched"),
                              values.get("last_config_poll_at"), values.get("last_config_poll_status"),
@@ -195,7 +216,7 @@ def _migrate_cpe_rows(db):
             db.execute("INSERT INTO cpe_migration_map VALUES (?,?)", (old_id, device_id))
         for old_id in dropped_ids:
             db.execute("DELETE FROM cpe_cache WHERE id=?", (old_id,))
-        for rows in rows_by_ip.values():
+        for rows in rows_by_identity.values():
             if any(row["id"] in canonical_ids for row in rows):
                 canonical_id = next(row["id"] for row in rows if row["id"] in canonical_ids)
                 logger.warning(
@@ -1628,19 +1649,46 @@ def upsert_cpe(ap_ip: str, cpe_data: dict):
     """Update or insert a CPE record."""
     with get_db() as db:
         # A CPE can move between APs. The migration and device model identify
-        # it by IP, so keep one cache row for that identity across parents.
+        # it by IP, but IPs can be reused. Use the radio MAC to identify the
+        # hardware before reusing or deleting a cache row.
         # Begin the write transaction before checking so concurrent AP polls
         # cannot both insert the same CPE.
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        existing = db.execute(
-            "SELECT id FROM cpe_cache WHERE ip = ? ORDER BY last_updated DESC, id LIMIT 1",
-            (cpe_data.get("ip"),),
+        cpe_ip = cpe_data.get("ip")
+        radio_mac = _normalize_cpe_radio_mac(cpe_data.get("mac"))
+        existing = None
+        if radio_mac:
+            candidates = db.execute(
+                "SELECT id, ap_ip, ip, mac FROM cpe_cache "
+                "WHERE UPPER(REPLACE(REPLACE(TRIM(mac), ':', ''), '-', '')) = ? "
+                "ORDER BY last_updated DESC, id",
+                (radio_mac.replace(":", ""),),
+            ).fetchall()
+            matching = [row for row in candidates
+                        if _normalize_cpe_radio_mac(row["mac"]) == radio_mac]
+            if matching:
+                existing = matching[0]
+                duplicate_ids = [row["id"] for row in matching[1:]]
+                if duplicate_ids:
+                    placeholders = ",".join("?" for _ in duplicate_ids)
+                    db.execute(
+                        f"DELETE FROM cpe_cache WHERE id IN ({placeholders})",
+                        duplicate_ids,
+                    )
+                if existing["ap_ip"] != ap_ip or existing["ip"] != cpe_ip:
+                    # Keep the old map as evidence that this IP belongs to a
+                    # migrated CPE. Give the moved observation a fresh cache
+                    # ID so startup processes it and reconciles its parent.
+                    db.execute("DELETE FROM cpe_cache WHERE id = ?", (existing["id"],))
+                    existing = None
+        target = db.execute(
+            "SELECT id,mac FROM cpe_cache WHERE ap_ip = ? AND ip = ?",
+            (ap_ip, cpe_ip),
         ).fetchone()
-        if existing:
-            db.execute("DELETE FROM cpe_cache WHERE ip = ? AND id != ?",
-                       (cpe_data.get("ip"), existing["id"]))
-            db.execute("UPDATE cpe_cache SET ap_ip = ? WHERE id = ?", (ap_ip, existing["id"]))
+        if (radio_mac and target and
+                _normalize_cpe_radio_mac(target["mac"]) != radio_mac):
+            raise ValueError("CPE cache location has conflicting hardware identity")
         db.execute("""
             INSERT INTO cpe_cache (ap_ip, ip, mac, system_name, model, firmware_version,
                                    link_distance, rx_power, combined_signal, last_local_rssi,

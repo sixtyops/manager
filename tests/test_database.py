@@ -436,11 +436,47 @@ class TestCPECache:
         assert cpes[0]["signal_health"] == "red"
 
     def test_upsert_reuses_cpe_identity_when_parent_changes(self, mock_db):
-        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "system_name": "old"})
-        db.upsert_cpe("10.0.0.2", {"ip": "192.0.2.50", "system_name": "new"})
+        mac = "00:11:22:33:44:55"
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": mac, "system_name": "old"})
+        db.upsert_cpe("10.0.0.2", {"ip": "192.0.2.50", "mac": mac, "system_name": "new"})
 
         rows = mock_db.execute("SELECT ap_ip,ip,system_name FROM cpe_cache").fetchall()
         assert [tuple(row) for row in rows] == [("10.0.0.2", "192.0.2.50", "new")]
+
+    def test_upsert_preserves_distinct_hardware_that_reuses_an_ip(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "first",
+        })
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:66", "system_name": "second",
+        })
+
+        rows = mock_db.execute(
+            "SELECT ap_ip,ip,mac,system_name FROM cpe_cache ORDER BY ap_ip"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "00:11:22:33:44:55", "first"),
+            ("10.0.0.2", "192.0.2.50", "00:11:22:33:44:66", "second"),
+        ]
+
+    def test_upsert_removes_duplicate_rows_for_same_hardware(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "old",
+        })
+        mock_db.execute(
+            "INSERT INTO cpe_cache(ap_ip,ip,mac,system_name) VALUES (?,?,?,?)",
+            ("10.0.0.2", "192.0.2.50", "00-11-22-33-44-55", "duplicate"),
+        )
+        mock_db.commit()
+
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.50", "mac": "001122334455", "system_name": "latest",
+        })
+
+        rows = mock_db.execute("SELECT ap_ip,ip,mac,system_name FROM cpe_cache").fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.2", "192.0.2.50", "001122334455", "latest"),
+        ]
 
     def test_clear(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})

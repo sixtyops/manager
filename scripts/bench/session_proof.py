@@ -375,6 +375,9 @@ def _report(recorder: Recorder, end: float, has_session_valid: bool):
 
 async def _run(duration_s: int) -> int:
     from updater import database as db
+
+    db.init_db()
+
     from updater.poller import init_poller
     from updater.vendors import init_vendors
 
