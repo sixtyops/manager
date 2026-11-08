@@ -430,18 +430,23 @@ class TestCPECache:
 
     def test_upsert_updates(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
+        original_id = db.get_cpes_for_ap("10.0.0.1")[0]["id"]
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "red"})
         cpes = db.get_cpes_for_ap("10.0.0.1")
         assert len(cpes) == 1
         assert cpes[0]["signal_health"] == "red"
+        assert cpes[0]["id"] == original_id
 
-    def test_upsert_reuses_cpe_identity_when_parent_changes(self, mock_db):
+    def test_upsert_preserves_observations_when_parent_changes(self, mock_db):
         mac = "00:11:22:33:44:55"
         db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": mac, "system_name": "old"})
         db.upsert_cpe("10.0.0.2", {"ip": "192.0.2.50", "mac": mac, "system_name": "new"})
 
         rows = mock_db.execute("SELECT ap_ip,ip,system_name FROM cpe_cache").fetchall()
-        assert [tuple(row) for row in rows] == [("10.0.0.2", "192.0.2.50", "new")]
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "old"),
+            ("10.0.0.2", "192.0.2.50", "new"),
+        ]
 
     def test_upsert_preserves_distinct_hardware_that_reuses_an_ip(self, mock_db):
         db.upsert_cpe("10.0.0.1", {
@@ -459,7 +464,7 @@ class TestCPECache:
             ("10.0.0.2", "192.0.2.50", "00:11:22:33:44:66", "second"),
         ]
 
-    def test_upsert_removes_duplicate_rows_for_same_hardware(self, mock_db):
+    def test_upsert_updates_only_its_key_with_matching_mac_elsewhere(self, mock_db):
         db.upsert_cpe("10.0.0.1", {
             "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "old",
         })
@@ -475,6 +480,7 @@ class TestCPECache:
 
         rows = mock_db.execute("SELECT ap_ip,ip,mac,system_name FROM cpe_cache").fetchall()
         assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "00:11:22:33:44:55", "old"),
             ("10.0.0.2", "192.0.2.50", "001122334455", "latest"),
         ]
 
@@ -623,8 +629,7 @@ class TestCPECache:
 
     def test_relocation_rejects_ambiguous_source_ownership(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.10", "mac": "00:11:22:33:44:55"})
-        # Simulate an ambiguous legacy state; the poller upsert no longer
-        # creates a second row for the same CPE identity.
+        # Separate observations of one MAC do not prove device identity.
         mock_db.execute(
             "INSERT INTO cpe_cache(ap_ip,ip,mac) VALUES (?,?,?)",
             ("10.0.0.9", "192.0.2.10", "00:11:22:33:44:55"),
