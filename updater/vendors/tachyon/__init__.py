@@ -65,6 +65,8 @@ class TachyonDriver(VendorDriver):
                 "macs": info.macs,
                 "management_interface": info.management_interface,
                 "management_vlan_id": info.management_vlan_id,
+                "management_ip_mode": getattr(info, "management_ip_mode", None),
+                "management_address": getattr(info, "management_address", None) or info.ip,
                 "management_mac": info.management_mac,
                 "firmware_sha256": info.firmware_sha256,
             },

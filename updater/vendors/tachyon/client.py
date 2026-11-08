@@ -203,6 +203,7 @@ class DeviceInfo:
     macs: Dict[str, str] = field(default_factory=dict)
     management_interface: Optional[str] = None
     management_vlan_id: Optional[int] = None
+    management_address: Optional[str] = None
     management_mac: Optional[str] = None
     current_version: Optional[str] = None
     bank1_version: Optional[str] = None
@@ -403,6 +404,19 @@ class TachyonClient:
                 return True, False, None
             value = value[key]
         return True, True, TachyonClient._normalize_management_ip_mode(value)
+
+    @staticmethod
+    def _parse_config_management_address(config: Any) -> Optional[str]:
+        """Return the configured management address when the config has one."""
+        value = config
+        for key in ("network", "zones", "wan", "management"):
+            if not isinstance(value, dict) or key not in value:
+                return None
+            value = value[key]
+        if not isinstance(value, dict):
+            return None
+        address = value.get("ipaddr", value.get("address"))
+        return address.strip() if isinstance(address, str) and address.strip() else None
 
     async def _curl(
         self,
@@ -627,6 +641,7 @@ class TachyonClient:
                 if config_status != "ok":
                     self._log_config_fetch_failure(config_status, config_err)
                 config_valid, config_present, config_mode = self._parse_config_management_ip_mode(config)
+                info.management_address = self._parse_config_management_address(config) or self.ip
                 if not status_valid or config_status != "ok" or not config_valid:
                     info.management_ip_mode = None
                 elif (status_present and status_mode is None) or (config_present and config_mode is None):

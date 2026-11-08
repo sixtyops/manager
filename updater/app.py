@@ -4101,6 +4101,30 @@ def _stop_firmware_window(job: "UpdateJob", ip: str, gate: str, reason: str):
     return stop
 
 
+def _management_settings(info) -> dict:
+    """Return the management settings exposed by a device info read."""
+    extra = getattr(info, "extra", {})
+    extra = extra if isinstance(extra, dict) else {}
+    vlan = getattr(info, "management_vlan_id", None)
+    ip_mode = getattr(info, "management_ip_mode", None)
+    return {
+        "vlan": vlan if vlan is not None else extra.get("management_vlan_id"),
+        "ip_mode": ip_mode if ip_mode is not None else extra.get("management_ip_mode"),
+        "address": getattr(info, "management_address", None) or extra.get("management_address") or getattr(info, "ip", None),
+    }
+
+
+def _management_settings_changes(before: dict, after: dict) -> list[str]:
+    changes = []
+    if before["vlan"] != after["vlan"]:
+        changes.append(f"management VLAN changed from {before['vlan']} to {after['vlan']} after update")
+    if before["ip_mode"] != after["ip_mode"]:
+        changes.append(f"management IP mode changed from {before['ip_mode']} to {after['ip_mode']} after update")
+    if before["address"] != after["address"]:
+        changes.append("management address changed after update")
+    return changes
+
+
 def _persist_recovery_locator(job: "UpdateJob", original_ip: str) -> None:
     """Persist identity and the current transport locator with the active job."""
     payload = {
@@ -6220,6 +6244,7 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
     pre_update_cpe_count = len(job.ap_cpe_map.get(ip, [])) if device_status.role == "ap" else 0
     pre_reboot_ap_baseline = None
     flash_ap_baseline = None
+    ap_management_baseline = None
 
     client = None
     saved_locator = job.recovery_locators.get(ip, {})
@@ -6462,6 +6487,14 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 info = None
             if info is None:
                 info = VendorDeviceInfo(ip=ip)
+            if device_status.role == "ap" and supports_tachyon_recovery:
+                ap_management_baseline = _management_settings(info)
+                if (
+                    ap_management_baseline["vlan"] is None
+                    or ap_management_baseline["ip_mode"] not in {"static", "dhcp"}
+                    or not ap_management_baseline["address"]
+                ):
+                    raise RuntimeError("Management VLAN, IP mode, or address is unavailable before firmware update")
             device_status.model = device_status.model or getattr(info, "model", None)
             if not expected_serial:
                 expected_serial = getattr(info, "serial", None)
@@ -6529,6 +6562,12 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 raise RuntimeError("Expected serial did not match after firmware reboot")
             if not target or _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(target):
                 raise RuntimeError("Target firmware version was not confirmed after firmware reboot")
+            if ap_management_baseline is not None:
+                changed = _management_settings_changes(
+                    ap_management_baseline, _management_settings(recovered_info),
+                )
+                if changed:
+                    raise RuntimeError("; ".join(changed))
             if flash_ap_baseline is not None:
                 passed, evidence = await _check_ap_recovery_after_cpe_rejoin(
                     job, ip, client, flash_ap_baseline,
@@ -6645,6 +6684,18 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             })
             return
         device_status.status = "failed"
+        if (
+            ap_management_baseline is not None
+            and result.error
+            and ("did not come back online" in result.error.lower()
+                 or "did not return" in result.error.lower()
+                 or "authentication failed after firmware reboot" in result.error.lower())
+        ):
+            result.error = (
+                "Device did not return on its management address after update; "
+                f"pre-update management VLAN {ap_management_baseline['vlan']}, "
+                f"IP mode {ap_management_baseline['ip_mode']}"
+            )
         device_status.error = result.error
         device_status.progress_message = f"{prefix}{result.error or 'Update failed'}"
         _stop_firmware_window(job, ip, device_status.current_stage or "update", result.error or "Update failed")

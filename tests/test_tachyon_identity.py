@@ -34,6 +34,11 @@ def test_management_ip_mode_config_missing_key_is_unknown():
     assert TachyonClient._parse_config_management_ip_mode({"network": {}}) == (True, False, None)
 
 
+def test_management_address_config_reads_ipaddr():
+    config = {"network": {"zones": {"wan": {"management": {"ipaddr": "192.0.2.10"}}}}}
+    assert TachyonClient._parse_config_management_address(config) == "192.0.2.10"
+
+
 @pytest.mark.parametrize("config,present", [
     (None, False), ([], False), ({"network": None}, False),
     ({"network": {"zones": []}}, False),

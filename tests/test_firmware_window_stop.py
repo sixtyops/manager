@@ -16,6 +16,7 @@ class _DeviceClient:
     calls = {}
     fail_at = None
     connect_calls = {}
+    management_after_update = None
 
     def __init__(self, ip, username, password):
         self.ip = ip
@@ -46,10 +47,16 @@ class _DeviceClient:
         return {"system": {"name": "test"}}
 
     async def get_device_info(self):
+        management = self.management_after_update if self.updated else None
+        management = management or {
+            "management_vlan_id": 12,
+            "management_ip_mode": "static",
+            "management_address": "192.0.2.1",
+        }
         return SimpleNamespace(
             model="TNA-301", serial="SYNTHETIC-SERIAL",
             current_version="2.0.0.1" if self.updated else "1.0.0.100",
-            extra={},
+            ip="192.0.2.1", extra=management,
         )
 
     def get_hardware_id(self, model):
@@ -87,6 +94,11 @@ class _DeviceClient:
             {"check": "cpe_signal_levels", "passed": passed},
         ]
         return SimpleNamespace(passed=passed, warnings=[] if passed else ["traffic missing"], checks=checks)
+
+
+class _ManagementDeviceClient(_DeviceClient):
+    """Tachyon-like test client that enables management recovery checks."""
+    _client = object()
 
 
 def _install_snapshot_store(monkeypatch, *, failure=None):
@@ -992,3 +1004,83 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
     stop = db.get_firmware_window_stop(key)
     assert stop["device_ip"] == "192.0.2.1"
     assert stop["reason"] == "Upload failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("after", "expected_reason"), [
+    ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.1"}, None),
+    ({"management_vlan_id": 20, "management_ip_mode": "static", "management_address": "192.0.2.1"},
+     "management VLAN changed from 12 to 20 after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
+     "management IP mode changed from static to dhcp after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.2"},
+     "management address changed after update"),
+])
+async def test_changed_management_settings_stop_firmware_window(
+    mock_db, monkeypatch, utc_window_clock, after, expected_reason,
+):
+    key = ("firmware", "2026-10-27")
+    db.set_setting("scheduled_rollout_safety_ready", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+    _DeviceClient.management_after_update = after
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
+    job = app_module.UpdateJob(
+        job_id="management-change",
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={"192.0.2.1": ("u", "p")}, device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap")},
+        is_scheduled=True, start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key, pre_update_reboot=False,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1", pass_number=2)
+
+    stop = db.get_firmware_window_stop(key)
+    assert "flash" in _ManagementDeviceClient.calls["192.0.2.1"]
+    if expected_reason is None:
+        assert job.devices["192.0.2.1"].status == "success"
+        assert stop is None
+    else:
+        assert job.devices["192.0.2.1"].status == "failed"
+        assert expected_reason in stop["reason"]
+    _DeviceClient.management_after_update = None
+
+
+@pytest.mark.asyncio
+async def test_unreachable_ap_stop_records_pre_update_management_settings(
+    mock_db, monkeypatch, utc_window_clock,
+):
+    key = ("firmware", "2026-10-27")
+    db.set_setting("scheduled_rollout_safety_ready", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = "recovery"
+    _DeviceClient.management_after_update = None
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
+    job = app_module.UpdateJob(
+        job_id="management-no-return",
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={"192.0.2.1": ("u", "p")}, device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap")},
+        is_scheduled=True, start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key, pre_update_reboot=False,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1", pass_number=2)
+
+    stop = db.get_firmware_window_stop(key)
+    assert stop["reason"] == (
+        "Device did not return on its management address after update; "
+        "pre-update management VLAN 12, IP mode static"
+    )
+    assert "192.0.2.1" not in stop["reason"]
