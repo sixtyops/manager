@@ -232,6 +232,35 @@ async def test_cpe_wireless_status_fixture_reads_ap_peer():
 
 
 @pytest.mark.asyncio
+async def test_ap_wireless_status_fixture_reads_own_radio_mac():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(return_value=(200, fixture_body("ap_wireless_status.json")))
+
+    radio_mac = await client.get_ap_radio_mac()
+
+    assert radio_mac == "02:00:00:00:00:01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("ipv4", None), ("ipv4", "not-an-ip"),
+    ("mac", None), ("mac", "not-a-mac"),
+    ("model", None), ("model", ""),
+    ("system_name", None), ("system_name", ""),
+])
+async def test_connected_ap_peer_with_missing_or_malformed_field_is_not_a_candidate(field, value):
+    response = load_fixture("cpe_wireless_status.json")
+    if value is None:
+        response["wireless"]["peers"][0].pop(field)
+    else:
+        response["wireless"]["peers"][0][field] = value
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(return_value=(200, json.dumps(response)))
+
+    assert await client.get_connected_aps() == []
+
+
+@pytest.mark.asyncio
 async def test_ap_and_cpe_wireless_status_fixtures_share_peer_fields():
     client = TachyonClient("placeholder", "user", "password")
     client._curl = AsyncMock(side_effect=[
