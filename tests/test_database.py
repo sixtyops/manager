@@ -1,5 +1,6 @@
 """Tests for updater.database."""
 
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -798,6 +799,38 @@ class TestApAddressRelocation:
         assert mock_db.execute(
             "SELECT ip FROM device_update_history"
         ).fetchone()[0] == self.old_ip
+
+    def test_relocation_keeps_persisted_crash_recovery_locator_with_new_marker(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        payload = {
+            "devices": [self.old_ip],
+            "order": [self.old_ip],
+            "recovery": {
+                self.old_ip: {
+                    "original_ip": self.old_ip,
+                    "ip": self.old_ip,
+                    "serial": self.serial,
+                },
+            },
+        }
+        db.save_active_job(
+            "job-recovery", "running", json.dumps(payload), "firmware.bin", self.old_ip,
+        )
+
+        assert db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+
+        active = mock_db.execute(
+            "SELECT device_ips_json, in_flight_device_ip FROM active_jobs "
+            "WHERE job_id = 'job-recovery'"
+        ).fetchone()
+        saved_payload = json.loads(active["device_ips_json"])
+        locator = saved_payload["recovery"].get(active["in_flight_device_ip"])
+        assert active["in_flight_device_ip"] == self.new_ip
+        assert saved_payload["devices"] == [self.new_ip]
+        assert saved_payload["order"] == [self.new_ip]
+        assert locator["original_ip"] == self.new_ip
+        assert locator["ip"] == self.new_ip
+        assert locator["serial"] == self.serial
 
     def test_relocation_rejects_taken_ip(self, mock_db):
         device_id = self._seed_ap(mock_db)

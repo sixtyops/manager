@@ -1672,11 +1672,44 @@ def relocate_ap_address(device_id: int, expected_serial: str, old_ip: str,
         if cursor.rowcount != 1:
             raise ValueError("AP relocation legacy source changed before update")
         db.execute("UPDATE cpe_cache SET ap_ip = ? WHERE ap_ip = ?", (new_ip, old_ip))
-        db.execute(
-            "UPDATE active_jobs SET in_flight_device_ip = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE status = 'running' AND in_flight_device_ip = ?",
-            (new_ip, old_ip),
-        )
+        active_jobs = db.execute(
+            "SELECT job_id, device_ips_json, in_flight_device_ip "
+            "FROM active_jobs WHERE status = 'running'"
+        ).fetchall()
+
+        def replace_ip(value):
+            if isinstance(value, dict):
+                if old_ip in value and new_ip in value:
+                    raise ValueError("AP relocation active job recovery address is ambiguous")
+                return {
+                    (new_ip if key == old_ip else key): replace_ip(item)
+                    for key, item in value.items()
+                }
+            if isinstance(value, list):
+                return [replace_ip(item) for item in value]
+            if isinstance(value, str) and value == old_ip:
+                return new_ip
+            return value
+
+        for job in active_jobs:
+            try:
+                payload = json.loads(job["device_ips_json"])
+            except (TypeError, json.JSONDecodeError):
+                if job["in_flight_device_ip"] == old_ip:
+                    raise ValueError("AP relocation active job recovery data is invalid")
+                continue
+
+            updated_payload = replace_ip(payload)
+            updated_marker = (
+                new_ip if job["in_flight_device_ip"] == old_ip
+                else job["in_flight_device_ip"]
+            )
+            if updated_payload != payload or updated_marker != job["in_flight_device_ip"]:
+                db.execute(
+                    "UPDATE active_jobs SET device_ips_json = ?, in_flight_device_ip = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+                    (json.dumps(updated_payload), updated_marker, job["job_id"]),
+                )
         return True
 
 
