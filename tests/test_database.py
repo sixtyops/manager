@@ -756,6 +756,97 @@ class TestCPECache:
         assert [tuple(row) for row in configs] == [(old_ip, "hash-old")]
 
 
+class TestApAddressRelocation:
+    old_ip = "192.0.2.70"
+    new_ip = "192.0.2.71"
+    serial = "AP-SERIAL-70"
+
+    def _seed_ap(self, mock_db):
+        device_id = db.upsert_access_point(self.old_ip, "admin", "encrypted")
+        mock_db.execute(
+            "UPDATE devices SET uid = ?, uid_source = 'serial' WHERE id = ?",
+            (self.serial, device_id),
+        )
+        mock_db.commit()
+        return device_id
+
+    def test_relocation_moves_ap_and_current_references_in_one_transaction(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        db.upsert_cpe(self.old_ip, {"ip": "192.0.2.80", "mac": "00:11:22:33:44:55"})
+        db.save_active_job("job-1", "running", "[]", "firmware.bin", self.old_ip)
+        mock_db.execute(
+            "INSERT INTO device_update_history(ip, role, status) VALUES (?, 'ap', 'success')",
+            (self.old_ip,),
+        )
+        mock_db.commit()
+
+        assert db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+
+        device = mock_db.execute(
+            "SELECT id, ip, address_generation FROM devices WHERE id = ?", (device_id,)
+        ).fetchone()
+        assert tuple(device) == (device_id, self.new_ip, 1)
+        assert mock_db.execute(
+            "SELECT ip FROM access_points WHERE ip = ?", (self.new_ip,)
+        ).fetchone()
+        assert mock_db.execute(
+            "SELECT ap_ip FROM cpe_cache"
+        ).fetchone()["ap_ip"] == self.new_ip
+        assert mock_db.execute(
+            "SELECT in_flight_device_ip FROM active_jobs WHERE job_id = 'job-1'"
+        ).fetchone()[0] == self.new_ip
+        assert mock_db.execute(
+            "SELECT ip FROM device_update_history"
+        ).fetchone()[0] == self.old_ip
+
+    def test_relocation_rejects_taken_ip(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        db.upsert_switch(self.new_ip, "admin", "encrypted")
+
+        with pytest.raises(ValueError, match="owned by another device"):
+            db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+        assert mock_db.execute("SELECT ip FROM devices WHERE id = ?", (device_id,)).fetchone()[0] == self.old_ip
+
+    def test_relocation_rejects_wrong_serial(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+
+        with pytest.raises(ValueError, match="source identity"):
+            db.relocate_ap_address(device_id, "OTHER-SERIAL", self.old_ip, self.new_ip)
+        assert mock_db.execute("SELECT ip FROM devices WHERE id = ?", (device_id,)).fetchone()[0] == self.old_ip
+
+    def test_relocation_rejects_open_serial_conflict(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        mock_db.execute(
+            "INSERT INTO identity_conflicts(kind, value, device_ids, state, created_at, updated_at) "
+            "VALUES ('serial', ?, ?, 'open', 'now', 'now')",
+            (self.serial, f"[{device_id},999]"),
+        )
+        mock_db.commit()
+
+        with pytest.raises(ValueError, match="open identity conflict"):
+            db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+        assert mock_db.execute("SELECT ip FROM devices WHERE id = ?", (device_id,)).fetchone()[0] == self.old_ip
+
+    def test_relocation_rolls_back_on_child_reference_write_failure(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        db.upsert_cpe(self.old_ip, {"ip": "192.0.2.80", "mac": "00:11:22:33:44:55"})
+        mock_db.execute("""
+            CREATE TRIGGER reject_ap_relocation
+            BEFORE UPDATE OF ap_ip ON cpe_cache
+            BEGIN SELECT RAISE(ABORT, 'blocked AP cache update'); END
+        """)
+        mock_db.commit()
+
+        with pytest.raises(Exception, match="blocked AP cache update"):
+            db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+
+        assert tuple(mock_db.execute(
+            "SELECT ip, address_generation FROM devices WHERE id = ?", (device_id,)
+        ).fetchone()) == (self.old_ip, 0)
+        assert mock_db.execute("SELECT ip FROM access_points").fetchone()[0] == self.old_ip
+        assert mock_db.execute("SELECT ap_ip FROM cpe_cache").fetchone()[0] == self.old_ip
+
+
 class TestSettings:
     def test_get_default(self, mock_db):
         val = db.get_setting("schedule_enabled")

@@ -1594,6 +1594,92 @@ def relocate_cpe_cache(old_ap_ip: str, old_ip: str, new_ap_ip: str, new_ip: str,
         return True
 
 
+def relocate_ap_address(device_id: int, expected_serial: str, old_ip: str,
+                        new_ip: str) -> bool:
+    """Move one AP and its current IP references after identity confirmation.
+
+    Historical rows keep their original IP. Every current reference moves in
+    the same transaction, or the transaction leaves the database unchanged.
+    """
+    if (not isinstance(device_id, int) or isinstance(device_id, bool) or
+            device_id <= 0 or not isinstance(expected_serial, str) or
+            not expected_serial.strip() or not isinstance(old_ip, str) or
+            not old_ip.strip() or not isinstance(new_ip, str) or
+            not new_ip.strip() or old_ip == new_ip):
+        raise ValueError("AP relocation requires a device ID, serial, and distinct IPs")
+
+    expected_serial = expected_serial.strip()
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        source = db.execute(
+            "SELECT id, ip, role, uid, uid_source, address_generation "
+            "FROM devices WHERE id = ?", (device_id,),
+        ).fetchone()
+        if (source is None or source["ip"] != old_ip or source["role"] != "ap" or
+                source["uid"] != expected_serial or source["uid_source"] != "serial"):
+            # Permit a retry only when the same identity is already fully moved.
+            if (source is not None and source["ip"] == new_ip and
+                    source["role"] == "ap" and source["uid"] == expected_serial and
+                    source["uid_source"] == "serial"):
+                legacy = db.execute(
+                    "SELECT COUNT(*) FROM access_points WHERE ip = ?", (new_ip,)
+                ).fetchone()[0]
+                old_cache_refs = db.execute(
+                    "SELECT COUNT(*) FROM cpe_cache WHERE ap_ip = ?", (old_ip,)
+                ).fetchone()[0]
+                old_job_refs = db.execute(
+                    "SELECT COUNT(*) FROM active_jobs WHERE status = 'running' "
+                    "AND in_flight_device_ip = ?", (old_ip,),
+                ).fetchone()[0]
+                if legacy == 1 and old_cache_refs == 0 and old_job_refs == 0:
+                    return True
+            raise ValueError("AP relocation source identity or address does not match")
+
+        if db.execute(
+                "SELECT 1 FROM devices WHERE ip = ? AND id != ?", (new_ip, device_id)
+        ).fetchone():
+            raise ValueError("AP relocation destination is owned by another device")
+        if db.execute(
+                "SELECT 1 FROM identity_conflicts "
+                "WHERE kind = 'serial' AND value = ? AND state = 'open' LIMIT 1",
+                (expected_serial,),
+        ).fetchone():
+            raise ValueError("AP relocation serial has an open identity conflict")
+
+        legacy_source = db.execute(
+            "SELECT id FROM access_points WHERE ip = ? ORDER BY id", (old_ip,)
+        ).fetchall()
+        if len(legacy_source) != 1:
+            raise ValueError("AP relocation legacy source is missing or ambiguous")
+        if db.execute(
+                "SELECT 1 FROM access_points WHERE ip = ?", (new_ip,)
+        ).fetchone():
+            raise ValueError("AP relocation destination has a legacy AP owner")
+
+        cursor = db.execute(
+            "UPDATE devices SET ip = ?, address_generation = address_generation + 1 "
+            "WHERE id = ? AND ip = ? AND role = 'ap' AND uid = ? "
+            "AND uid_source = 'serial' AND address_generation = ?",
+            (new_ip, device_id, old_ip, expected_serial, source["address_generation"]),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("AP relocation source changed before update")
+
+        cursor = db.execute(
+            "UPDATE access_points SET ip = ? WHERE id = ? AND ip = ?",
+            (new_ip, legacy_source[0]["id"], old_ip),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("AP relocation legacy source changed before update")
+        db.execute("UPDATE cpe_cache SET ap_ip = ? WHERE ap_ip = ?", (new_ip, old_ip))
+        db.execute(
+            "UPDATE active_jobs SET in_flight_device_ip = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE status = 'running' AND in_flight_device_ip = ?",
+            (new_ip, old_ip),
+        )
+        return True
+
+
 def upsert_cpe(ap_ip: str, cpe_data: dict) -> bool:
     """Update a CPE observation. Return False when an identity conflict holds it."""
     with get_db() as db:
