@@ -26,7 +26,10 @@ def fixture_body(name):
     (None, None), ("", None), ("automatic", None), (4, None),
 ])
 def test_management_ip_mode_config_is_normalized(value, expected):
-    config = {"network": {"zones": {"wan": {"management": {"proto": value}}}}}
+    config = {"network": {"zones": {"wan": {
+        "mode": value,
+        "management": {"proto": "802.1q", "use_zone_ip": True},
+    }}}}
     assert TachyonClient._parse_config_management_ip_mode(config) == (True, True, expected)
 
 
@@ -35,7 +38,10 @@ def test_management_ip_mode_config_missing_key_is_unknown():
 
 
 def test_management_address_config_reads_ipaddr():
-    config = {"network": {"zones": {"wan": {"management": {"ipaddr": "192.0.2.10"}}}}}
+    config = {"network": {"zones": {"wan": {"management": {
+        "use_zone_ip": False,
+        "ip": {"enabled": True, "ipaddr": "192.0.2.10"},
+    }}}}}
     assert TachyonClient._parse_config_management_address(config) == "192.0.2.10"
 
 
@@ -84,7 +90,12 @@ async def test_management_mode_reads_config_and_reconciles_status(status_mode, c
             if config_mode == "__malformed__":
                 return 200, json.dumps({"network": {"zones": []}})
             return 200, json.dumps({"network": {"zones": {"wan": {
-                "management": {"proto": config_mode},
+                "mode": config_mode if config_mode in {"dhcp", "static"} else "static",
+                "management": {
+                    "proto": "802.1q",
+                    "use_zone_ip": config_mode in {"dhcp", "static"},
+                    "ip": {"enabled": False},
+                },
             }}}})
         raise AssertionError(endpoint)
     client._curl = AsyncMock(side_effect=curl)
@@ -92,6 +103,77 @@ async def test_management_mode_reads_config_and_reconciles_status(status_mode, c
     assert info.management_ip_mode == expected
     assert info.management_vlan_id == (None if status_mode == "__bad_status_json__" else 100)
     assert client._curl.await_args_list[-1].args == ("GET", "/cgi.lua/config")
+
+
+@pytest.mark.asyncio
+async def test_lab_zone_dhcp_config_passes_pre_update_management_gate():
+    from updater.app import _management_settings, _management_settings_changes
+
+    client = TachyonClient("192.0.2.10", "synthetic", "synthetic")
+    async def curl(method, endpoint):
+        if endpoint.endswith("type=zones"):
+            return 200, json.dumps({"zones": {"wan": {
+                "management_interface": "br-wan.12",
+                "mgmt_vlan_id": 12,
+            }}})
+        if endpoint == "/cgi.lua/config":
+            return 200, fixture_body("management_zone_dhcp.json")
+        if endpoint.endswith("type=system") or endpoint == "/cgi.lua/bootbank":
+            return 200, "{}"
+        if endpoint.endswith("type=interfaces"):
+            return 200, "{}"
+        raise AssertionError(endpoint)
+
+    client._curl = AsyncMock(side_effect=curl)
+    info = await client.get_device_info(include_management=True)
+    baseline = _management_settings(info)
+
+    assert baseline == {"vlan": 12, "ip_mode": "dhcp", "address": "192.0.2.10"}
+    assert baseline["vlan"] is not None
+    assert baseline["ip_mode"] in {"dhcp", "static"}
+    assert baseline["address"]
+    # An unchanged DHCP address sourced from the login IP remains a match.
+    assert _management_settings_changes(baseline, baseline) == []
+
+
+def test_zone_static_and_separate_static_config_fixtures():
+    zone_static = load_fixture("management_zone_static.json")
+    separate_static = load_fixture("management_separate_static.json")
+
+    assert TachyonClient._parse_config_management_ip_mode(zone_static) == (True, True, "static")
+    assert TachyonClient._parse_config_management_address(zone_static) is None
+    assert TachyonClient._parse_config_management_ip_mode(separate_static) == (True, True, "static")
+    assert TachyonClient._parse_config_management_address(separate_static) == "198.51.100.20"
+
+
+@pytest.mark.asyncio
+async def test_disabled_management_config_without_mode_fails_closed():
+    client = TachyonClient("192.0.2.10", "synthetic", "synthetic")
+    async def curl(method, endpoint):
+        if endpoint.endswith("type=zones"):
+            return 200, json.dumps({"zones": {"wan": {
+                "management_interface": "br-wan.12",
+                "mgmt_vlan_id": 12,
+                "management_ip_mode": "dhcp",
+            }}})
+        if endpoint == "/cgi.lua/config":
+            return 200, json.dumps({"network": {"zones": {"wan": {
+                "mode": "dhcp",
+                "management": {
+                    "proto": "802.1q",
+                    "use_zone_ip": False,
+                    "ip": {"enabled": False},
+                },
+            }}}})
+        if endpoint.endswith("type=system") or endpoint == "/cgi.lua/bootbank":
+            return 200, "{}"
+        if endpoint.endswith("type=interfaces"):
+            return 200, "{}"
+        raise AssertionError(endpoint)
+
+    client._curl = AsyncMock(side_effect=curl)
+    info = await client.get_device_info(include_management=True)
+    assert info.management_ip_mode is None
 
 
 def syntheticize_interface_macs(response):

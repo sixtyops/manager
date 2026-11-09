@@ -392,30 +392,51 @@ class TachyonClient:
     @staticmethod
     def _parse_config_management_ip_mode(config: Any) -> tuple[bool, bool, Optional[str]]:
         """Return config validity, mode presence, and its normalized value."""
-        if config is None:
-            return False, False, None
         if not isinstance(config, dict):
             return False, False, None
-        value = config
-        for key in ("network", "zones", "wan", "management", "proto"):
-            if not isinstance(value, dict):
-                return False, False, None
-            if key not in value:
-                return True, False, None
-            value = value[key]
-        return True, True, TachyonClient._normalize_management_ip_mode(value)
+        if "network" not in config:
+            return True, False, None
+        network = config["network"]
+        if not isinstance(network, dict):
+            return False, False, None
+        if "zones" not in network:
+            return True, False, None
+        zones = network["zones"]
+        if not isinstance(zones, dict):
+            return False, False, None
+        if "wan" not in zones:
+            return True, False, None
+        wan = zones["wan"]
+        if not isinstance(wan, dict):
+            return False, False, None
+        if "management" not in wan:
+            return True, False, None
+        management = wan["management"]
+        if not isinstance(management, dict):
+            return False, False, None
+
+        # The management protocol is the VLAN tag protocol (for example,
+        # 802.1q). The IP mode comes from the selected address source.
+        if management.get("use_zone_ip") is True:
+            return True, True, TachyonClient._normalize_management_ip_mode(wan.get("mode"))
+        ip_config = management.get("ip")
+        if isinstance(ip_config, dict) and ip_config.get("enabled") is True:
+            return True, True, "static"
+        return True, True, None
 
     @staticmethod
     def _parse_config_management_address(config: Any) -> Optional[str]:
         """Return the configured management address when the config has one."""
-        value = config
-        for key in ("network", "zones", "wan", "management"):
-            if not isinstance(value, dict) or key not in value:
-                return None
-            value = value[key]
-        if not isinstance(value, dict):
+        if not isinstance(config, dict):
             return None
-        address = value.get("ipaddr", value.get("address"))
+        network = config.get("network")
+        zones = network.get("zones") if isinstance(network, dict) else None
+        wan = zones.get("wan") if isinstance(zones, dict) else None
+        management = wan.get("management") if isinstance(wan, dict) else None
+        ip_config = management.get("ip") if isinstance(management, dict) else None
+        if not isinstance(ip_config, dict) or ip_config.get("enabled") is not True:
+            return None
+        address = ip_config.get("ipaddr")
         return address.strip() if isinstance(address, str) and address.strip() else None
 
     async def _curl(
@@ -644,7 +665,7 @@ class TachyonClient:
                 info.management_address = self._parse_config_management_address(config) or self.ip
                 if not status_valid or config_status != "ok" or not config_valid:
                     info.management_ip_mode = None
-                elif (status_present and status_mode is None) or (config_present and config_mode is None):
+                elif not config_present or (status_present and status_mode is None) or config_mode is None:
                     info.management_ip_mode = None
                 elif status_present and config_present and status_mode != config_mode:
                     info.management_ip_mode = None

@@ -1,0 +1,19 @@
+{
+  "network": {
+    "zones": {
+      "wan": {
+        "mode": "static",
+        "macaddr": "02:00:00:00:00:02",
+        "management": {
+          "proto": "802.1q",
+          "use_zone_ip": true,
+          "vlan": 12,
+          "ip": {
+            "enabled": false,
+            "ipaddr": "192.0.2.20"
+          }
+        }
+      }
+    }
+  }
+}

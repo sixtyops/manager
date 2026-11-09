@@ -23,3 +23,9 @@ management alias; it matches `eth0` and `br-wan`.
 
 Status reads do not expose whether management addressing uses DHCP or a static
 address.
+
+`management_zone_dhcp.json`, `management_zone_static.json`, and
+`management_separate_static.json` contain sanitized network config shapes.
+They use documentation IP addresses and fake MAC addresses. The `proto` field
+is the VLAN tag protocol; the IP mode comes from the WAN zone or the enabled
+separate management address.
