@@ -280,6 +280,7 @@ class TachyonClient:
         # for the AP's radio, used by the link-budget UI.
         self.last_radio_params: Optional[Dict[str, Any]] = None
         self.last_connected_cpes_valid = False
+        self.last_connected_aps_valid = False
         self.last_reboot_deadline: Optional[float] = None
 
     @staticmethod
@@ -1278,6 +1279,41 @@ class TachyonClient:
             logger.error(f"Failed to parse wireless status from {self.ip}: {e}")
 
         return cpes
+
+    async def get_connected_aps(self) -> List[Dict[str, Any]]:
+        """Read AP peer locators from a CPE wireless status response."""
+        self.last_connected_aps_valid = False
+        status, body = await self._curl("GET", "/cgi.lua/status?type=wireless,zones")
+        if status != 200:
+            logger.warning("Failed to get wireless status from %s: HTTP %s", self.ip, status)
+            return []
+
+        try:
+            data = json.loads(body)
+            wireless = data.get("wireless") if isinstance(data, dict) else None
+            peers = wireless.get("peers") if isinstance(wireless, dict) else None
+            if not isinstance(peers, list):
+                logger.error("Wireless peer data is unavailable from %s", self.ip)
+                return []
+            self.last_connected_aps_valid = True
+            aps = []
+            for peer in peers:
+                if not isinstance(peer, dict):
+                    continue
+                raw_mac = peer.get("mac")
+                mac = self._normalize_mac(raw_mac)
+                if raw_mac is not None and mac is None:
+                    logger.warning("Ignoring invalid MAC for peer at %s", peer.get("ipv4", ""))
+                aps.append({
+                    "ip": peer.get("ipv4", ""),
+                    "mac": mac,
+                    "system_name": peer.get("system_name"),
+                    "model": peer.get("model"),
+                })
+            return aps
+        except (json.JSONDecodeError, TypeError, AttributeError) as e:
+            logger.error("Failed to parse wireless status from %s: %s", self.ip, e)
+            return []
 
     @staticmethod
     def _counter(value: Any) -> Optional[int]:
