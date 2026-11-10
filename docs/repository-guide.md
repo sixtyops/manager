@@ -26,6 +26,7 @@ SQLite, and Docker. Paths in the table are relative to the repository root.
 | `docs/north-star.md` | Product direction (v2: Tachyon firmware automation) |
 | `docs/rearchitecture.md` | Rearchitecture decisions, feature disposition, target layout |
 | `docs/rollout-logic.md` | Shipped serial queue and clearly marked target safety rules |
+| `docs/address-change-recovery.md` | Status and next steps for Tachyon AP address-change recovery (epic #782) |
 | `tests/integration/` | Integration tests against real hardware (requires `SIXTYOPS_TEST_URL`) |
 
 ## Strategy & Roadmap
