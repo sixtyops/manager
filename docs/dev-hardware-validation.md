@@ -113,19 +113,22 @@ password hashes remain unchanged through the full-config round trip.
 Power-cycle the port in this order:
 
 1. Set PoE to `false` and apply it. Read back the config value for `poe` and
-   Ethernet status values `poe_out` and `link` twice.
+   Ethernet status values `poe_out`, `poe_fault`, and `link` twice.
 2. Wait 15 seconds.
-3. Set PoE to `true` and apply it. Read back `poe` and status values `poe_out`
-   and `link` twice.
+3. Set PoE to `true` and apply it. Read back `poe` and status values
+   `poe_out`, `poe_fault`, and `link` twice.
 
 If any step after PoE is disabled fails, restore PoE to `true` in a cleanup
 step. Run the same dry-run and apply sequence for the restore, then read back
-`poe`, `poe_out`, and `link` twice. Do not release the shared lock until PoE
-has been restored or the restore failure has been recorded.
+`poe`, `poe_out`, `poe_fault`, and `link` twice. Do not release the shared lock
+until PoE has been restored or the restore failure has been recorded.
 
-A TNA-301 on firmware 1.15.x answers again about 4 to 5 minutes after PoE
-returns. Its management address can change after reboot. Find it through the
-CPE's wireless peer report, then confirm its serial; see
+A TNA-301 on firmware 1.15.1 answers about 75 to 85 seconds after PoE returns.
+On firmware 1.15.0, it took about 4.5 minutes. Wait about 90 seconds after boot
+before the first login, then probe every 30 seconds. Fast repeated logins
+during boot preceded web server hangs. Its management address can change after
+reboot. Find it through the CPE's wireless peer report, then confirm its serial;
+see
 [#777](https://github.com/sixtyops/manager/issues/777). Do not use the TNA-30x
 1.15.0 image for lab runs. It has a known web server hang that 1.15.1 fixes.
 Read the vendor release notes before any lab flash.
