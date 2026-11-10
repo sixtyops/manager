@@ -108,26 +108,45 @@ credential-profile and certificate-pinning proposals are not planned.
 
 ### Key points
 
-- *(Target, not shipped.)* Update recovery uses the current address first,
-  then checks AP-reported CPE candidates by the saved radio MAC.
-- Recovery authenticates with the same credential pair selected for the
-  update and confirms identity with a serial read.
-- A missing or different serial, conflicting candidates, or ambiguity stops
-  recovery. A MAC only selects a candidate; it does not prove identity.
-- Recovery does not scan networks or promote addresses outside the active
-  update operation.
+- **Shipped in [PR #706](https://github.com/sixtyops/manager/pull/706):** CPE
+  recovery checks AP peer reports after an address change. The saved radio
+  MAC selects a candidate; authenticated serial confirms it.
+- **Shipped in [PR #792](https://github.com/sixtyops/manager/pull/792):** polling
+  records authenticated serial identity.
+- **Shipped in [PR #788](https://github.com/sixtyops/manager/pull/788):** a
+  checked transaction moves an AP record to its confirmed address.
+- **Shipped in [PR #787](https://github.com/sixtyops/manager/pull/787):** a CPE
+  reads its connected APs, and an AP reports its radio MAC.
+- **Planned in [issue #786](https://github.com/sixtyops/manager/issues/786):**
+  update recovery uses those reads to re-find an AP after its address changes.
+- Tachyon confirmed that a modem firmware update can change the AP management
+  bridge MAC. Since DHCP assigns a lease per MAC, the AP management address
+  can change. Tachyon targets a fix in firmware 1.15.2 ([issue #777](https://github.com/sixtyops/manager/issues/777)).
+- A MAC only selects a candidate; it does not prove identity. Recovery
+  confirms identity with an authenticated serial read. It does not scan
+  networks or promote addresses outside the active update operation.
 
 ### Detail
 
-*(today: the poller matches by IP. `devices.ip` is `TEXT NOT NULL UNIQUE`,
-so one IP maps to one row. A nullable `devices.ip` is future work.)*
+*(Shipped status: polling records authenticated serial identity in
+[PR #792](https://github.com/sixtyops/manager/pull/792). `devices.ip` remains
+`TEXT NOT NULL UNIQUE`, so one IP maps to one row.)*
 
-For update recovery, save the expected serial, model, peer radio MAC, and
-current location before reboot. Try the current address first. For a missing
-CPE, inspect fresh successful peer-list reports from APs Manager polls. Read
-only unicast addresses reported for the saved radio MAC. Use the same
-credential pair selected for the update. Do not use another AP's credentials,
-global credentials, a subnet scan, a device name, or certificate pinning.
+For CPE recovery, save the expected serial, model, peer radio MAC, and current
+location before reboot. Try the current address first. For a missing CPE,
+inspect fresh successful peer-list reports from APs Manager polls. Read only
+unicast addresses reported for the saved radio MAC. Use the same credential
+pair selected for the update. Do not use another AP's credentials, global
+credentials, a subnet scan, a device name, or certificate pinning. This CPE
+recovery shipped in [PR #706](https://github.com/sixtyops/manager/pull/706).
+
+**AP recovery is planned in [issue #786](https://github.com/sixtyops/manager/issues/786).**
+The planned flow reads AP peer reports from its saved CPEs, selects candidates
+by the AP radio MAC, and confirms the AP serial and model before moving its
+record. The checked AP move shipped in
+[PR #788](https://github.com/sixtyops/manager/pull/788); AP re-find is not
+shipped. Until re-find ships, an AP whose management address changes after an
+update times out at its old address and stops the queue.
 
 Accept one candidate only when its authenticated serial matches the saved
 serial and its model remains compatible. Missing or different serials,

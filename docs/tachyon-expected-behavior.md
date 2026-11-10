@@ -47,9 +47,25 @@ The capture above documents observable fields. It does not define recovery thres
 
 ## AP update CPE rejoin
 
-**Key points:** After an AP firmware update recovers, Manager reboots each
-reachable CPE saved in the pre-update peer list before it checks peer return.
+**Key points:** Manager calls `POST /reboot` for each reachable CPE saved in
+the pre-update peer list, then checks peer return. On firmware 1.15.1, this
+endpoint returns HTTP 302 and does not reboot the device. The CPE reboot step
+does not reboot the CPE. This behavior is tracked in [issue #790](https://github.com/sixtyops/manager/issues/790).
 
-**Detail:** The repository documents `POST /reboot` and has no observed or
-documented wireless-only restart call. Manager uses the existing reboot call
-for this step. It skips and logs CPEs that it cannot reach.
+**Detail:** The device web UI reboots with `POST /cgi.lua/reboot`. Manager's
+reboot method uses `POST /reboot`; the issue tracks changing the method and
+checking that a reboot occurred. Manager skips and logs CPEs it cannot reach.
+
+## Management MAC and address after an update
+
+**Key points:** Tachyon confirmed that an upgrade that updates the 60 GHz
+modem firmware can change the MAC used by the AP management bridge. DHCP can
+then give the new MAC a different management address. Tachyon targets a fix in
+firmware 1.15.2. Until the fleet runs a fixed release, Manager must re-find an
+AP after any update.
+
+**Detail:** The bridge can use the Ethernet MAC or the radio MAC. DHCP assigns
+each MAC its own lease, so a change in the bridge MAC can change the AP's
+address. The defect was observed on firmware 1.12.3, 1.15.0, and 1.15.1,
+mostly after firmware changes and once after a cold boot. See [issue #777](https://github.com/sixtyops/manager/issues/777).
+AP re-find through its CPEs is planned in [issue #786](https://github.com/sixtyops/manager/issues/786).
