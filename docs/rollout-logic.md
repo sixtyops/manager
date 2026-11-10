@@ -115,9 +115,10 @@ credential-profile and certificate-pinning proposals are not planned.
   records authenticated serial identity.
 - **Shipped in [PR #788](https://github.com/sixtyops/manager/pull/788):** a
   checked transaction moves an AP record to its confirmed address.
+- **Shipped in [PR #787](https://github.com/sixtyops/manager/pull/787):** a CPE
+  reads its connected APs, and an AP reports its radio MAC.
 - **Planned in [issue #786](https://github.com/sixtyops/manager/issues/786):**
-  recovery re-finds an AP through its CPEs after its address changes during
-  update recovery.
+  update recovery uses those reads to re-find an AP after its address changes.
 - Tachyon confirmed that a modem firmware update can change the AP management
   bridge MAC. Since DHCP assigns a lease per MAC, the AP management address
   can change. Tachyon targets a fix in firmware 1.15.2 ([issue #777](https://github.com/sixtyops/manager/issues/777)).
