@@ -90,6 +90,60 @@ async def test_same_ip_is_confirmed_by_serial_without_relocation(monkeypatch):
     assert OLD_IP in removed
 
 
+@pytest.mark.parametrize("reported_mac", ["02:00:00:00:00:21", "02:00:00:00:00:20"])
+@pytest.mark.asyncio
+async def test_ap_recovery_uses_saved_cpe_peer_and_commits_verified_move(monkeypatch, reported_mac):
+    class APClient:
+        def __init__(self):
+            self.ip = OLD_IP
+            self._client = SimpleNamespace(ip=OLD_IP, _base_url=f"https://{OLD_IP}", _token=None)
+
+        async def connect(self):
+            return self.ip == NEW_IP
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial=SERIAL, model="TNA-301")
+
+    class CPEClient:
+        last_connected_aps_valid = True
+
+        async def connect(self):
+            return True
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial="CPE-SERIAL", model="TNA-303X")
+
+        async def get_connected_aps(self):
+            return [{"ip": NEW_IP, "mac": reported_mac}]
+
+    job = recovery_job(role="ap")
+    job.device_firmware_map[OLD_IP] = "/tmp/tna-30x-1.15.1.bin"
+    job.credentials = {OLD_IP: ("user", "password"), NEW_IP: ("user", "password")}
+    job.recovery_locators[OLD_IP].update({
+        "ap_identity": {
+            "device_id": 1,
+            "ethernet_mac": "02:00:00:00:00:21",
+            "radio_mac": "02:00:00:00:00:20",
+        },
+        "management_baseline": {"vlan": 12, "ip_mode": "dhcp", "address": OLD_IP},
+        "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+    })
+    monkeypatch.setattr(app, "get_poller", lambda: None)
+    monkeypatch.setattr(app.db, "save_active_job", lambda *args: None)
+    monkeypatch.setattr(app, "_has_open_recovery_identity_conflict", lambda *_args: False)
+    relocate = MagicMock(return_value=True)
+    monkeypatch.setattr(app.db, "relocate_ap_address", relocate)
+    monkeypatch.setattr(app, "get_driver", lambda _vendor: lambda *_args, **_kwargs: CPEClient())
+    client = APClient()
+    callback = app._make_recovery_callback(job, OLD_IP, client, SERIAL, "TNA-301", RADIO_MAC)
+
+    assert await callback(app.monotonic() + 20, app.monotonic())
+    assert client.ip == NEW_IP
+    assert job.recovery_locators[OLD_IP]["ip"] == NEW_IP
+    assert job.recovery_locators[OLD_IP]["address_changed"] is True
+    relocate.assert_called_once_with(1, SERIAL, OLD_IP, NEW_IP)
+
+
 @pytest.mark.asyncio
 async def test_open_identity_conflict_stops_recovery(monkeypatch):
     connection = SimpleNamespace(execute=lambda query: SimpleNamespace(

@@ -4117,34 +4117,61 @@ def _management_settings(info) -> dict:
 
 def _management_settings_changes(before: dict, after: dict) -> list[str]:
     changes = []
+    if before.get("vlan") is None or after.get("vlan") is None:
+        changes.append("management VLAN is unavailable after update")
+    if before.get("ip_mode") not in {"static", "dhcp"} or after.get("ip_mode") not in {"static", "dhcp"}:
+        changes.append("management IP mode is unavailable after update")
+    if not before.get("address") or not after.get("address"):
+        changes.append("management address is unavailable after update")
     if before["vlan"] != after["vlan"]:
         changes.append(f"management VLAN changed from {before['vlan']} to {after['vlan']} after update")
     if before["ip_mode"] != after["ip_mode"]:
         changes.append(f"management IP mode changed from {before['ip_mode']} to {after['ip_mode']} after update")
     if before["address"] != after["address"]:
-        changes.append("management address changed after update")
+        if not (
+            before["ip_mode"] == after["ip_mode"] == "dhcp"
+            and before["vlan"] == after["vlan"]
+        ):
+            changes.append("management address changed after update")
     return changes
 
 
 def _persist_recovery_locator(job: "UpdateJob", original_ip: str) -> None:
     """Persist identity and the current transport locator with the active job."""
+    ip_map = {
+        ip: job.recovery_locators.get(ip, {}).get("ip", ip)
+        for ip in job.devices
+    }
+    recovery = {
+        ip_map.get(ip, ip): {**locator, "original_ip": ip}
+        for ip, locator in job.recovery_locators.items()
+    }
     payload = {
-        "devices": list(job.devices),
-        "order": job.device_order,
-        "recovery": job.recovery_locators,
+        "devices": [ip_map.get(ip, ip) for ip in job.devices],
+        "order": [ip_map.get(ip, ip) for ip in job.device_order],
+        "recovery": recovery,
     }
     db.save_active_job(
         job.job_id, "running", json.dumps(payload),
-        Path(job.device_firmware_map.get(original_ip, "")).name, original_ip,
+        Path(job.device_firmware_map.get(original_ip, "")).name,
+        job.recovery_locators.get(original_ip, {}).get("ip", original_ip),
     )
 
 
 def _persist_device_result(job: "UpdateJob", ip: str) -> None:
     """Clear the in-flight marker only after the device result is durable."""
+    ip_map = {
+        device_ip: job.recovery_locators.get(device_ip, {}).get("ip", device_ip)
+        for device_ip in job.devices
+    }
+    recovery = {
+        ip_map.get(device_ip, device_ip): {**locator, "original_ip": device_ip}
+        for device_ip, locator in job.recovery_locators.items()
+    }
     payload = {
-        "devices": list(job.devices),
-        "order": job.device_order,
-        "recovery": job.recovery_locators,
+        "devices": [ip_map.get(device_ip, device_ip) for device_ip in job.devices],
+        "order": [ip_map.get(device_ip, device_ip) for device_ip in job.device_order],
+        "recovery": recovery,
     }
     db.save_active_job(
         job.job_id, "running", json.dumps(payload),
@@ -4161,12 +4188,33 @@ def _set_driver_locator(client, ip: str) -> None:
     inner._token = None
 
 
+def _recovery_credentials(job, ip: str, fallback_ip: str = None):
+    """Read credentials from the active job or the saved Manager device row."""
+    credentials = job.credentials.get(ip)
+    if credentials:
+        return credentials
+    device = db.get_device(ip)
+    if device and device.get("username") and device.get("password"):
+        return device["username"], device["password"]
+    if fallback_ip:
+        credentials = job.credentials.get(fallback_ip)
+        if credentials:
+            return credentials
+        device = db.get_device(fallback_ip)
+        if device and device.get("username") and device.get("password"):
+            return device["username"], device["password"]
+    return None
+
+
 def _make_recovery_callback(job, original_ip, client, expected_serial,
                             expected_model, radio_mac):
     """Build bounded read-only recovery for the current Tachyon reboot."""
     current_ip = job.recovery_locators.get(original_ip, {}).get("ip", original_ip)
     failure = {"reason": "device did not return at its current address"}
     confirmed_addresses = set()
+    next_ap_round = 0.0
+    ap_rounds = 0
+    ap_candidates = set()
 
     def invalidate_confirmed_sessions():
         poller = get_poller()
@@ -4192,8 +4240,102 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
         return info
 
     async def recover_once(deadline, reboot_started):
-        nonlocal current_ip
+        nonlocal current_ip, next_ap_round, ap_rounds
         info = await confirm(current_ip)
+        if info is None and job.devices[original_ip].role == "ap":
+            locator = job.recovery_locators.get(original_ip, {})
+            ap_identity = locator.get("ap_identity", {})
+            ethernet_mac = ap_identity.get("ethernet_mac")
+            saved_radio_mac = ap_identity.get("radio_mac")
+            macs = {ethernet_mac, saved_radio_mac} - {None}
+            if (not ap_identity.get("device_id") or not expected_serial or not expected_model
+                    or not ethernet_mac or not saved_radio_mac or not locator.get("management_baseline")
+                    or not locator.get("cpe_locators")):
+                failure["reason"] = "Device not found after update"
+                return False
+            if monotonic() >= deadline or ap_rounds >= 20:
+                failure["reason"] = "Device not found after update"
+                return False
+            wait = max(0, next_ap_round - monotonic())
+            if wait:
+                await asyncio.sleep(min(wait, max(0, deadline - monotonic())))
+            ap_rounds += 1
+            next_ap_round = monotonic() + 30
+            addresses = {current_ip}
+            for saved in locator["cpe_locators"]:
+                if monotonic() >= deadline:
+                    break
+                credentials = _recovery_credentials(job, saved["ip"], original_ip)
+                if not credentials:
+                    continue
+                timeout = max(1, min(30, int(deadline - monotonic())))
+                cpe = get_driver("tachyon")(saved["ip"], *credentials, timeout=timeout)
+                try:
+                    if await asyncio.wait_for(cpe.connect(), timeout=deadline - monotonic()) is not True:
+                        continue
+                    cpe_info = await asyncio.wait_for(cpe.get_device_info(), timeout=deadline - monotonic())
+                    if (getattr(cpe_info, "serial", None) != saved["serial"]
+                            or (saved.get("model") and getattr(cpe_info, "model", "").lower()
+                                != saved["model"].lower())):
+                        continue
+                    aps = await asyncio.wait_for(cpe.get_connected_aps(), timeout=deadline - monotonic())
+                    if getattr(cpe, "last_connected_aps_valid", True) is not True:
+                        continue
+                    for ap in aps:
+                        if ap.get("mac") in macs:
+                            address = ap.get("ip")
+                            try:
+                                parsed = ipaddress.IPv4Address(address)
+                            except (ValueError, TypeError):
+                                continue
+                            if not (parsed.is_multicast or parsed.is_unspecified
+                                    or parsed.is_loopback or parsed.is_link_local):
+                                addresses.add(str(parsed))
+                except Exception:
+                    continue
+            new_addresses = addresses - ap_candidates
+            ap_candidates.update(new_addresses)
+            if len(ap_candidates) > 32:
+                failure["reason"] = "Device not found after update"
+                return False
+            matches = []
+            for address in addresses:
+                if monotonic() >= deadline:
+                    failure["reason"] = "Device not found after update"
+                    return False
+                _set_driver_locator(client, address)
+                try:
+                    if await asyncio.wait_for(client.connect(), timeout=deadline - monotonic()) is not True:
+                        continue
+                    candidate_info = await asyncio.wait_for(client.get_device_info(), timeout=deadline - monotonic())
+                except Exception:
+                    continue
+                candidate_model = getattr(candidate_info, "model", None)
+                if (getattr(candidate_info, "serial", None) == expected_serial
+                        and isinstance(candidate_model, str)
+                        and candidate_model.lower() == expected_model.lower()):
+                    matches.append((address, candidate_info))
+            if len(matches) != 1:
+                failure["reason"] = (
+                    "Ambiguous AP candidates after update; multiple addresses matched the expected identity"
+                    if len(matches) > 1 else "Device not found after update"
+                )
+                return False
+            candidate, info = matches[0]
+            if candidate != current_ip:
+                if any(_has_open_recovery_identity_conflict(expected_serial, mac) for mac in macs):
+                    failure["reason"] = "Device not found after update"
+                    return False
+                try:
+                    db.relocate_ap_address(ap_identity["device_id"], expected_serial, current_ip, candidate)
+                except Exception:
+                    failure["reason"] = "Device not found after update"
+                    return False
+                current_ip = candidate
+                locator["ip"] = candidate
+                locator["address_changed"] = True
+                _persist_recovery_locator(job, original_ip)
+            return True
         parent = job.recovery_locators.get(original_ip, {}).get(
             "parent_ap", job.devices[original_ip].parent_ap
         )
@@ -4316,15 +4458,64 @@ async def _read_cpe_eth0_link(job, ap_ip, peer):
 
 async def _capture_ap_recovery_baseline(job, ap_ip, ap_client):
     """Record AP peers and each CPE's reported eth0 link state, if present."""
-    peers = await _read_ap_recovery_peers(ap_client)
-    if not peers and job.ap_cpe_map.get(ap_ip):
-        raise RuntimeError("The AP peer list is unavailable for recovery")
+    try:
+        peers = await _read_ap_recovery_peers(ap_client)
+    except RuntimeError:
+        peers = {}
     baseline = {}
+    cpe_locators = []
     for mac, peer in peers.items():
+        serial = None
+        cpe_info = None
+        cpe_device = db.get_device(peer.ip) if hasattr(job, "recovery_locators") else None
+        credentials = _recovery_credentials(job, peer.ip, ap_ip)
+        if credentials:
+            try:
+                cpe_client = get_driver("tachyon")(peer.ip, *credentials)
+                if await cpe_client.connect() is True:
+                    cpe_info = await cpe_client.get_device_info()
+                    serial = getattr(cpe_info, "serial", None)
+            except Exception:
+                pass
+        if serial:
+            if not hasattr(job, "recovery_locators"):
+                cpe_device = None
+            cpe_locators.append({
+                "device_id": cpe_device.get("id") if cpe_device else None,
+                "ip": peer.ip, "serial": serial,
+                "model": getattr(cpe_info, "model", None), "mac": mac,
+                "credential_ref": cpe_device.get("id") if cpe_device else ap_ip,
+            })
+        try:
+            link_up = await _read_cpe_eth0_link(job, ap_ip, peer)
+        except Exception:
+            link_up = None
         baseline[mac] = {
             "ip": peer.ip,
-            "eth0_link_was_up": await _read_cpe_eth0_link(job, ap_ip, peer),
+            "eth0_link_was_up": link_up,
         }
+    if callable(getattr(ap_client, "get_ap_radio_mac", None)):
+        info = await ap_client.get_device_info()
+        ethernet_mac = _normalize_recovery_mac(getattr(info, "mac", None))
+        radio_mac = _normalize_recovery_mac(await ap_client.get_ap_radio_mac())
+        device = db.get_device(ap_ip)
+        management = _management_settings(info)
+        if not (getattr(info, "serial", None) and getattr(info, "model", None)
+                and ethernet_mac and radio_mac and device and device.get("id")
+                and management["vlan"] is not None
+                and management["ip_mode"] in {"static", "dhcp"}
+                and management["address"]):
+            raise RuntimeError("AP identity or management baseline is unavailable before firmware update")
+        if locator_serial := job.recovery_locators.get(ap_ip, {}).get("serial"):
+            if getattr(info, "serial", None) != locator_serial:
+                raise RuntimeError("Expected AP serial changed before recovery baseline capture")
+        locator = job.recovery_locators.setdefault(ap_ip, {})
+        locator["ap_identity"] = {
+            "device_id": device["id"], "ethernet_mac": ethernet_mac, "radio_mac": radio_mac,
+        }
+        locator["cpe_locators"] = cpe_locators
+        locator["management_baseline"] = management
+        _persist_recovery_locator(job, ap_ip)
     return {"peers": baseline}
 
 
@@ -6658,6 +6849,9 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 device_status.smoke_warnings = [device_status.error]
                 device_status.progress_message = f"{prefix}{device_status.error}"
                 logger.warning(f"Smoke test error for {ip}: {e}")
+
+        if device_status.status == "success" and job.recovery_locators.get(ip, {}).get("address_changed"):
+            logger.info("Address changed after update; identity verified")
 
         # Request job cancellation after each smoke failure.
         if smoke_failed:

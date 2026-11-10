@@ -83,13 +83,14 @@ async def test_baseline_records_unknown_when_eth0_has_no_link_field(monkeypatch)
     {"read_state": "unknown", "reason": "invalid_json", "link_up": None},
     None,
 ])
-async def test_baseline_fails_closed_when_eth0_read_is_unavailable(monkeypatch, state):
+async def test_baseline_keeps_unknown_eth0_state_when_read_is_unavailable(monkeypatch, state):
     cpe = CPE(link=None)
     cpe.get_eth0_recovery_state.return_value = state
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: lambda *_args: cpe)
 
-    with pytest.raises(RuntimeError, match="eth0 link state is unavailable"):
-        await app_module._capture_ap_recovery_baseline(_job(), AP_IP, AP([_peer()]))
+    baseline = await app_module._capture_ap_recovery_baseline(_job(), AP_IP, AP([_peer()]))
+
+    assert baseline["peers"][RADIO]["eth0_link_was_up"] is None
 
 
 @pytest.mark.asyncio
@@ -114,11 +115,12 @@ async def test_recovery_skips_only_eth0_link_check_for_unknown_baseline(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_baseline_fails_closed_when_ap_peer_report_is_invalid():
+async def test_baseline_skips_invalid_cpe_peer_report_without_blocking_ap_write():
     ap = AP([SimpleNamespace(mac="not-a-mac", ip=CPE_IP)])
 
-    with pytest.raises(RuntimeError, match="unusable MAC"):
-        await app_module._capture_ap_recovery_baseline(_job(), AP_IP, ap)
+    baseline = await app_module._capture_ap_recovery_baseline(_job(), AP_IP, ap)
+
+    assert baseline == {"peers": {}}
 
 
 @pytest.mark.asyncio

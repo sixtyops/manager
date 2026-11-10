@@ -146,6 +146,29 @@ def test_zone_static_and_separate_static_config_fixtures():
     assert TachyonClient._parse_config_management_address(separate_static) == "198.51.100.20"
 
 
+@pytest.mark.parametrize(("after", "expected"), [
+    ({"vlan": 12, "ip_mode": "dhcp", "address": "192.0.2.11"}, []),
+    ({"vlan": 20, "ip_mode": "dhcp", "address": "192.0.2.11"}, [
+        "management VLAN changed from 12 to 20 after update",
+        "management address changed after update",
+    ]),
+    ({"vlan": 12, "ip_mode": "static", "address": "192.0.2.11"}, [
+        "management IP mode changed from dhcp to static after update",
+        "management address changed after update",
+    ]),
+    ({"vlan": 12, "ip_mode": None, "address": "192.0.2.11"}, [
+        "management IP mode is unavailable after update",
+        "management IP mode changed from dhcp to None after update",
+        "management address changed after update",
+    ]),
+])
+def test_management_address_change_requires_verified_dhcp_settings(after, expected):
+    from updater.app import _management_settings_changes
+
+    before = {"vlan": 12, "ip_mode": "dhcp", "address": "192.0.2.10"}
+    assert _management_settings_changes(before, after) == expected
+
+
 @pytest.mark.asyncio
 async def test_disabled_management_config_without_mode_fails_closed():
     client = TachyonClient("192.0.2.10", "synthetic", "synthetic")
