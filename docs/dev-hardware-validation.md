@@ -77,6 +77,62 @@ each change in the lead artifacts. This approval covers dedicated test lab
 devices and the dev host environment. It does not cover production devices,
 stable releases, dev releases, or other hosts.
 
+### Power-cycle a lab AP through the switch
+
+**Key points:** Use this procedure when a lab AP answers ping but its web
+service hangs, or when a run needs a clean reboot without a firmware write.
+The owner approved this method on 2026-11-09. Hold the shared hardware lock
+before changing PoE.
+
+**Detail:** Find the AP's switch port in Manager's `switch_bridge_entries`
+table. Match the AP MAC address and the CPE MAC address behind it; both appear
+on the same switch port. Record the switch and port before continuing.
+
+The TNS-100 controls PoE with `ethernet.ports.<port>.poe`. The live Ethernet
+status is available from `GET /cgi.lua/status?type=ethernet`. For the port,
+check `poe_out`, `poe_fault`, and `link`.
+
+Hold the shared dev hardware lock with a detached process on the dev host:
+
+```sh
+ssh <dev host alias> 'setsid nohup flock -w 300 /var/lock/sixtyops-dev-hardware.lock sleep <seconds> >/dev/null 2>&1 < /dev/null & echo $!'
+```
+
+Confirm that the lock is held with
+`flock -n /var/lock/sixtyops-dev-hardware.lock -c true`; it must fail while the
+holder runs. Release the lock by stopping the printed PID and its child, then
+confirm that the same `flock -n` command succeeds.
+
+Use `TachyonClient.get_config()` to read the full config. Change only
+`ethernet.ports.<port>.poe` and pass the full config to
+`TachyonClient.apply_config()`. First call it with `dry_run=True`; after the
+dry run succeeds, apply the same config with `preserve_user_passwords=True`.
+Pass `preserve_user_passwords=True` on the dry run as well, so stored user
+password hashes remain unchanged through the full-config round trip.
+
+Power-cycle the port in this order:
+
+1. Set PoE to `false` and apply it. Read back the config value for `poe` and
+   Ethernet status values `poe_out`, `poe_fault`, and `link` twice.
+2. Wait 15 seconds.
+3. Set PoE to `true` and apply it. Read back `poe` and status values
+   `poe_out`, `poe_fault`, and `link` twice.
+
+If any step after PoE is disabled fails, restore PoE to `true` in a cleanup
+step. Run the same dry-run and apply sequence for the restore, then read back
+`poe`, `poe_out`, `poe_fault`, and `link` twice. Do not release the shared lock
+until PoE has been restored or the restore failure has been recorded.
+
+A TNA-301 on firmware 1.15.1 answers about 75 to 85 seconds after PoE returns.
+On firmware 1.15.0, it took about 4.5 minutes. Wait about 90 seconds after boot
+before the first login, then probe every 30 seconds. Fast repeated logins
+during boot preceded web server hangs. Its management address can change after
+reboot. Find it through the CPE's wireless peer report, then confirm its serial;
+see
+[#777](https://github.com/sixtyops/manager/issues/777). Do not use the TNA-30x
+1.15.0 image for lab runs. It has a known web server hang that 1.15.1 fixes.
+Read the vendor release notes before any lab flash.
+
 ### Dev host run procedure
 
 The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
