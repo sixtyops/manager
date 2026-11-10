@@ -215,6 +215,81 @@ async def test_peer_list_fixture_rejects_invalid_cpe_radio_mac(caplog):
 
 
 @pytest.mark.asyncio
+async def test_cpe_wireless_status_fixture_reads_ap_peer():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(return_value=(200, fixture_body("cpe_wireless_status.json")))
+
+    aps = await client.get_connected_aps()
+
+    assert client._curl.await_args.args == ("GET", "/cgi.lua/status?type=wireless,zones")
+    assert aps == [{
+        "ip": "198.51.100.10",
+        "mac": "02:00:00:00:00:01",
+        "system_name": "synthetic-device",
+        "model": "TNA-301",
+    }]
+    assert client.last_connected_aps_valid is True
+
+
+@pytest.mark.asyncio
+async def test_ap_wireless_status_fixture_reads_own_radio_mac():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(return_value=(200, fixture_body("ap_wireless_status.json")))
+
+    radio_mac = await client.get_ap_radio_mac()
+
+    assert radio_mac == "02:00:00:00:00:01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("ipv4", None), ("ipv4", "not-an-ip"),
+    ("mac", None), ("mac", "not-a-mac"),
+    ("model", None), ("model", ""),
+    ("system_name", None), ("system_name", ""),
+])
+async def test_connected_ap_peer_with_missing_or_malformed_field_is_not_a_candidate(field, value):
+    response = load_fixture("cpe_wireless_status.json")
+    if value is None:
+        response["wireless"]["peers"][0].pop(field)
+    else:
+        response["wireless"]["peers"][0][field] = value
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(return_value=(200, json.dumps(response)))
+
+    assert await client.get_connected_aps() == []
+
+
+@pytest.mark.asyncio
+async def test_ap_and_cpe_wireless_status_fixtures_share_peer_fields():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(side_effect=[
+        (200, fixture_body("ap_wireless_status.json")),
+        (200, fixture_body("cpe_wireless_status.json")),
+    ])
+
+    ap_view = await client.get_connected_cpes()
+    cpe_view = await client.get_connected_aps()
+
+    assert ap_view[0].ip == cpe_view[0]["ip"]
+    assert ap_view[0].mac == cpe_view[0]["mac"]
+
+
+@pytest.mark.asyncio
+async def test_connected_ap_validity_distinguishes_empty_from_unreadable():
+    client = TachyonClient("placeholder", "user", "password")
+    client._curl = AsyncMock(side_effect=[
+        (503, ""),
+        (200, json.dumps({"wireless": {"peers": []}})),
+    ])
+
+    assert await client.get_connected_aps() == []
+    assert client.last_connected_aps_valid is False
+    assert await client.get_connected_aps() == []
+    assert client.last_connected_aps_valid is True
+
+
+@pytest.mark.asyncio
 async def test_peer_list_validity_distinguishes_empty_from_unreadable():
     client = TachyonClient("placeholder", "user", "password")
     client._curl = AsyncMock(side_effect=[

@@ -140,9 +140,19 @@ class TachyonDriver(VendorDriver):
     async def get_connected_cpes(self) -> list:
         return await self._client.get_connected_cpes()
 
+    async def get_connected_aps(self) -> list:
+        return await self._client.get_connected_aps()
+
+    async def get_ap_radio_mac(self) -> Optional[str]:
+        return await self._client.get_ap_radio_mac()
+
     @property
     def last_connected_cpes_valid(self):
         return self._client.last_connected_cpes_valid
+
+    @property
+    def last_connected_aps_valid(self):
+        return self._client.last_connected_aps_valid
 
     async def get_ap_info(self) -> Dict[str, Any]:
         return await self._client.get_ap_info()

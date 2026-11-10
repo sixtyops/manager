@@ -17,6 +17,7 @@ Security Note:
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import math
@@ -280,6 +281,7 @@ class TachyonClient:
         # for the AP's radio, used by the link-budget UI.
         self.last_radio_params: Optional[Dict[str, Any]] = None
         self.last_connected_cpes_valid = False
+        self.last_connected_aps_valid = False
         self.last_reboot_deadline: Optional[float] = None
 
     @staticmethod
@@ -1278,6 +1280,75 @@ class TachyonClient:
             logger.error(f"Failed to parse wireless status from {self.ip}: {e}")
 
         return cpes
+
+    async def get_connected_aps(self) -> List[Dict[str, Any]]:
+        """Read AP peer locators from a CPE wireless status response."""
+        self.last_connected_aps_valid = False
+        status, body = await self._curl("GET", "/cgi.lua/status?type=wireless,zones")
+        if status != 200:
+            logger.warning("Failed to get wireless status from %s: HTTP %s", self.ip, status)
+            return []
+
+        try:
+            data = json.loads(body)
+            wireless = data.get("wireless") if isinstance(data, dict) else None
+            peers = wireless.get("peers") if isinstance(wireless, dict) else None
+            if not isinstance(peers, list):
+                logger.error("Wireless peer data is unavailable from %s", self.ip)
+                return []
+            self.last_connected_aps_valid = True
+            aps = []
+            for peer in peers:
+                if not isinstance(peer, dict):
+                    continue
+                ip = peer.get("ipv4")
+                model = peer.get("model")
+                system_name = peer.get("system_name")
+                raw_mac = peer.get("mac")
+                mac = self._normalize_mac(raw_mac)
+                if not isinstance(ip, str) or not ip.strip():
+                    continue
+                try:
+                    ipaddress.IPv4Address(ip)
+                except (ipaddress.AddressValueError, TypeError):
+                    continue
+                if (mac is None or not isinstance(model, str) or not model.strip()
+                        or not isinstance(system_name, str) or not system_name.strip()):
+                    continue
+                aps.append({
+                    "ip": ip,
+                    "mac": mac,
+                    "system_name": system_name,
+                    "model": model,
+                })
+            return aps
+        except (json.JSONDecodeError, TypeError, AttributeError) as e:
+            logger.error("Failed to parse wireless status from %s: %s", self.ip, e)
+            return []
+
+    async def get_ap_radio_mac(self) -> Optional[str]:
+        """Read the AP radio MAC from its wireless status response."""
+        status, body = await self._curl("GET", "/cgi.lua/status?type=wireless,zones")
+        if status != 200:
+            return None
+        try:
+            data = json.loads(body)
+            wireless = data.get("wireless") if isinstance(data, dict) else None
+            radios = wireless.get("radios") if isinstance(wireless, dict) else None
+            if isinstance(radios, dict):
+                radio_rows = radios.values()
+            elif isinstance(radios, list):
+                radio_rows = radios
+            else:
+                return None
+            for radio in radio_rows:
+                if isinstance(radio, dict):
+                    mac = self._normalize_mac(radio.get("mac"))
+                    if mac is not None:
+                        return mac
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return None
+        return None
 
     @staticmethod
     def _counter(value: Any) -> Optional[int]:
