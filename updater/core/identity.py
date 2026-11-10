@@ -119,6 +119,22 @@ def record_identity(db, device_id, serial=None, macs=None, *, now=None):
         if row is None:
             raise ValueError("unknown device")
         held = set()
+
+        if serial:
+            owners = {r[0] for r in db.execute(
+                "SELECT id FROM devices WHERE uid=? AND uid_source='serial'", (serial,)
+            )}
+            for kind, value, encoded in _open_conflicts(db):
+                ids = set(json.loads(encoded))
+                if kind == "serial" and value == serial:
+                    owners.update(ids)
+            if owners - {device_id}:
+                held.update(_record_conflict(
+                    db, "serial", serial, owners | {device_id}, timestamp
+                ))
+                db.commit()
+                return {"device_ids": sorted(held), "status": "conflict", "verified": False}
+
         for mac, interfaces in aliases.items():
             for interface in interfaces:
                 existing = db.execute(
@@ -139,16 +155,7 @@ def record_identity(db, device_id, serial=None, macs=None, *, now=None):
                 held.update(_record_conflict(db, "mac", mac, owners, timestamp))
 
         if serial:
-            owners = {r[0] for r in db.execute(
-                "SELECT id FROM devices WHERE uid=? AND uid_source='serial'", (serial,)
-            )}
-            for kind, value, encoded in _open_conflicts(db):
-                ids = set(json.loads(encoded))
-                if kind == "serial" and value == serial:
-                    owners.update(ids)
-            if owners - {device_id}:
-                held.update(_record_conflict(db, "serial", serial, owners | {device_id}, timestamp))
-            elif not held and (row[1] in (None, "ip_legacy", "mac") or row[0] == serial):
+            if not held and (row[1] in (None, "ip_legacy", "mac") or row[0] == serial):
                 db.execute("UPDATE devices SET uid=?, uid_source='serial' WHERE id=?", (serial, device_id))
 
         result = {"device_ids": sorted(held or {device_id}),

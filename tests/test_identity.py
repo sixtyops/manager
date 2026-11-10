@@ -77,6 +77,31 @@ def test_duplicate_serial_reverse_arrival_order(memory_db):
     }
 
 
+def test_competing_serial_records_only_the_conflict(memory_db):
+    first, second = _device(memory_db, "192.0.2.43"), _device(memory_db, "192.0.2.44")
+    record_identity(memory_db, first, "SN-ONLY-CONFLICT", {"eth0": "001122334455"})
+    before = tuple(memory_db.execute(
+        "SELECT uid,uid_source,ip,mac FROM devices WHERE id=?", (second,)
+    ).fetchone())
+
+    result = record_identity(memory_db, second, "SN-ONLY-CONFLICT", {
+        "eth0": "001122334466",
+    })
+
+    assert result["status"] == "conflict"
+    assert tuple(memory_db.execute(
+        "SELECT uid,uid_source,ip,mac FROM devices WHERE id=?", (second,)
+    ).fetchone()) == before
+    assert memory_db.execute(
+        "SELECT COUNT(*) FROM device_macs WHERE device_id=?", (second,)
+    ).fetchone()[0] == 0
+    conflict = memory_db.execute(
+        "SELECT device_ids FROM identity_conflicts "
+        "WHERE kind='serial' AND value='SN-ONLY-CONFLICT' AND state='open'"
+    ).fetchone()
+    assert json.loads(conflict[0]) == sorted([first, second])
+
+
 def test_duplicate_mac_holds_both_devices(memory_db):
     first, second = _device(memory_db, "192.0.2.6"), _device(memory_db, "192.0.2.7")
     record_identity(memory_db, first, "SN-6", {"radio": "001122334455"})
