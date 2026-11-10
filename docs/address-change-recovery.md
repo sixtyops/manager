@@ -25,7 +25,7 @@ The lab AP uses DHCP on its management VLAN with the WAN zone address (`manageme
 
 **Detail**
 
-Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1.15.1:
+Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1.15.1. Source: the lead's lab runs 34 to 39 and the two Manager runs; per-boot results are in the [#777](https://github.com/sixtyops/manager/issues/777) comments and the vendor ticket evidence:
 
 | Boot method | Boots | MAC changes |
 |---|---|---|
@@ -46,8 +46,8 @@ Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1
 
 **Key points**
 
-- Shipped: the building blocks (client reads, checked address move, serial identity). They add no runtime change to update recovery yet.
-- Open: the management VLAN and IP mode check, and the AP re-find itself.
+- Shipped: the building blocks (client reads, checked address move, serial identity) and the management VLAN and IP mode check. The check stops the queue when an AP does not return on its management address, with the pre-update VLAN and IP mode in the reason.
+- Open: the AP re-find during update recovery, and the reboot fix. Until the re-find ships, an AP whose DHCP address changes still stops the queue.
 
 **Detail**
 
@@ -58,20 +58,18 @@ Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1
 | Move an AP record to a new address in one checked transaction | [#784](https://github.com/sixtyops/manager/issues/784) | [#788](https://github.com/sixtyops/manager/pull/788) | Merged, `2112c5e` |
 | Record the serial as device identity during polling | [#791](https://github.com/sixtyops/manager/issues/791) | [#792](https://github.com/sixtyops/manager/pull/792) | Merged, `70f3947` |
 | Lab PoE power-cycle procedure | none | [#789](https://github.com/sixtyops/manager/pull/789) | Merged, `31e618f` |
-| Management VLAN and IP mode check before and after an update | [#777](https://github.com/sixtyops/manager/issues/777) | [#780](https://github.com/sixtyops/manager/pull/780) | Open; bench passed the fail-closed path |
-| Docs: address-change status and reboot behavior | none | [#793](https://github.com/sixtyops/manager/pull/793) | Open; review clean |
+| Management VLAN and IP mode check before and after an update | [#777](https://github.com/sixtyops/manager/issues/777) | [#780](https://github.com/sixtyops/manager/pull/780) | Merged, `69008d8` |
+| Docs: address-change status and reboot behavior | none | [#793](https://github.com/sixtyops/manager/pull/793) | Merged, `9c9ef73` |
 | Re-find the AP through its CPEs during update recovery | [#786](https://github.com/sixtyops/manager/issues/786) | none | Design note posted; not started |
 | Reboot with the real endpoint and prove the reboot | [#790](https://github.com/sixtyops/manager/issues/790) | none | Queued after #786 |
 
 ## Next steps
 
-1. Merge [#780](https://github.com/sixtyops/manager/pull/780) after the review loop passes its head.
-2. Merge [#793](https://github.com/sixtyops/manager/pull/793) after the review loop passes its head.
-3. Build [#786](https://github.com/sixtyops/manager/issues/786) on `main` after #780 merges. Follow its [design note](https://github.com/sixtyops/manager/issues/786#issuecomment-6755631148) and the [lead corrections](https://github.com/sixtyops/manager/issues/786#issuecomment-6755651496). One PR, `updater/app.py` only, under about 300 changed engine lines. In DHCP mode, a new lease address passes after the serial is verified at that address; a static address change still stops the queue.
-4. Bench #786 on the lab AP: a manual and a scheduled 1.12.3 to 1.15.1 update. Require "Address changed after update; identity verified" when the address changes, and a normal success when it does not.
-5. Build [#790](https://github.com/sixtyops/manager/issues/790) after #786.
-6. tw00 (4 APs on 1.12.3): hold the jump until #786 passes its bench, or until both MACs of each AP are reserved for one address at the router. A reservation for one MAC does not help.
-7. After Phase 1, create Phase 2 issues: two devices that swap addresses, re-find outside an update by the poller, nullable `devices.ip` with address history, a per-write identity check on the driver session, and proof and history keyed by device ID.
+1. Build [#786](https://github.com/sixtyops/manager/issues/786) on `main`; its dependencies are merged. Follow its [design note](https://github.com/sixtyops/manager/issues/786#issuecomment-6755631148) and the [lead corrections](https://github.com/sixtyops/manager/issues/786#issuecomment-6755651496). One PR, `updater/app.py` only, under about 300 changed engine lines. In DHCP mode, a new lease address passes after the serial is verified at that address; a static address change still stops the queue.
+2. Bench #786 on the lab AP: a manual and a scheduled 1.12.3 to 1.15.1 update. Require "Address changed after update; identity verified" when the address changes, and a normal success when it does not.
+3. Build [#790](https://github.com/sixtyops/manager/issues/790) after #786.
+4. tw00 (4 APs on 1.12.3): hold the jump until #786 passes its bench, or until both MACs of each AP are reserved for one address at the router. A reservation for one MAC does not help.
+5. After Phase 1, create Phase 2 issues: two devices that swap addresses, re-find outside an update by the poller, nullable `devices.ip` with address history, a per-write identity check on the driver session, and proof and history keyed by device ID.
 
 ## Rules for this work
 
@@ -83,7 +81,7 @@ Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1
 ## Lab practice learned in this work
 
 - Do not use the TNA-30x 1.15.0 image in the lab. It has a known web server hang that 1.15.1 fixes. Read the vendor release notes before any lab flash.
-- A TNA-301 on 1.15.1 answers its API about 75 to 85 s after a reboot. Wait about 90 s before the first login, then probe every 30 s. Logins every 10 s during boot preceded web server hangs.
+- A TNA-301 on 1.15.1 answers its API about 75 to 85 s after a reboot. Wait about 90 s before the first login, then probe every 30 s. In lab run 37 (2026-11-09), logins every 10 s during boot preceded a web server hang on 1.15.1; with 30 s probing the hang did not recur in 14 boots.
 - After an AP reboot, the CPE peer list can be empty for up to about a minute. Keep asking until the deadline.
 - To find the AP after a boot, read the CPE's wireless peer report, then confirm the AP serial at the reported address.
 - A hung lab AP can be power-cycled through its TNS-100 PoE port. See [Power-cycle a lab AP through the switch](dev-hardware-validation.md#power-cycle-a-lab-ap-through-the-switch).
