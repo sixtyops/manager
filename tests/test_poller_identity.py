@@ -59,7 +59,8 @@ async def test_ap_poll_promotes_legacy_identity_after_authenticated_info(
     assert tuple(mac) == ("00:11:22:33:44:55", "eth0")
 
 
-def test_poll_identity_with_missing_serial_changes_nothing(mock_db):
+@pytest.mark.parametrize("serial", [None, "unknown"])
+def test_poll_identity_without_valid_serial_changes_nothing(mock_db, serial):
     device_id = database.upsert_device(IP, "ap", "user", "password")
     with mock_db:
         mock_db.execute(
@@ -69,7 +70,7 @@ def test_poll_identity_with_missing_serial_changes_nothing(mock_db):
     poller = NetworkPoller()
 
     poller._record_polled_identity(
-        device_id, SimpleNamespace(serial=None, mac="00:11:22:33:44:55"), 0, IP,
+        device_id, SimpleNamespace(serial=serial, mac="00:11:22:33:44:55"), 0, IP,
     )
 
     row = mock_db.execute(
@@ -78,6 +79,9 @@ def test_poll_identity_with_missing_serial_changes_nothing(mock_db):
     assert tuple(row) == (f"legacy-ip:{IP}", "ip_legacy")
     assert mock_db.execute(
         "SELECT COUNT(*) FROM device_macs WHERE device_id=?", (device_id,),
+    ).fetchone()[0] == 0
+    assert mock_db.execute(
+        "SELECT COUNT(*) FROM identity_conflicts",
     ).fetchone()[0] == 0
 
 

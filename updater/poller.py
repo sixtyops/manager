@@ -23,7 +23,7 @@ from .tachyon import TachyonClient  # kept for fallback/type compat
 from .vendors import get_driver
 from .vendors.base import VendorDriver
 from .models import SignalHealth
-from .core.identity import record_identity
+from .core.identity import _serial, record_identity
 
 PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
@@ -211,7 +211,7 @@ class NetworkPoller:
         """Record identity only from a current authenticated device-info read."""
         if not device_id or not self._credentials_current(generation, ip):
             return
-        serial = getattr(device_info, "serial", None)
+        serial = _serial(getattr(device_info, "serial", None))
         if not serial:
             return
         mac = getattr(device_info, "mac", None)
