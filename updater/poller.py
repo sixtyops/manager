@@ -23,6 +23,7 @@ from .tachyon import TachyonClient  # kept for fallback/type compat
 from .vendors import get_driver
 from .vendors.base import VendorDriver
 from .models import SignalHealth
+from .core.identity import record_identity
 
 PHASE_ORDER = ["canary", "pct10", "pct50", "pct100"]
 
@@ -204,6 +205,28 @@ class NetworkPoller:
         current = (self._cpe_credentials_generation if ip is None
                    else self._client_credentials_generation.get(ip, 0))
         return generation == current
+
+    def _record_polled_identity(self, device_id: int, device_info,
+                                generation: int, ip: str = None) -> None:
+        """Record identity only from a current authenticated device-info read."""
+        if not device_id or not self._credentials_current(generation, ip):
+            return
+        serial = getattr(device_info, "serial", None)
+        if not serial:
+            return
+        mac = getattr(device_info, "mac", None)
+        try:
+            with db.get_db() as conn:
+                result = record_identity(
+                    conn, device_id, serial,
+                    {"eth0": mac} if mac else {},
+                )
+            if result["status"] == "conflict":
+                logger.warning("Identity conflict while polling device id %s", device_id)
+            elif result["status"] == "failure":
+                logger.warning("Identity observation failed for device id %s", device_id)
+        except Exception:
+            logger.exception("Identity observation failed for device id %s", device_id)
 
     def _cache_cpe_client(self, ip: str, client: VendorDriver,
                           generation: int = None):
@@ -534,6 +557,7 @@ class NetworkPoller:
             # Fetch bank info for AP
             bank_kwargs = {}
             bank_warning = None
+            device_info = None
             try:
                 device_info = await client.get_device_info()
                 if hasattr(client, "get_bootbank_info"):
@@ -555,6 +579,9 @@ class NetworkPoller:
                 bank_warning = f"Boot bank read failed ({type(e).__name__})"
             if bank_warning:
                 logger.warning("AP boot bank read warning: %s", bank_warning)
+
+            if device_info is not None:
+                self._record_polled_identity(ap.get("id"), device_info, generation, ip)
 
             db.update_ap_status(
                 ip,
@@ -662,6 +689,16 @@ class NetworkPoller:
                                 return
                             db.update_cpe_auth_status(ip, cpe_ip, status)
                             if status == "ok":
+                                cpe_client = self._get_cached_cpe_client(cpe_ip)
+                                cpe_device = db.get_device(cpe_ip)
+                                if cpe_client and cpe_device and cpe_device.get("role") == "cpe":
+                                    try:
+                                        cpe_info = await cpe_client.get_device_info()
+                                        self._record_polled_identity(
+                                            cpe_device.get("id"), cpe_info, cpe_generation,
+                                        )
+                                    except Exception as e:
+                                        logger.debug("CPE identity read failed for %s: %s", cpe_ip, e)
                                 await self._maybe_fetch_cpe_banks(
                                     ip, cpe_ip, username, password,
                                     credential_generation=cpe_generation,
@@ -1094,6 +1131,7 @@ class NetworkPoller:
                         db.upsert_switch(ip, sw["username"], sw["password"], site_id)
 
             bank_kwargs = {}
+            device_info = None
             try:
                 device_info = await client.get_device_info()
                 bank_kwargs = {
@@ -1103,6 +1141,9 @@ class NetworkPoller:
                 }
             except Exception as e:
                 logger.debug(f"Failed to get bank info for switch {ip}: {e}")
+
+            if device_info is not None:
+                self._record_polled_identity(sw.get("id"), device_info, generation, ip)
 
             db.update_switch_status(
                 ip,
