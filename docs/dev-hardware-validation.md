@@ -1,7 +1,7 @@
 # Dev Hardware Validation
 
-**Key points:** The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
-may run this procedure. A worker may run it only when the lead assigns the
+**Key points:** The operator or the Manager owner under [AGENTS.md authority](../AGENTS.md#host-access)
+may run this procedure. A worker may run it only when the owner assigns the
 worker a named run. The exception in [AGENTS.md](../AGENTS.md#must-not-do)
 allows that worker to run only the integration tests named in the run brief,
 against the dev host and dedicated lab devices. Workers must not run other
@@ -24,9 +24,9 @@ validation lane. Use this lane only with its authorized test devices.
 
 ## Dev host access
 
-The lead host reaches the authorized dev host through a recorded SSH alias and
+The owner host reaches the authorized dev host through a recorded SSH alias and
 its approved network path. The alias, host details, and access record are on
-the lead host's local disk and in the private system record. Check those
+the owner host's local disk and in the private system record. Check those
 locations before reporting dev host access as missing. Keep the IP address,
 alias, usernames and host paths in the private record. An agent assigned dev
 host work has full authority on that host, including guest-local `sudo` and
@@ -48,18 +48,18 @@ several roles; its write tests then run one at a time.
 
 ### Lab firmware authority
 
-On 2026-11-03, the owner gave standing approval for firmware changes on the
+On 2026-11-03, the operator gave standing approval for firmware changes on the
 dedicated lab devices and the dev host environment. This approval includes the
 live firmware integration test (`tests/integration/test_firmware.py`) and the
 Dev host run procedure below: back up the dev host, deploy an exact `main` or
 pull request head, enable the lab inventory records, run the test, read back
-the state, and restore the backup. The lead and a worker the lead assigns to a
-named run may follow these steps without per-run owner approval. Use this
+the state, and restore the backup. The owner and a worker the owner assigns to a
+named run may follow these steps without per-run operator approval. Use this
 section as the approval source in the run brief.
 
 Use only firmware images in the Manager store for that model. Change one
 device at a time. Hold the shared dev hardware lock with a detached process on
-the dev host. The lead's lock helper starts this holder over one SSH call and
+the dev host. The owner's lock helper starts this holder over one SSH call and
 prints its PID:
 
 ```sh
@@ -73,7 +73,7 @@ connected CPE count, and config section names twice. Judge the write from
 these read-backs. On 2026-11-01, two lab bank writes returned success and the
 read-backs confirmed them, so the false failure in
 [#670](https://github.com/sixtyops/manager/issues/670) is intermittent. Record
-each change in the lead artifacts. This approval covers dedicated test lab
+each change in the owner artifacts. This approval covers dedicated test lab
 devices and the dev host environment. It does not cover production devices,
 stable releases, dev releases, or other hosts.
 
@@ -81,7 +81,7 @@ stable releases, dev releases, or other hosts.
 
 **Key points:** Use this procedure when a lab AP answers ping but its web
 service hangs, or when a run needs a clean reboot without a firmware write.
-The owner approved this method on 2026-11-09. Hold the shared hardware lock
+The operator approved this method on 2026-11-09. Hold the shared hardware lock
 before changing PoE.
 
 **Detail:** Find the AP's switch port in Manager's `switch_bridge_entries`
@@ -135,13 +135,13 @@ Read the vendor release notes before any lab flash.
 
 ### Dev host run procedure
 
-The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
-may run dev host procedures. A worker may run a procedure only when the lead
+The operator or the Manager owner under [AGENTS.md authority](../AGENTS.md#host-access)
+may run dev host procedures. A worker may run a procedure only when the owner
 assigns that worker a named run. The brief names the lock holder and gives the
 exact approved backup, verify, and restore command lines. Run procedures on the dev host over the
 recorded SSH alias. Use the
 approved backup, verify, and restore commands with `sudo -n`; do not run
-`sudo` on the lead host. Read command arguments and paths from the approved
+`sudo` on the owner host. Read command arguments and paths from the approved
 `sixtyops-manager-loop.env` file without copying its values into Git. Before a
 deploy, list the backup and test-extract it into a temporary directory.
 Record the backup name immediately after creation.
@@ -175,12 +175,12 @@ after a password change.
 
 ## Manual Commands
 
-### Lead integration write lane
+### Owner integration write lane
 
-Run integration write tests from the lead host against the authorized dev host
-through the lead's integration runner. The runner reads the private lab access
+Run integration write tests from the owner host against the authorized dev host
+through the owner's integration runner. The runner reads the private lab access
 file, exports the required `SIXTYOPS_TEST_*` variables for pytest only, and
-prints no variable value. The runner lives in the lead's private state folder.
+prints no variable value. The runner lives in the owner's private state folder.
 
 The lab has one access point (AP). Use it for the AP, firmware AP, config AP,
 and RADIUS AP roles. Run write tests on this lab one at a time. Before each
@@ -293,7 +293,7 @@ GitHub branch protection is not repo-tracked. After merging the workflow, config
 
 **Key points:** Unit tests do not prove device behavior. Every engine or
 driver change needs real Tachyon bench proof on the exact pull request head
-before merge. Only the owner names bench devices.
+before merge. Only the operator names bench devices.
 
 **Detail:** Record the tested models, firmware, recovery evidence, and exact
 commit in the pull request. Re-run bench proof after any change to the pull
@@ -304,7 +304,7 @@ read-only customer-router signals and their current limits.
 
 ## Read-only bench wrapper
 
-**Key points:** The lead runs `scripts/bench/run-readonly-bench.sh` to get
+**Key points:** The owner runs `scripts/bench/run-readonly-bench.sh` to get
 read-only bench evidence on an exact commit. The wrapper reads the private
 access file and never prints its values. The wrapper does not change device
 firmware or configuration.
@@ -414,7 +414,7 @@ On the authorized dev host, the lab access manifest and credential files are
 on local disk in owner-only folders in the operator's home directory. One
 credential file covers the switch lanes; one covers the AP lanes. Check these
 records before reporting access missing. Pass the correct file to the bench
-wrapper with `SIXTYOPS_BENCH_ACCESS_FILE`. Do not ask the owner for access
+wrapper with `SIXTYOPS_BENCH_ACCESS_FILE`. Do not ask the operator for access
 already recorded there. Do not read, print, or copy these files. Only the
 wrapper reads them.
 

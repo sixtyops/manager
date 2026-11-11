@@ -24,9 +24,9 @@ Operational how-to documents do not grant approval to exceed these limits.
 
 ### Host access
 
-- Touch the authorized dev host and known lab devices only for lead-assigned
+- Touch the authorized dev host and known lab devices only for owner-assigned
   work, under [docs/dev-hardware-validation.md](docs/dev-hardware-validation.md).
-  Production installs stay with the owner.
+  Production installs stay with the operator.
 - Secrets or credentials. Never print them, put them on a command line,
   store them in memory, or commit them.
 - The live loop clone under `~/repos/`. Do branch work in a git worktree
@@ -35,16 +35,16 @@ Operational how-to documents do not grant approval to exceed these limits.
 ### Must not do
 
 - Keep integration tests in `tests/integration` out of ordinary worker runs.
-  A worker assigned by the lead to a named dev host run under
+  A worker assigned by the owner to a named dev host run under
   [docs/dev-hardware-validation.md](docs/dev-hardware-validation.md#dev-host-run-procedure)
   may run only the integration tests named in that run brief, against the
   authorized dev host and dedicated lab devices.
 - Create, move, or push a release tag, bump the release version, or run the
   Release workflow. Release tags must be GPG-signed by the release key.
-- Only the lead merges, and only after every review, CI, sign-off, and bench
+- Only the epic owner merges, and only after every review, CI, sign-off, and bench
   gate passes. Workers do not merge. Do not cancel a CI run, bypass a
   denial, or weaken a review gate.
-- Send direct Signal messages from lead or worker sessions.
+- Send direct Signal messages from owner or worker sessions.
 
 ### Stop and label agent:needs-human if
 
@@ -86,7 +86,7 @@ Run `python scripts/collect_changelog.py --check` to validate fragment names.
   `CHANGELOG.md` section.
 
 The Release workflow uses `pytest -v --timeout=60`. There is no lint job in CI.
-Live test commands are in the hardware SOP for the operator or an approved lead.
+Live test commands are in the hardware SOP for the operator or an approved owner.
 Run `./dev.sh` for local UI/API development without hardware. It creates the schema, runs `scripts/seed_dev_data.py`, then starts the real poller. Seeded devices use RFC 5737 documentation addresses; connection errors and backoff are expected. The seed script does not mark setup complete.
 
 Create branch work from fetched `origin/main` in a Paseo workspace, without
@@ -101,38 +101,41 @@ paseo run --workspace "$ws"
 
 Use an assigned worktree when the task provides one.
 
-## Lead and worker roles
+## Owner and worker roles
 
-Read [the lead operations SOP](docs/lead-operations-sop.md) before lead work.
+Read [the owner operations SOP](docs/owner-operations-sop.md) before owner work.
 It owns the fresh-start procedure, authority history, delegation, review routing,
-and sign-off gates. Update it with lasting handoff lessons.
+and sign-off gates. Update it with lasting lessons.
 
-The owner assigns a lead. Other agents complete one bounded task as followers.
-Hold overlapping work if ownership is unclear. The lead delegates implementation,
+Each epic has one long-lived feature owner, as defined in the
+[feature owner model](https://github.com/isolson/personal-processes/blob/master/docs/feature-owner.md).
+The epic issue body is the owner's only memory. Workers complete one sub-issue each as followers.
+Hold overlapping work if ownership is unclear. The owner delegates implementation,
 investigation, testing, and detailed PR reviews. Obtain independent review;
-the lead cannot be the designated reviewer for its team's work. Reuse active
+the owner cannot be the designated reviewer for its team's work. Reuse active
 agents for their own task and send review fixes to a new fix worker, as described
-in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
+in [the owner operations SOP](docs/owner-operations-sop.md#priority-and-delegation).
 Preserve locks, budgets, cooldowns, and round limits. If capacity is full, queue work.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
 Use the file-overlap worker schedule in the
-[lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
+[owner operations SOP](docs/owner-operations-sop.md#priority-and-delegation).
 Finish active fixes first.
 Prioritize system functionality under North Star and one-right-way; defer website work.
-Keep durable lead status, task owners, evidence, and the next action current.
+Keep the epic body, task assignees, evidence, and the next action current.
 
 Read fresh `gh` state before reporting or acting on a PR. After a denied or
 failed command, read back state before retrying; the command may have changed it.
 Do not resolve another reviewer's thread. Engine and driver changes need bench
-proof on the exact head from the operator or an approved lead; a skip does not pass.
+proof on the exact head from the operator or an approved owner; a skip does not pass.
 Start worker completion messages with `DONE from <id> (<title>):`.
 
-### Repository lead authority
+### Owner merge authority
 
-The lead merges a PR after every review, CI, sign-off, and bench gate passes
-(owner decision, 2026-11-01). Use an explicit subject and an empty body. A
-merge does not approve a release, a production install, or a fleet rollout. Read back each merge on `main`. Follow
-[the lead operations SOP](docs/lead-operations-sop.md#review-merge-and-development-release-gates).
+The epic owner merges a PR after every review, CI, sign-off, and bench gate passes
+(operator decision, 2026-11-01; the repo lead held it until 2026-11-10).
+Use an explicit subject and an empty body. A merge does not approve a release, a production install, or a fleet rollout. Read back each merge on `main`. Follow
+[the owner operations SOP](docs/owner-operations-sop.md#review-merge-and-development-release-gates).
+Workers never merge.
 
 #### Slices and reviews
 
@@ -146,8 +149,8 @@ merge does not approve a release, a production install, or a fleet rollout. Read
 - For each engine slice, ask a Luna worker at high reasoning to write a one-page
   design note. The note lists every write boundary, every state, and the
   fail-closed rule for each. Require the design to use only Manager's data and
-  the device APIs it calls. Send one narrow hard open question to Astra at
-  medium reasoning. Ask the reviewer to check the code against the note.
+  the device APIs it calls. Send one narrow hard open question to the advisor
+  (see Models) at medium reasoning. Ask the reviewer to check the code against the note.
 - Require the first review to list every finding at once and mark each one
   `BLOCKING` or `NON-BLOCKING`. Treat wording, link, and test-name findings as
   `NON-BLOCKING`.
@@ -160,17 +163,19 @@ merge does not approve a release, a production install, or a fleet rollout. Read
 - Hold the base during review. Merge `main` into a PR or rebuild it only to
   resolve a conflict.
 - Treat bench proof as its own gate. The designated reviewer approves the code.
-  The lead owns exact-head bench proof before the PR enters a merge batch.
+  The owner holds exact-head bench proof before the PR enters a merge batch.
 
 ## Models
 
 Use GPT workers only. Luna is the default. Use Sol only after Luna fails at a
 named step or for a hard design question named by a reviewer. For each
-architecture decision, ask one Astra subagent for a design and follow that
-design. The lead asks the owner for major product and safety decisions and
-brings a recommendation. The lead brings an architecture decision to the owner
-only when the lead strongly disagrees with the Astra design. Follow the model
-routing in [the lead operations SOP](docs/lead-operations-sop.md#priority-and-delegation).
+architecture decision, ask one advisor from the other provider for a design and
+follow that design: a Claude owner asks Astra, a Codex owner asks Fable. Never
+ask both. The owner asks the operator for major product and safety decisions and
+brings a recommendation. The owner brings an architecture decision to the operator
+only when the owner strongly disagrees with the advisor design. Follow the model
+routing in [the owner operations SOP](docs/owner-operations-sop.md#priority-and-delegation).
+Fable and Astra are never workers.
 Verify installed provider, model, and reasoning IDs before launch.
 
 Give an architect's design to a coding worker for implementation.
@@ -184,15 +189,15 @@ then **Detail**. Keep UI labels, errors, and recovery instructions consistent.
 State rules and instructions as actions to take.
 
 Read `~/.claude/skills/ai-copywriter/SKILL.md` when available. Run its draft
-and audit loop for every owner reply and new issue or PR text, review, sign-off
+and audit loop for every operator reply and new issue or PR text, review, sign-off
 packet, commit message, documentation, UI text, code comment, and docstring.
 Then check STE. Do not rewrite old comments without a task need. Marketing
 defaults do not require extra questions when the task is clear. If the skill is
 missing, report the fallback and apply these rules. Verify each skill's tools.
 Do not claim to load a missing or unread skill.
 
-Do not use the owner's personal name in replies, code, comments, docs, commit
-messages, or PR text. Use "the owner" for the role. Functional account links
+Do not use the operator's personal name in replies, code, comments, docs, commit
+messages, or PR text. Use "the operator" for the role. Functional account links
 and legal attribution may retain required identifiers.
 Write each issue or PR reference as a Markdown link with `#NNN` as its text.
 
@@ -240,8 +245,8 @@ Manual per-device updates intentionally bypass Firmware Hold. See
 - [North Star](docs/north-star.md), [target contract](docs/one-right-way.md),
   [#412](https://github.com/sixtyops/manager/pull/412), and delivery order
   [#413](https://github.com/sixtyops/manager/issues/413).
-- [Release SOP](docs/release-sop.md): operator or explicitly approved lead only.
+- [Release SOP](docs/release-sop.md): operator or explicitly approved owner only.
 - [Hardware SOP](docs/dev-hardware-validation.md): deployment reality, integration
-  test coverage and inputs; operator or explicitly approved lead only.
+  test coverage and inputs; operator or explicitly approved owner only.
 - [Rollout model](docs/rollout-logic.md), [rearchitecture](docs/rearchitecture.md),
   and [repository hardening](docs/repo-hardening.md).

@@ -9,7 +9,7 @@
 # Run this script from a trusted checkout of main. It tests the checkout in
 # the current directory, so the commit under test does not need to contain it.
 #
-# The owner sets SIXTYOPS_BENCH_ACCESS_FILE to a private access file with
+# The operator sets SIXTYOPS_BENCH_ACCESS_FILE to a private access file with
 # "Key: value" lines. This script parses that file in a subshell, runs one
 # fixed mode, limits device output, and writes a summary outside the
 # repository. See docs/dev-hardware-validation.md, "Read-only bench wrapper".
@@ -28,7 +28,7 @@ ALLOWED_TEST_HOST="sixtyops-dev.infra.treehouse.mn"
 # a write test fixture skips even if it is collected.
 WRITE_LANE_VARS="SIXTYOPS_TEST_FIRMWARE_AP_IP SIXTYOPS_TEST_RADIUS_AP_IP SIXTYOPS_TEST_OIDC_PROVIDER_URL SIXTYOPS_TEST_OIDC_CLIENT_ID SIXTYOPS_TEST_OIDC_CLIENT_SECRET SIXTYOPS_TEST_OIDC_REDIRECT_URI SIXTYOPS_TEST_OIDC_ALLOWED_GROUP SIXTYOPS_TEST_OIDC_ADMIN_GROUP"
 
-# Changes to these paths in the commit under test stop the run. The owner
+# Changes to these paths in the commit under test stop the run. The operator
 # must review such a change and run the bench manually.
 PROTECTED_PATHS="tests/integration tests/conftest.py conftest.py pyproject.toml"
 
@@ -108,7 +108,7 @@ head_sha=$(git rev-parse HEAD)
 
 base=$(git merge-base origin/main HEAD 2>/dev/null) || refuse "cannot find the merge base with origin/main"
 # shellcheck disable=SC2086
-git diff --quiet "$base" HEAD -- $PROTECTED_PATHS || refuse "the commit changes test infrastructure; the owner must run it manually"
+git diff --quiet "$base" HEAD -- $PROTECTED_PATHS || refuse "the commit changes test infrastructure; the operator must run it manually"
 
 # 2. Access file checks. Do not print the path or the contents.
 access_file=${SIXTYOPS_BENCH_ACCESS_FILE:-}
