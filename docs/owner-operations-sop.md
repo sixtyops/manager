@@ -1,4 +1,4 @@
-# Manager lead operations SOP
+# Manager owner operations SOP
 
 **Key points:** Advance actual system functionality first. Delegate bounded work.
 Resume from fresh evidence, not old agent names or a previous green check.
@@ -6,49 +6,66 @@ Resume from fresh evidence, not old agent names or a previous green check.
 **Detail:** [AGENTS.md](../AGENTS.md#agent-rules) owns
 repository authority and rules. This procedure explains how to apply them.
 Latest user intent takes precedence. The loop limits in AGENTS.md apply to
-workers. Operational procedures below require the operator or a lead with
+workers. Operational procedures below require the operator or an owner with
 explicit approval for the named action. Historical grants do not override
 those limits or task-specific restrictions. See the authority history below.
 Workers hand work to review; they do not merge or release. Shared hub
 procedures do not extend Manager authority.
 
+## Feature owner model
+
+**Key points:** One long-lived owner runs each epic. The epic body is its only memory.
+
+**Detail:** Follow the canonical [feature owner model](https://github.com/isolson/personal-processes/blob/master/docs/feature-owner.md).
+The operator starts one owner for each epic, by desk, and talks to that owner
+directly. There is no PM, orchestrator, or standing repository lead. Keep the
+Context, Decisions with a why, Next, log, and sub-issues in the epic body.
+Workers are Luna. Each worker takes one sub-issue in a fresh session and a
+worktree, and ends with a `DONE` line. Never run two workers on dependent
+sub-issues. Keep at most three open PRs for each epic. For each decision, ask
+one advisor from the other provider: a Claude owner asks Astra, a Codex owner
+asks Fable. Never ask both, and never use a panel. The advisor treats code as a
+liability and recommends the smallest change. Fable and Astra are never
+workers. No rotation is forced. Restart an owner from the epic body when its
+context is large, or when it idled more than 24 hours with an unblocked Next.
+
 ## Authority history
 
-**Key points:** The lead merges a PR after every gate passes.
+**Key points:** The epic owner merges a PR after every gate passes.
 
-**Detail:** The owner assigns lead duties. Since 2026-11-01 the lead merges
-ready PRs after every review, CI, sign-off, and bench gate passes. Before that
-date the owner merged in daily batches. A merge does not approve a release.
+**Detail:** Since 2026-11-01 the agent in charge merges ready PRs after every
+review, CI, sign-off, and bench gate passes. The repository lead held this right
+until 2026-11-10; the epic owner holds it now. Workers never merge. Before
+2026-11-01 the operator merged in daily batches. A merge does not approve a release.
 See [Review, merge and development release gates](#review-merge-and-development-release-gates).
 
 Public-repo rulesets are free. This supersedes the earlier Team-plan
 requirement recorded in [#116](https://github.com/sixtyops/manager/issues/116).
 
-## Fresh start and hourly wake
+## Fresh start and wake
 
 **Key points:** Read intent and live state before an action. Finish fixes first.
 
-**Detail:** The lead heartbeat wakes hourly at minute 17 in `America/Chicago`
-(`17 * * * *`). Discover the current lead and its existing heartbeat. Verify
-cadence and timezone through the available Paseo heartbeat tools. On an owner
-change, the current owner must use the supported handoff to retire its heartbeat.
-The next owner reads back that retirement before creating one replacement. Do
-not create a duplicate heartbeat or work around an ownership denial. A wake
+**Detail:** An owner may keep one heartbeat for its epic. Discover the epic's
+owner and any existing heartbeat. Verify cadence and timezone through the
+available Paseo heartbeat tools. On an owner restart, retire the old heartbeat
+and read back that retirement before creating one replacement. Do not create a
+duplicate heartbeat or work around an ownership denial. A wake
 gives no exemption from locks or pacing gates.
 
 1. Read current `AGENTS.md` and `.github/AGENTS.md` if present.
    Read [North Star](north-star.md), [one-right-way](one-right-way.md), and live
    [epic413](https://github.com/sixtyops/manager/issues/413), in that order.
    Then read this SOP, the task issue, applicable SOPs and named skills.
-2. Read durable lead status. Verify every active task against live agent/job,
+2. Read the epic body. Verify every active task against live agent/job,
    branch/head, queue, lock, budget, cooldown, review and fix-round evidence.
    Before reporting missing lab access, follow [Private access records](dev-hardware-validation.md#private-access-records).
    For dev host access, check the recorded SSH alias and private system record before reporting it missing.
    An idle daemon does not prove that an event-started job or worker is idle.
    Check `paseo permit ls` for pending worker requests at each wake. A request
-   may not wake the lead. Allow only a task-authorized action, then read back
+   may not wake the owner. Allow only a task-authorized action, then read back
    the result. Do not bypass safety review.
-   Keep the goal, ordered slices, owners, operator waits, and next action current.
+   Keep the goal, ordered slices, assignees, operator waits, and next action current.
    For each open PR, check its current head, CI, review threads, labels, and
    sign-off packet. Give findings to a worker. Reply `addressed in <sha>` after
    a fix and leave Codex threads for Codex. Run each merged PR's named
@@ -56,12 +73,12 @@ gives no exemption from locks or pacing gates.
 3. Inspect all open PR file lists and relevant local retained diffs for overlap.
    Discover worktrees and writers. Preserve parked and denied work. Reconcile
    stale status with evidence; an unknown lock owner blocks competing work.
-4. Select one dependency-ready system slice. Record owner, scope, worktree,
+4. Select one dependency-ready system slice. Record assignee, scope, worktree,
    base/head and next action before building. Use an isolated worktree from
    fetched `origin/main`; keep the shared loop clone and other worktrees intact.
 5. Follow the review-fix rule in [Priority and delegation](#priority-and-delegation).
    Complete or hold the work with evidence. Append the result and next
-   owner/action. Read back each GitHub mutation and durable status append.
+   assignee and action to the epic log. Read back each GitHub mutation and durable status append.
 
 ## Priority and delegation
 
@@ -74,15 +91,14 @@ Defer website work while system priorities need attention; do not resume a
 parked website PR merely because CI or review passed. Record specific holds in
 live issues and durable status, rather than hardcoding their IDs into this SOP.
 Use proven management software and existing architecture before proposing a
-new tool or design. The lead owns the goal, directs the work, and tracks it
+new tool or design. The owner owns the goal, directs the work, and tracks it
 through completion or until every remaining step needs an operator. It
 delegates implementation, investigation, testing, and detailed PR reviews.
 Run as many Luna workers in parallel as have no file overlap. Run workers that
 change the same rollout core file one after another: the `updater/app.py` job
 runner, `updater/scheduler.py`, `updater/rollout_gate.py`, or
-`updater/database.py`. This file-overlap rule replaces the three-active-PR
-limit.
-The lead does not perform these tasks, even for a small change. It must get
+`updater/database.py`. Keep at most three open PRs for each epic.
+The owner does not perform these tasks, even for a small change. It must get
 independent review and cannot serve as the designated reviewer for work from
 its own team. If no worker capacity exists, leave the work queued.
 
@@ -90,11 +106,11 @@ The shared review-fix loop stays off for Manager under [#599](https://github.com
 because its shared script starts only Claude workers ([personal-processes #515](https://github.com/isolson/personal-processes/issues/515)).
 Send each review fix to a new Luna worker.
 
-The owner names an agent as lead for a feature, issue, or epic. Every other agent
+The operator starts one owner for each epic. Every other agent
 is a follower: it completes one bounded assignment, reports evidence and any
-blocker to its lead, and stops. A follower does not create a wake job or
+blocker to its owner, and stops. A follower does not create a wake job or
 delegate unless its brief explicitly asks it to. Hold overlapping work if two
-agents claim lead ownership, and report the conflict.
+agents claim ownership of one epic, and report the conflict.
 
 When a pre-review, system review or designated review asks for changes, launch
 a new fix worker and name the review report in its brief. If the builder has
@@ -107,11 +123,11 @@ at high reasoning. Assign docs and small code at low or medium reasoning. Assign
 pre-reviews, re-reviews, designated reviews, and bench or dev-host runs at high
 reasoning. Use Sol at medium only after Luna fails at a named step, or for a
 hard design question named by a reviewer. For each architecture decision, ask
-one Astra subagent for a design and follow that design. The lead asks the owner
-for major product and safety decisions and brings a recommendation. The lead
-brings an architecture decision to the owner only when the lead strongly
-disagrees with the Astra design. [AGENTS.md](../AGENTS.md#models) points here for
-model routing. Do not use Claude workers.
+the one advisor named in [Feature owner model](#feature-owner-model) for a design
+and follow that design. The owner asks the operator for major product and safety
+decisions and brings a recommendation. The owner brings an architecture decision
+to the operator only when the owner strongly disagrees with the advisor design.
+[AGENTS.md](../AGENTS.md#models) points here for model routing. Do not use Claude workers.
 Do not give implementation work to an architect; give its design to a coding worker.
 Verify installed provider/model/thinking IDs before sending work. Follow the
 review-fix rule in [Priority and delegation](#priority-and-delegation). Preserve
@@ -120,13 +136,13 @@ per branch. Honor
 the repository skill guidance; use factual copywriter/STE, and frontend-design
 plus UI guides when UI is in scope.
 Run delegated Paseo workers in `auto` permission mode with safety review on.
-Do not send direct Signal messages from lead or worker sessions. Check the
+Do not send direct Signal messages from owner or worker sessions. Check the
 authorized private lab records and [hardware SOP](dev-hardware-validation.md)
-before asking the owner for access already provided. Keep private values out of
+before asking the operator for access already provided. Keep private values out of
 the public repository.
 Read the installed `ai-copywriter` skill before writing or changing PR titles,
 descriptions, comments or reviews. Run its draft and audit loop for every reply
-to the owner and every new PR text. Use it for documentation, UI copy, commit
+to the operator and every new PR text. Use it for documentation, UI copy, commit
 messages and code comments. Apply the repository's Simplified Technical English
 rules. If the skill is unavailable, follow [AGENTS.md Writing and style](../AGENTS.md#writing-and-style)
 and report that limit. Before handoff or merge, check changed text against both
@@ -135,7 +151,7 @@ SOP.
 Each assignment names intent, issue, exact files, dependencies, acceptance,
 required instructions, tests, forbidden actions, evidence path and handoff.
 Require progress updates and completion through a reviewable PR or a concrete
-blocker. Keep detailed logs outside lead context and summaries concise.
+blocker. Keep detailed logs outside owner context and summaries concise.
 For dev host runs, name the lock holder and give the worker the exact approved
 backup, verify, and restore commands for the dev host over SSH with
 non-interactive `sudo -n`. Record the backup name as soon as the command
@@ -164,15 +180,15 @@ does not override a tool denial.
 ### Follower handoff
 
 **Key points:** A follower completes one bounded assignment and reports to its
-lead.
+owner.
 
 **Detail:** Work in the assigned worktree and branch. Run the checks named in
-the brief. Do not grow the scope or start a wake job. Ask the lead about an
+the brief. Do not grow the scope or start a wake job. Ask the owner about an
 unclear brief or new risk. Report the PR link, changes, check results, evidence,
 and open items. Start the completion message with
 `DONE from <id> (<title>):`. Stop when the assignment is done.
 
-### Lead stop condition
+### Owner stop condition
 
 **Key points:** Stop only when the goal is complete or all remaining work needs
 an operator.
@@ -180,9 +196,8 @@ an operator.
 **Detail:** A goal is complete when every planned slice is merged and its
 required post-merge checks pass. Do not stop because one PR waits for review if
 other safe work can proceed. Mark the goal blocked only when every remaining
-step needs an operator and each decision or action is recorded. Before a lead
-handoff, update durable lead status and retire or transfer the existing
-heartbeat through the supported handoff procedure. Do not create a duplicate.
+step needs an operator and each decision or action is recorded. Before an owner
+restart, update the epic body and retire the existing heartbeat. Do not create a duplicate.
 
 ### Private access evidence
 
@@ -217,7 +232,7 @@ assignment, base updates, and bench proof ownership.
 A PR that only removes dead code may exceed the 300-line engine guideline in
 one PR. List the removed symbols in the PR body.
 
-The lead checks that each eligible non-draft PR awaiting review has
+The owner checks that each eligible non-draft PR awaiting review has
 `agent:review`. The trusted-author workflow adds it on open, reopen, or ready
 for review and sends a wake.
 The reviewer daemon checks every 120 seconds. It allows up to 20 runs per hour
@@ -255,7 +270,7 @@ Fetch `origin/main`, then read the current GitHub pull request state and head
 before you report a pull request as open or hand it to another owner. Do not
 reuse an earlier state after a new event.
 
-Before the lead merges, require a current non-draft OPEN head
+Before the owner merges, require a current non-draft OPEN head
 and MERGEABLE/CLEAN state. Require the designated independent review and shared review with
 matching recorded `signoff_head`, `agent:ready-for-signoff`, and a packet for
 that head and issue. Read the formal review record. Record its ID, state, full
@@ -270,7 +285,7 @@ posted after merge is retrospective and cannot meet the pre-merge gate.
 
 If a merge occurs before the review proof is complete, preserve the event times
 and evidence. A missing or late review record does not by itself require an
-automatic code rollback. The lead delegates code and release-impact review,
+automatic code rollback. The owner delegates code and release-impact review,
 evaluates the returned evidence, and records a separate rollback decision. A
 later review does not change the pre-merge timeline.
 
@@ -313,7 +328,7 @@ valid head when the local reference is stale.
 the ready label. The owner uses the approved explicit subject and an empty
 merge body.
 
-**Detail:** Workers commit as the bot account. Before the lead applies
+**Detail:** Workers commit as the bot account. Before the owner applies
 `agent:ready-for-signoff`, inspect every source commit message, PR title, and
 PR body for co-author trailers and personal names. Ask a worker to remove any
 such text before the PR enters the sign-off batch. Read back the merge subject,
@@ -322,7 +337,7 @@ empty body, and resulting head on `main` after each owner merge.
 Reply `addressed in <sha>` after a fix. Leave threads to their reviewers.
 Never grant your own sign-off, reset counters, or restart a capped cycle.
 Use the shared [reopen procedure](https://github.com/isolson/personal-processes/blob/master/docs/agentic-workflow.md#reopen-a-pr)
-only after an explicit lead decision, recorded history/budget checks and
+only after an explicit owner decision, recorded history/budget checks and
 readback. Keep maximum rounds/reopens and publication pacing intact.
 
 Every merge still requires all applicable review, CI, sign-off, thread,
@@ -355,15 +370,15 @@ configuration and each loop status; do not dump credential files or environments
 
 **Key points:** Use the current review-loop and dev-host procedures.
 
-**Detail:** Worker GitHub label edits do not wake the review loop; the lead re-adds `agent:review`. Set bench session-proof timeout to at least 600 seconds. The dev host lock holder must run detached on the host through the `devlock` helper. The sign-off packet usually arrives in about five minutes. When a safety reviewer requires live-write approval, `ask-operator` through Signal is the trusted channel and needs `needs live-write`. Standing lab and dev-host approval is recorded in [dev-hardware-validation.md](dev-hardware-validation.md#lab-firmware-authority).
+**Detail:** Worker GitHub label edits do not wake the review loop; the owner re-adds `agent:review`. Set bench session-proof timeout to at least 600 seconds. The dev host lock holder must run detached on the host through the `devlock` helper. The sign-off packet usually arrives in about five minutes. When a safety reviewer requires live-write approval, `ask-operator` through Signal is the trusted channel and needs `needs live-write`. Standing lab and dev-host approval is recorded in [dev-hardware-validation.md](dev-hardware-validation.md#lab-firmware-authority).
 
 ### Dev host runs
 
-The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
-may run these procedures. A worker may run them only when the lead assigns the
+The operator or the Manager owner under [AGENTS.md authority](../AGENTS.md#host-access)
+may run these procedures. A worker may run them only when the owner assigns the
 worker a named run.
 
-Use the same shared lock as CI for each dev host run from the lead host. Keep
+Use the same shared lock as CI for each dev host run from the owner host. Keep
 one background, non-interactive holder with
 `ssh <dev host alias> 'exec flock -w 300 /var/lock/sixtyops-dev-hardware.lock sleep <seconds>'`;
 use one background, non-interactive process under a non-root account, and
@@ -380,7 +395,7 @@ Run these observations in the discovered adapter clone:
 
 ```bash
 paseo ls --global --json
-paseo inspect "$lead_id" --json   # Set from fresh discovery, not an old note.
+paseo inspect "$owner_id" --json   # Set from fresh discovery, not an old note.
 paseo schedule ls --json         # Schedules are separate from agent heartbeats.
 for job in com.treehouse.agent-{review-loop,codex-review,issue-pickup}-sixtyops-manager com.treehouse.sync-master-sixtyops-manager; do
   launchctl print "system/$job" | awk '/^\t(state|pid|last exit code|run interval) =/ {print}'
@@ -397,7 +412,7 @@ These labels are host-local examples; verify installed labels and top-level
 state/PID and interval. User-domain `launchctl list` alone can miss system jobs. Inspect
 event-started jobs, Paseo workers and locks as separate activity evidence.
 Observed baseline: reviewer/pickup 3600s, review-fix 1800s, sync 120s. These
-are separate from the lead heartbeat; recheck them before any future override.
+are separate from the owner heartbeat; recheck them before any future override.
 
 Inspect each relevant PR with `gh pr view "$pr" --repo sixtyops/manager --json
 headRefOid,files,labels,mergeable,mergeStateStatus`; use `gh pr checks` and
@@ -419,7 +434,7 @@ send "$worker_id" --prompt-file "$task_file" --no-wait`. For review findings,
 launch a new worker with a brief that names the review report. If the builder
 has unpushed work, use the builder's workspace and require the new worker to
 verify that work first. Run a read-only worker for review, bench run, diagnosis,
-or tracker edit in the lead's workspace with `paseo run --workspace <lead
+or tracker edit in the owner's workspace with `paseo run --workspace <owner
 workspace id>`. A read-only worker makes no worktree. Give a worker that writes
 code or docs a worktree workspace. For new capacity, inspect `paseo run --help`
 and provider capabilities, then use a bounded prompt and isolated workspace.
@@ -427,7 +442,7 @@ and provider capabilities, then use a bounded prompt and isolated workspace.
 `--new-workspace worktree --worktree-mode branch-off|checkout-pr`.
 Pass secrets only through `--env`. Codex workers need escalated sandbox
 permission for network access, including `gh` and `git fetch`; state this in
-every brief. Keep briefs in the lead state folder, not `/tmp`. Do not
+every brief. Keep briefs in the owner state folder, not `/tmp`. Do not
 copy stale IDs, spawn a second writer, or use bypass mode. Do not install/restart
 services as part of resuming work.
 
@@ -452,7 +467,7 @@ procedure. Keep transient task and worker IDs in durable status, not here.
 Temporary overrides need a recorded grant, scope, expiry, baseline and restore
 evidence. Check time and effective settings at each wake. Restore only when
 affected jobs/workers are idle; never interrupt them or clear their locks.
-Restore the normal hourly lead/reviewer/pickup cadence and each other recorded
+Restore the normal reviewer and pickup cadence and each other recorded
 baseline interval; verify system launchd and heartbeat readbacks separately.
 If a job is active at expiry, hold new affected work and defer restoration
 until it is idle. Do not extend the grant. Fast mode expired on
@@ -460,20 +475,20 @@ until it is idle. Do not extend the grant. Fast mode expired on
 permits extending limits or resetting rounds/budgets/locks. Report a restore
 problem and hold affected work; never silently weaken validation.
 
-Paste into a fresh lead session:
+Paste into a fresh owner session:
 
-> Resume sixtyops/manager as lead under current AGENTS authority. Read AGENTS,
-> docs/lead-operations-sop.md, North Star, one-right-way, live epic413 and durable
-> lead status. Confirm role ownership. Choose models by job within the Manager
-> safety policy. Verify live agents/jobs, all queue pages, locks/budgets/expiry,
+> Resume sixtyops/manager epic <n> as its owner under current AGENTS authority.
+> Read AGENTS, docs/owner-operations-sop.md, North Star, one-right-way, live
+> epic413 and the epic body. Confirm role ownership. Choose models by job
+> within the Manager safety policy. Verify live agents/jobs, all queue pages, locks/budgets/expiry,
 > worktrees and open PR overlap. Discover IDs. Follow the review-fix rule in
 > [Priority and delegation](#priority-and-delegation). Finish fixes first,
 > WIP3, system functionality before deferred website work. Delegate bounded
-> slices with skills and proof gates. The lead does not implement, investigate,
+> slices with skills and proof gates. The owner does not implement, investigate,
 > test, or review detailed diffs. Require independent review. Preserve
 > parked/denied work. Ask only about unresolved
 > intent or material decisions. Require exact-head independent/shared review,
 > packet, checks, zero threads, duplicates and bench proof where required. No production,
 > stable release, denial bypass or resets. Append/read back claim and result,
-> with evidence, limits and next owner/action. Do not duplicate the existing
-> hourly minute17 America/Chicago heartbeat.
+> with evidence, limits and next assignee/action. Do not duplicate an existing
+> heartbeat.

@@ -1,6 +1,6 @@
 # Release SOP
 
-**Key points:** This procedure is for the operator or a lead with explicit
+**Key points:** This procedure is for the operator or an owner with explicit
 release approval. Loop workers must not bump the version, create, move, or
 push a release tag, or run the Release workflow. A merge grant does not grant
 release authority. Follow [Agent rules](../AGENTS.md#agent-rules).
@@ -60,7 +60,7 @@ the full change list, and the image line. Keep it under the in-app 2,000-charact
 
 ### One-command path
 
-The owner runs this command on the machine that holds the release key:
+The operator runs this command on the machine that holds the release key:
 
 ```bash
 scripts/release-dev.sh <full-commit-sha>
@@ -68,10 +68,10 @@ scripts/release-dev.sh <full-commit-sha>
 
 The script fetches `origin`, checks that the commit is the current `main` head,
 checks CI and the dev version, and refuses an existing tag. It shows the
-version, commit, and changes since the last tag. The owner confirms with one
-`yes`; use `--yes` only when the owner has already authorized the release.
+version, commit, and changes since the last tag. The operator confirms with one
+`yes`; use `--yes` only when the operator has already authorized the release.
 The script signs and verifies the tag, pushes only that tag, watches its
-Release run, and prints the GitHub Release and GHCR tags. Only the owner signs
+Release run, and prints the GitHub Release and GHCR tags. Only the operator signs
 and pushes release tags. The script does not move branches or use `--tags`.
 It warns if the website install snippet does not pin the new image tag.
 
@@ -84,7 +84,7 @@ It warns if the website install snippet does not pin the new image tag.
    `pyproject.toml`, and the pinned image tag in `website/index.html`. Tagging
    before the bump is on `main` creates a tag whose code claims the wrong
    version — clients refuse it.
-3. **The owner signs the tag at `origin/main` and verifies before pushing:**
+3. **The operator signs the tag at `origin/main` and verifies before pushing:**
    ```bash
    git fetch origin
    git -c gpg.format=openpgp -c user.signingkey=E2C19E86B24A87283068AEFAF2D6F70883960DCE \
@@ -120,7 +120,7 @@ It warns if the website install snippet does not pin the new image tag.
 
 ## If release validation fails
 
-A failed validation leaves the owner-signed tag in the repository without a
+A failed validation leaves the operator-signed tag in the repository without a
 GitHub Release or GHCR image. The signed tag is the trust root; the workflow
 cannot validate before the tag exists. Fix forward:
 

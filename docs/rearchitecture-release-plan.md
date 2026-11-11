@@ -79,7 +79,7 @@ is merged and tested on the old schema. Stage 2 can then start.
 - It still self-applies. It exports the full data set and refuses to
   auto-apply anything newer.
 - It is a human gate ([#326](https://github.com/sixtyops/manager/issues/326)).
-  Stable releases need explicit approval from the owner.
+  Stable releases need explicit approval from the operator.
 
 **Detail:** The bridge export carries devices, users, settings, config
 snapshots, firmware confirmations, job history, and the Fernet key. After
@@ -110,7 +110,7 @@ a tag move.
 **Detail:** Identity makes a device a record keyed by `device_id`, not an IP
 address. Phase B builds the rollout engine. Both change the update path.
 Every engine or driver PR needs bench evidence on the exact head, as
-[CLAUDE.md](../CLAUDE.md#repository-lead-authority-2026-10-02) requires.
+[CLAUDE.md](../CLAUDE.md#owner-merge-authority) requires.
 A skipped hardware test does not count.
 
 The safe firmware path in epic [#413](https://github.com/sixtyops/manager/issues/413)
@@ -183,14 +183,14 @@ pinned image tag exists in GHCR.
    door. It is the live check, and it must pass before any design partner
    moves. This plan does not say whether the dev host uses a dev tag or the
    stable tag; decide that at the time, with the release scope in view. Record the backup, the import result, and the deployed
-   version and health. The lead may deploy to the dev host under the grant in
-   [CLAUDE.md](../CLAUDE.md#repository-lead-authority-2026-10-02). Verify the
+   version and health. The owner may deploy to the dev host under the grant in
+   [CLAUDE.md](../CLAUDE.md#owner-merge-authority). Verify the
    deployed version and health afterward. CI does not prove runtime state.
 2. **Design partners.** Each partner moves on their own schedule, agreed with
    them. A partner moves only after the first new-schema stable is published.
    Before each move, confirm the partner is on the bridge release and has a
    backup of `./data` with the Fernet key. Production-device and stable-release
-   actions need the owner. They are outside the lead's grant.
+   actions need the operator. They are outside the owner's grant.
 3. **Partners who stay behind.** A partner who has not moved stays on the bridge
    release. The bridge release does not auto-apply newer releases. Track each
    such partner in the exit criteria below until they move or have a scheduled
@@ -227,22 +227,22 @@ Rules for these checks:
 - The criteria are in epic [#316](https://github.com/sixtyops/manager/issues/316).
   Close #390 after verifying them in the epic body.
 - Issue #390 is not done when this PR merges. It is done when the epic body
-  has the criteria. The lead checks the epic body before closing #390.
+  has the criteria. The owner checks the epic body before closing #390.
 - After the copy, the epic body is the live tracker. This table stays the
   reference.
 
 ## Risks and open items
 
 **Key points:** Three items can change this plan. Each needs a decision from
-the owner or a bench result.
+the operator or a bench result.
 
 **Detail:**
 
 - **Stable approval.** The bridge release and the first new-schema stable are
-  stable releases. Stable releases are outside the lead's grant. The owner approves
+  stable releases. Stable releases are outside the owner's grant. The operator approves
   each one.
 - **Bench readiness.** Hardware proof for engine work depends on named bench
-  devices. The owner names them. Missing hardware blocks live proof. It does not
+  devices. The operator names them. Missing hardware blocks live proof. It does not
   block document and fixture work.
 - **Stage 3 length.** The dev-only period has no set length. It ends when its
   exit gate passes. Do not shorten it by skipping a gate.
