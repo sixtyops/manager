@@ -530,6 +530,7 @@ async def _recover_crashed_device_jobs():
             f"Recovering crashed job {job['job_id']}: "
             f"was updating {job.get('firmware_name', 'unknown')}"
         )
+        progress_write_failed = False
         try:
             payload = json.loads(job.get("device_ips_json", "[]"))
             device_ips = payload.get("devices", []) if isinstance(payload, dict) else payload
@@ -541,7 +542,29 @@ async def _recover_crashed_device_jobs():
             parent_ap = locator.get("parent_ap")
             reconciliation = "saved recovery identity is missing; operator action required"
             if locator.get("ap_identity"):
-                reconciliation = await _reconcile_crashed_ap_read_only(locator)
+                def persist_ap_round(round_number, round_started):
+                    nonlocal progress_write_failed
+                    locator["ap_recovery_rounds"] = round_number + 1
+                    locator["ap_recovery_next_round_utc"] = (
+                        datetime.now(timezone.utc)
+                        + timedelta(seconds=max(0, round_started + 30 - monotonic()))
+                    ).isoformat()
+                    try:
+                        with db.get_db() as connection:
+                            result = connection.execute(
+                                "UPDATE active_jobs SET device_ips_json = ?, updated_at = CURRENT_TIMESTAMP "
+                                "WHERE job_id = ? AND status = 'running'",
+                                (json.dumps(payload), job["job_id"]),
+                            )
+                            if result.rowcount != 1:
+                                raise RuntimeError("active AP recovery job was not updated")
+                    except Exception:
+                        progress_write_failed = True
+                        raise
+
+                reconciliation = await _reconcile_crashed_ap_read_only(
+                    locator, on_round_start=persist_ap_round
+                )
             elif expected_serial and current_ip:
                 credential_source = (
                     db.get_access_point(parent_ap) if parent_ap
@@ -586,6 +609,8 @@ async def _recover_crashed_device_jobs():
                 )
         except Exception as e:
             logger.error(f"Error recording crash recovery for {job['job_id']}: {e}")
+            if progress_write_failed:
+                continue
         db.clear_active_job(job["job_id"])
     if active:
         logger.warning(f"Recovered {len(active)} crashed job(s) from previous run")
@@ -625,7 +650,6 @@ async def _locate_ap_read_only(
     ap_macs = {identity["ethernet_mac"], identity["radio_mac"]}
     candidates = {current_ip}
     have_complete_peer_report = False
-    last_reason = "saved CPE peer reports were unavailable"
     round_number = initial_round
     while round_number < 20 and remaining() > 0:
         wait = max(0, next_round_at - monotonic())
@@ -639,17 +663,18 @@ async def _locate_ap_read_only(
         round_number += 1
         next_round_at = round_started + 30
 
-        round_has_peer_report = False
         for saved in cpes:
             if remaining() <= 0:
                 break
             cpe_ip = saved.get("ip")
-            credentials = credentials_for_cpe(saved)
-            if not (cpe_ip and saved.get("serial") and saved.get("model") and credentials):
-                continue
-            seconds = min(90, remaining())
-            cpe = get_driver("tachyon")(cpe_ip, *credentials, timeout=max(1, math.ceil(seconds) + 1))
             try:
+                credentials = credentials_for_cpe(saved)
+                if not (cpe_ip and saved.get("serial") and saved.get("model") and credentials):
+                    continue
+                seconds = min(90, remaining())
+                cpe = get_driver("tachyon")(
+                    cpe_ip, *credentials, timeout=max(1, math.ceil(seconds) + 1)
+                )
                 if await before_deadline(cpe.connect()) is not True:
                     continue
                 info = await before_deadline(cpe.get_device_info())
@@ -660,7 +685,6 @@ async def _locate_ap_read_only(
                 if getattr(cpe, "last_connected_aps_valid", True) is not True:
                     continue
                 have_complete_peer_report = True
-                round_has_peer_report = True
                 for ap in peers:
                     if _normalize_recovery_mac(ap.get("mac")) not in ap_macs:
                         continue
@@ -674,12 +698,9 @@ async def _locate_ap_read_only(
                         if len(candidates) > 32:
                             return None, "AP recovery exceeded 32 distinct candidates"
             except asyncio.TimeoutError:
-                last_reason = "CPE discovery timed out"
+                continue
             except Exception:
-                last_reason = "a saved CPE could not be reconciled"
-
-        if not round_has_peer_report and not have_complete_peer_report:
-            return None, last_reason
+                continue
 
         matches = []
         unready = set()
@@ -719,19 +740,19 @@ async def _locate_ap_read_only(
             return None, "multiple matching addresses reported the saved serial and model"
         if len(matches) == 1 and not unready:
             return matches[0], None
-        if not matches and identity_mismatch and not unready:
+        if not matches and identity_mismatch and not unready and have_complete_peer_report:
             return None, "no matching address reported the saved AP identity"
         if remaining() <= 0:
             break
-        if not have_complete_peer_report:
-            return None, last_reason
+        if round_number >= 20:
+            break
         await asyncio.sleep(min(max(0, next_round_at - monotonic()), max(0, remaining())))
     if remaining() <= 0:
         return None, "AP reboot deadline expired"
     return None, "AP recovery reached its 20-round limit"
 
 
-async def _reconcile_crashed_ap_read_only(locator):
+async def _reconcile_crashed_ap_read_only(locator, on_round_start=None):
     """Reconcile a crashed AP using only its saved reboot window and evidence."""
     try:
         deadline_dt = datetime.fromisoformat(locator.get("reboot_deadline_utc"))
@@ -744,8 +765,6 @@ async def _reconcile_crashed_ap_read_only(locator):
         if remaining <= 0:
             return "saved AP reboot deadline expired; operator action required"
         deadline = monotonic() + remaining
-        # Startup stays read-only. It derives elapsed slots and in-run saved
-        # rounds, but repeated restarts within one slot can retry that slot.
         rounds = max(
             int(locator.get("ap_recovery_rounds", 0)),
             math.floor(max(0, elapsed) / 30),
@@ -777,7 +796,8 @@ async def _reconcile_crashed_ap_read_only(locator):
 
     address, reason = await _locate_ap_read_only(
         locator, deadline, next_round, credentials_for_cpe,
-        (ap_row["username"], ap_row["password"]), initial_round=rounds,
+        (ap_row["username"], ap_row["password"]), on_round_start=on_round_start,
+        initial_round=rounds,
     )
     if address:
         return f"read-only recovery confirmed AP serial {locator['serial']} at {address}; operator action required"
