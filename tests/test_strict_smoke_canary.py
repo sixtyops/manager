@@ -96,6 +96,7 @@ class _FakeClient:
         self._smoke_checks = smoke_checks
         self._rebooted = False
         self._updated = False
+        self.ip = ip
 
     def get_reboot_timeout(self, role): return 1
     def get_update_timeout(self, role): return 5
@@ -104,6 +105,7 @@ class _FakeClient:
     async def connect(self): return True
     async def get_config(self): return {"system": {"name": "smoke-test"}}
     async def get_connected_cpes(self): return []
+    async def get_ap_radio_mac(self): return "02:00:00:00:00:10"
     async def get_bridge_table(self): return []
     async def reboot(self, timeout=1):
         self._rebooted = True
@@ -117,9 +119,10 @@ class _FakeClient:
         from updater.vendors.base import VendorDeviceInfo
         serial = self._post_serial if self._updated else (self._reboot_serial if self._rebooted else self._serial)
         version = self._version if self._updated else (self._reboot_version if self._rebooted else "1.0.0.100")
-        return VendorDeviceInfo(ip="x", model="TNA-301", serial=serial,
+        return VendorDeviceInfo(ip=self.ip, model="TNA-301", serial=serial,
                                 current_version=version,
-                                extra={"management_vlan": 100, "management_ip_mode": "dhcp"})
+                                mac="02:00:00:00:00:11",
+                                extra={"management_vlan_id": 100, "management_ip_mode": "dhcp"})
 
     async def update_firmware(self, fw_path, cb, **kw):
         self._updated = True

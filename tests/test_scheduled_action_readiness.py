@@ -30,6 +30,10 @@ def runtime_mocks(mock_db, monkeypatch):
 
 
 def scheduled_job():
+    db.upsert_access_point(
+        "192.0.2.1", "user", "password", enabled=True, model="TNA-301",
+        mac="02:00:00:00:00:11", firmware_version="1.0.0.100",
+    )
     job = _make_job("192.0.2.1")
     job.is_scheduled = True
     job.enforce_window_cutoff = False
@@ -63,12 +67,18 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
         async def connect(self): return True
         async def get_config(self): return {"system": {"name": "readiness-test"}}
         async def get_connected_cpes(self): return []
+        async def get_ap_radio_mac(self): return "02:00:00:00:00:10"
         async def get_bridge_table(self): return []
         async def get_device_info(self):
             return SimpleNamespace(
                 ip=self.ip, model="TNA-301", serial=f"SERIAL-{self.ip}",
+                mac="02:00:00:00:00:11",
                 current_version="1.2.3.200" if self.updated else "1.0.0.100",
-                extra={},
+                extra={
+                    "management_vlan_id": 12,
+                    "management_ip_mode": "static",
+                    "management_address": self.ip,
+                },
             )
 
         async def recover(self, *, block=True):

@@ -4498,28 +4498,31 @@ async def _capture_ap_recovery_baseline(job, ap_ip, ap_client):
     radio_mac_reader = getattr(ap_client, "get_ap_radio_mac", None)
     if not callable(radio_mac_reader):
         radio_mac_reader = getattr(getattr(ap_client, "_client", None), "get_ap_radio_mac", None)
-    if callable(radio_mac_reader):
-        info = await ap_client.get_device_info()
-        ethernet_mac = _normalize_recovery_mac(getattr(info, "mac", None))
-        radio_mac = _normalize_recovery_mac(await radio_mac_reader())
-        device = db.get_device(ap_ip)
-        management = _management_settings(info)
-        if not (getattr(info, "serial", None) and getattr(info, "model", None)
-                and ethernet_mac and radio_mac and device and device.get("id")
-                and management["vlan"] is not None
-                and management["ip_mode"] in {"static", "dhcp"}
-                and management["address"]):
-            raise RuntimeError("AP identity or management baseline is unavailable before firmware update")
-        if locator_serial := job.recovery_locators.get(ap_ip, {}).get("serial"):
-            if getattr(info, "serial", None) != locator_serial:
-                raise RuntimeError("Expected AP serial changed before recovery baseline capture")
-        locator = job.recovery_locators.setdefault(ap_ip, {})
-        locator["ap_identity"] = {
-            "device_id": device["id"], "ethernet_mac": ethernet_mac, "radio_mac": radio_mac,
-        }
-        locator["cpe_locators"] = cpe_locators
-        locator["management_baseline"] = management
-        _persist_recovery_locator(job, ap_ip)
+    if not callable(radio_mac_reader):
+        if not hasattr(job, "recovery_locators"):
+            return {"peers": baseline}
+        raise RuntimeError("AP radio MAC reader is unavailable before firmware update")
+    info = await ap_client.get_device_info()
+    ethernet_mac = _normalize_recovery_mac(getattr(info, "mac", None))
+    radio_mac = _normalize_recovery_mac(await radio_mac_reader())
+    device = db.get_device(ap_ip)
+    management = _management_settings(info)
+    if not (getattr(info, "serial", None) and getattr(info, "model", None)
+            and ethernet_mac and radio_mac and device and device.get("id")
+            and management["vlan"] is not None
+            and management["ip_mode"] in {"static", "dhcp"}
+            and management["address"]):
+        raise RuntimeError("AP identity or management baseline is unavailable before firmware update")
+    if locator_serial := job.recovery_locators.get(ap_ip, {}).get("serial"):
+        if getattr(info, "serial", None) != locator_serial:
+            raise RuntimeError("Expected AP serial changed before recovery baseline capture")
+    locator = job.recovery_locators.setdefault(ap_ip, {})
+    locator["ap_identity"] = {
+        "device_id": device["id"], "ethernet_mac": ethernet_mac, "radio_mac": radio_mac,
+    }
+    locator["cpe_locators"] = cpe_locators
+    locator["management_baseline"] = management
+    _persist_recovery_locator(job, ap_ip)
     return {"peers": baseline}
 
 
@@ -4619,9 +4622,8 @@ async def _restart_ap_cpes_after_recovery(job, ap_ip, baseline):
 async def _check_ap_recovery_after_cpe_rejoin(job, ap_ip, ap_client, baseline, deadline):
     """Reboot saved CPEs before checking that they rejoined the recovered AP."""
     await _restart_ap_cpes_after_recovery(job, ap_ip, baseline)
-    peer_return_deadline = monotonic() + ap_client.get_reboot_timeout("ap")
     return await _check_ap_recovery(
-        job, ap_ip, ap_client, baseline, peer_return_deadline
+        job, ap_ip, ap_client, baseline, deadline
     )
 
 

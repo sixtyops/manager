@@ -182,6 +182,35 @@ async def test_ap_baseline_reads_radio_mac_from_wrapped_tachyon_client(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_ap_baseline_fails_closed_without_radio_mac_reader(monkeypatch):
+    job = recovery_job(role="ap")
+
+    class APClient:
+        async def get_connected_cpes(self):
+            return []
+
+        async def get_device_info(self):
+            return SimpleNamespace(
+                ip=OLD_IP, serial=SERIAL, model="TNA-301", mac="02:00:00:00:00:21",
+                management_vlan_id=12, management_ip_mode="dhcp",
+                management_address=OLD_IP,
+            )
+
+    with pytest.raises(RuntimeError, match="radio MAC reader is unavailable"):
+        await app._capture_ap_recovery_baseline(job, OLD_IP, APClient())
+
+
+@pytest.mark.asyncio
+async def test_ap_recovery_fails_closed_without_saved_cpe_locators(monkeypatch):
+    job = recovery_job(role="ap")
+    client = RecoveryClient({})
+    callback = app._make_recovery_callback(job, OLD_IP, client, SERIAL, "TNA-301", RADIO_MAC)
+
+    assert not await callback(app.monotonic() + 5, app.monotonic())
+    assert callback.failure_reason["reason"] == "Device not found after update"
+
+
+@pytest.mark.asyncio
 async def test_open_identity_conflict_stops_recovery(monkeypatch):
     connection = SimpleNamespace(execute=lambda query: SimpleNamespace(
         fetchall=lambda: [("mac", RADIO_MAC.lower().replace(":", "-"))],

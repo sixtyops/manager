@@ -85,7 +85,7 @@ async def test_saved_cpe_uses_ap_credentials_when_cpe_credentials_are_missing(mo
 
 
 @pytest.mark.asyncio
-async def test_rejoin_check_runs_after_saved_cpe_restart(monkeypatch):
+async def test_rejoin_check_uses_original_deadline_after_saved_cpe_restart(monkeypatch):
     calls = []
     monkeypatch.setattr(app_module, "monotonic", lambda: 10.0)
 
@@ -93,7 +93,7 @@ async def test_rejoin_check_runs_after_saved_cpe_restart(monkeypatch):
         calls.append("restart")
 
     async def check(_job, _ap_ip, _ap_client, _baseline, deadline):
-        assert deadline == 610.0
+        assert deadline == 10.0
         calls.append("peer_check")
         return True, {"peers": {}}
 
@@ -106,7 +106,7 @@ async def test_rejoin_check_runs_after_saved_cpe_restart(monkeypatch):
     monkeypatch.setattr(app_module, "_check_ap_recovery", check)
 
     result = await app_module._check_ap_recovery_after_cpe_rejoin(
-        SimpleNamespace(), "192.0.2.1", AP(), {"peers": {}}, 10.0
+        SimpleNamespace(), "192.0.2.1", AP(), {"peers": {}}, deadline=10.0
     )
 
     assert result[0] is True
@@ -158,7 +158,7 @@ async def test_failed_cpe_reboot_still_fails_when_peer_does_not_return(monkeypat
     )
     baseline = {"peers": {"02:00:00:00:00:01": {"ip": "192.0.2.8"}}}
     passed, evidence = await app_module._check_ap_recovery_after_cpe_rejoin(
-        job, "192.0.2.1", AP(), baseline, 1.0
+        job, "192.0.2.1", AP(), baseline, 15.0
     )
 
     assert passed is False
