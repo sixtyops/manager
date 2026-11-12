@@ -100,6 +100,7 @@ class TachyonDriver(VendorDriver):
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
         upload_started_callback: Optional[Callable[[], None]] = None,
+        reboot_started_callback: Optional[Callable[[], None]] = None,
         serial_check=None,
         recovery_callback=None,
     ) -> VendorUpdateResult:
@@ -108,6 +109,8 @@ class TachyonDriver(VendorDriver):
             options["admission_check"] = admission_check
         if upload_started_callback:
             options["upload_started_callback"] = upload_started_callback
+        if reboot_started_callback:
+            options["reboot_started_callback"] = reboot_started_callback
         if serial_check:
             options["serial_check"] = serial_check
         if recovery_callback:

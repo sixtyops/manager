@@ -1,6 +1,8 @@
 """Offline checks for serial-confirmed Tachyon reboot recovery."""
 
+import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -366,6 +368,149 @@ async def test_crash_recovery_reads_saved_locator_and_serial_without_replaying_f
     assert history[0]["ip"] == OLD_IP
     assert history[0]["failed_stage"] == "crash_recovery"
     assert "read-only recovery confirmed serial" in history[0]["error"]
+
+
+@pytest.mark.parametrize("failure", ["non_answering_cpe", "wrong_ap_identity", "multiple_matches", "timeout"])
+@pytest.mark.asyncio
+async def test_crashed_ap_recovery_discovers_read_only_and_fails_closed(monkeypatch, failure):
+    cpe_ip = NEW_IP
+    second_ap_ip = "192.0.2.22"
+    deadline = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+    locator = {
+        "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
+        "reboot_deadline_utc": deadline,
+        "ap_identity": {
+            "device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+            "radio_mac": "02:00:00:00:00:20",
+        },
+        "cpe_locators": [{"ip": cpe_ip, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+        "cpe_locator_count": 1,
+    }
+    monkeypatch.setattr(app.db, "get_access_point", lambda _ip: {
+        "username": "ap-user", "password": "ap-pass",
+    })
+    monkeypatch.setattr(app.db, "get_device", lambda _ip: {
+        "username": "cpe-user", "password": "cpe-pass",
+    })
+    seen = []
+
+    class CPEClient:
+        last_connected_aps_valid = True
+
+        async def connect(self):
+            if failure == "timeout":
+                raise asyncio.TimeoutError
+            return failure != "non_answering_cpe"
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial="CPE-SERIAL", model="TNA-303X")
+
+        async def get_connected_aps(self):
+            if failure == "multiple_matches":
+                return [
+                    {"ip": NEW_AP, "mac": "02:00:00:00:00:21"},
+                    {"ip": second_ap_ip, "mac": "02:00:00:00:00:20"},
+                ]
+            return [{"ip": NEW_AP, "mac": "02:00:00:00:00:21"}]
+
+    class APClient:
+        def __init__(self, ip, *_args, **_kwargs):
+            self.ip = ip
+            seen.append(ip)
+
+        async def connect(self):
+            return True
+
+        async def get_device_info(self):
+            wrong = failure == "wrong_ap_identity"
+            return SimpleNamespace(
+                serial="OTHER-AP" if wrong else SERIAL,
+                model="TNA-302" if wrong else "TNA-301",
+            )
+
+    monkeypatch.setattr(app, "get_driver", lambda _vendor: lambda ip, *_args, **_kwargs:
+                        CPEClient() if ip == cpe_ip else APClient(ip))
+    monkeypatch.setattr(app, "_persist_recovery_locator", lambda *_args: pytest.fail("read-only path persisted state"))
+    monkeypatch.setattr(app.db, "relocate_ap_address", lambda *_args: pytest.fail("read-only path relocated AP"))
+
+    result = await app._reconcile_crashed_ap_read_only(locator)
+
+    if failure == "multiple_matches":
+        assert "multiple matching addresses" in result
+    elif failure == "wrong_ap_identity":
+        assert "no matching address" in result
+    elif failure == "timeout":
+        assert "timed out" in result
+    else:
+        assert "did not answer" in result
+
+
+@pytest.mark.asyncio
+async def test_crashed_ap_recovery_confirms_moved_address_without_writes(monkeypatch):
+    deadline = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+    locator = {
+        "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
+        "reboot_deadline_utc": deadline,
+        "ap_identity": {
+            "device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+            "radio_mac": "02:00:00:00:00:20",
+        },
+        "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+        "cpe_locator_count": 1,
+    }
+    monkeypatch.setattr(app.db, "get_access_point", lambda _ip: {
+        "username": "ap-user", "password": "ap-pass",
+    })
+    monkeypatch.setattr(app.db, "get_device", lambda _ip: {
+        "username": "cpe-user", "password": "cpe-pass",
+    })
+    checked = []
+
+    class CPEClient:
+        last_connected_aps_valid = True
+
+        async def connect(self):
+            return True
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial="CPE-SERIAL", model="TNA-303X")
+
+        async def get_connected_aps(self):
+            return [{"ip": NEW_AP, "mac": "02:00:00:00:00:20"}]
+
+    class APClient:
+        def __init__(self, ip, *_args, **_kwargs):
+            self.ip = ip
+            checked.append(ip)
+
+        async def connect(self):
+            return self.ip != OLD_AP
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial=SERIAL, model="TNA-301")
+
+    monkeypatch.setattr(app, "get_driver", lambda _vendor: lambda ip, *_args, **_kwargs:
+                        CPEClient() if ip == NEW_IP else APClient(ip))
+    monkeypatch.setattr(app.db, "relocate_ap_address", lambda *_args: pytest.fail("read-only path relocated AP"))
+
+    result = await app._reconcile_crashed_ap_read_only(locator)
+
+    assert f"confirmed AP serial {SERIAL} at {NEW_AP}" in result
+    assert set(checked) == {OLD_AP, NEW_AP}
+    assert locator["ip"] == OLD_AP
+
+
+@pytest.mark.asyncio
+async def test_crashed_ap_recovery_fails_closed_when_deadline_expired():
+    locator = {
+        "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
+        "reboot_deadline_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+        "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+                        "radio_mac": "02:00:00:00:00:20"},
+        "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+        "cpe_locator_count": 1,
+    }
+    assert "deadline expired" in await app._reconcile_crashed_ap_read_only(locator)
 
 
 @pytest.mark.asyncio
