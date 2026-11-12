@@ -129,6 +129,7 @@ async def test_ap_recovery_uses_saved_cpe_peer_and_commits_verified_move(monkeyp
         },
         "management_baseline": {"vlan": 12, "ip_mode": "dhcp", "address": OLD_IP},
         "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+        "cpe_locator_count": 1,
     })
     monkeypatch.setattr(app, "get_poller", lambda: None)
     monkeypatch.setattr(app.db, "save_active_job", lambda *args: None)
@@ -180,7 +181,10 @@ async def test_ap_baseline_reads_radio_mac_from_wrapped_tachyon_client(monkeypat
         "ethernet_mac": "02:00:00:00:00:21",
         "radio_mac": "02:00:00:00:00:20",
     }
-    assert job.recovery_locators[OLD_IP]["cpe_locators"] == []
+    assert job.recovery_locators[OLD_IP]["cpe_locators"] == [{
+        "device_id": None, "ip": NEW_IP, "serial": None, "model": None,
+        "mac": RADIO_MAC, "credential_ref": OLD_IP, "parent_ap_ip": OLD_IP,
+    }]
 
 
 @pytest.mark.asyncio
@@ -379,6 +383,7 @@ async def test_crashed_ap_recovery_discovers_read_only_and_fails_closed(monkeypa
     locator = {
         "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
         "reboot_deadline_utc": deadline,
+        "reboot_started_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
         "ap_identity": {
             "device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
             "radio_mac": "02:00:00:00:00:20",
@@ -452,6 +457,7 @@ async def test_crashed_ap_recovery_confirms_moved_address_without_writes(monkeyp
     locator = {
         "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
         "reboot_deadline_utc": deadline,
+        "reboot_started_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
         "ap_identity": {
             "device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
             "radio_mac": "02:00:00:00:00:20",
@@ -509,6 +515,7 @@ async def test_crashed_ap_recovery_fails_closed_when_deadline_expired():
     locator = {
         "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
         "reboot_deadline_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+        "reboot_started_utc": (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat(),
         "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
                         "radio_mac": "02:00:00:00:00:20"},
         "cpe_locators": [{
@@ -526,6 +533,7 @@ async def test_crashed_ap_recovery_uses_saved_parent_ap_credential_fallback(monk
     locator = {
         "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
         "reboot_deadline_utc": deadline,
+        "reboot_started_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
         "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
                         "radio_mac": "02:00:00:00:00:20"},
         "cpe_locator_count": 1,
@@ -581,6 +589,7 @@ async def test_crashed_ap_recovery_skips_offline_cpe_and_uses_another_saved_loca
     locator = {
         "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
         "reboot_deadline_utc": deadline,
+        "reboot_started_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
         "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
                         "radio_mac": "02:00:00:00:00:20"},
         "cpe_locator_count": 2,
@@ -637,6 +646,7 @@ async def test_crashed_ap_recovery_retries_empty_peer_report_until_matching_repo
     locator = {
         "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
         "reboot_deadline_utc": deadline,
+        "reboot_started_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
         "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
                         "radio_mac": "02:00:00:00:00:20"},
         "cpe_locator_count": 1,
@@ -697,6 +707,7 @@ async def test_crashed_ap_recovery_caps_distinct_addresses_at_32(monkeypatch):
     locator = {
         "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
         "reboot_deadline_utc": deadline,
+        "reboot_started_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
         "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
                         "radio_mac": "02:00:00:00:00:20"},
         "cpe_locator_count": 1,
@@ -731,6 +742,176 @@ async def test_crashed_ap_recovery_caps_distinct_addresses_at_32(monkeypatch):
     result = await app._reconcile_crashed_ap_read_only(locator)
 
     assert "exceeded 32 distinct candidates" in result
+
+
+@pytest.mark.asyncio
+async def test_restart_ap_discovery_keeps_transport_timeout_for_slow_device(monkeypatch):
+    started = datetime.now(timezone.utc)
+    locator = {
+        "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
+        "reboot_started_utc": started.isoformat(),
+        "reboot_deadline_utc": (started + timedelta(seconds=85)).isoformat(),
+        "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+                        "radio_mac": "02:00:00:00:00:20"},
+        "cpe_locator_count": 1,
+        "cpe_locators": [{
+            "ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X",
+            "credential_ref": 1, "parent_ap_ip": OLD_AP,
+        }],
+    }
+    monkeypatch.setattr(app.db, "get_access_point", lambda _ip: {
+        "username": "ap-user", "password": "ap-pass",
+    })
+    monkeypatch.setattr(app.db, "get_device_by_id", lambda _device_id: {
+        "username": "cpe-user", "password": "cpe-pass",
+    })
+    observed_timeouts = []
+
+    class CPEClient:
+        last_connected_aps_valid = True
+
+        async def connect(self):
+            return True
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial="CPE-SERIAL", model="TNA-303X")
+
+        async def get_connected_aps(self):
+            return [{"ip": NEW_AP, "mac": "02:00:00:00:00:20"}]
+
+    class APClient:
+        def __init__(self, ip, *_args, timeout, **_kwargs):
+            self.ip = ip
+            self.timeout = timeout
+            observed_timeouts.append(timeout)
+
+        async def connect(self):
+            return self.ip == NEW_AP
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial=SERIAL, model="TNA-301")
+
+    monkeypatch.setattr(app, "get_driver", lambda _vendor: lambda ip, *_args, **kwargs:
+                        CPEClient() if ip == NEW_IP else APClient(ip, **kwargs))
+    monkeypatch.setattr(app.db, "relocate_ap_address", lambda *_args: pytest.fail("restart moved AP"))
+    monkeypatch.setattr(app, "_persist_recovery_locator", lambda *_args: pytest.fail("restart persisted state"))
+
+    result = await app._reconcile_crashed_ap_read_only(locator)
+
+    assert f"confirmed AP serial {SERIAL} at {NEW_AP}" in result
+    assert observed_timeouts and max(observed_timeouts) >= 85
+
+
+@pytest.mark.asyncio
+async def test_ap_locator_retries_unready_reported_candidate_with_30_second_spacing(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(app, "monotonic", lambda: now[0])
+    sleeps = []
+
+    async def advance(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(app.asyncio, "sleep", advance)
+    locator = {
+        "serial": SERIAL, "model": "TNA-301", "ip": OLD_AP,
+        "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+                        "radio_mac": "02:00:00:00:00:20"},
+        "cpe_locator_count": 1,
+        "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+    }
+    peer_reads = []
+    candidate_reads = []
+    candidate_attempts = {}
+
+    class CPEClient:
+        last_connected_aps_valid = True
+
+        async def connect(self):
+            return True
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial="CPE-SERIAL", model="TNA-303X")
+
+        async def get_connected_aps(self):
+            peer_reads.append(now[0])
+            return [{"ip": NEW_AP, "mac": "02:00:00:00:00:20"}]
+
+    class APClient:
+        def __init__(self, ip):
+            self.ip = ip
+
+        async def connect(self):
+            candidate_reads.append((self.ip, now[0]))
+            candidate_attempts[self.ip] = candidate_attempts.get(self.ip, 0) + 1
+            return self.ip == NEW_AP and candidate_attempts[self.ip] > 1
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial=SERIAL, model="TNA-301")
+
+    def factory(ip, *_args, **_kwargs):
+        return CPEClient() if ip == NEW_IP else APClient(ip)
+
+    monkeypatch.setattr(app, "get_driver", lambda _vendor: factory)
+    result, reason = await app._locate_ap_read_only(
+        locator, now[0] + 70, now[0], lambda _saved: ("u", "p"), ("u", "p"),
+    )
+
+    assert result == NEW_AP and reason is None
+    assert len(peer_reads) == 2
+    assert sleeps == [30]
+    assert peer_reads[1] - peer_reads[0] == 30
+
+
+@pytest.mark.asyncio
+async def test_in_run_ap_ambiguity_does_not_move_ap(monkeypatch):
+    job = recovery_job(role="ap")
+    job.credentials = {OLD_IP: ("u", "p"), NEW_AP: ("u", "p")}
+    locator = job.recovery_locators[OLD_IP]
+    locator.update({
+        "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+                        "radio_mac": "02:00:00:00:00:20"},
+        "management_baseline": {"vlan": 12, "ip_mode": "dhcp", "address": OLD_IP},
+        "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+        "cpe_locator_count": 1,
+    })
+
+    class APClient:
+        def __init__(self):
+            self.ip = OLD_IP
+            self._client = SimpleNamespace(ip=OLD_IP, _base_url=f"https://{OLD_IP}", _token=None)
+
+        async def connect(self):
+            return self.ip in {NEW_AP, "192.0.2.22"}
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial=SERIAL, model="TNA-301")
+
+    class CPEClient:
+        last_connected_aps_valid = True
+
+        async def connect(self):
+            return True
+
+        async def get_device_info(self):
+            return SimpleNamespace(serial="CPE-SERIAL", model="TNA-303X")
+
+        async def get_connected_aps(self):
+            return [
+                {"ip": NEW_AP, "mac": "02:00:00:00:00:20"},
+                {"ip": "192.0.2.22", "mac": "02:00:00:00:00:21"},
+            ]
+
+    monkeypatch.setattr(app, "get_driver", lambda _vendor: lambda *_args, **_kwargs: CPEClient())
+    monkeypatch.setattr(app.db, "relocate_ap_address", lambda *_args: pytest.fail("ambiguous AP moved"))
+    persisted_round = MagicMock()
+    monkeypatch.setattr(app, "_persist_recovery_locator", persisted_round)
+    callback = app._make_recovery_callback(job, OLD_IP, APClient(), SERIAL, "TNA-301", RADIO_MAC)
+
+    assert not await callback(app.monotonic() + 20, app.monotonic())
+    assert "Ambiguous" in callback.failure_reason["reason"]
+    assert locator["ip"] == OLD_IP
+    persisted_round.assert_called_once()
 
 
 @pytest.mark.asyncio

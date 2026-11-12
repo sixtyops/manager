@@ -591,40 +591,175 @@ async def _recover_crashed_device_jobs():
         logger.warning(f"Recovered {len(active)} crashed job(s) from previous run")
 
 
-async def _reconcile_crashed_ap_read_only(locator):
-    """Find a moved AP through saved CPEs without writing or extending its deadline."""
+async def _locate_ap_read_only(
+    locator, deadline, next_round_at, credentials_for_cpe, ap_credentials,
+    ap_client=None, on_round_start=None, initial_round=0,
+):
+    """Locate one AP by saved CPE reports and authenticated serial/model reads."""
     identity = locator.get("ap_identity") or {}
     serial = locator.get("serial")
     model = locator.get("model")
-    deadline = locator.get("reboot_deadline_utc")
     cpes = locator.get("cpe_locators")
     current_ip = locator.get("ip")
     if not (serial and model and identity.get("device_id")
             and identity.get("ethernet_mac") and identity.get("radio_mac")
             and isinstance(cpes, list) and cpes and current_ip
             and locator.get("cpe_locator_count") == len(cpes)):
-        return "saved AP recovery identity is incomplete; operator action required"
-    try:
-        deadline_dt = datetime.fromisoformat(deadline)
-        if deadline_dt.tzinfo is None:
-            raise ValueError("AP reboot deadline has no timezone")
-        deadline_epoch = deadline_dt.timestamp()
-    except (TypeError, ValueError, OverflowError):
-        return "saved AP reboot deadline is missing or invalid; operator action required"
-    remaining = deadline_epoch - datetime.now(timezone.utc).timestamp()
-    if remaining <= 0:
-        return "saved AP reboot deadline expired; operator action required"
+        return None, "saved AP recovery identity is incomplete"
+    if not ap_credentials:
+        return None, "saved AP credentials are unavailable"
+
+    def remaining():
+        return deadline - monotonic()
 
     async def before_deadline(awaitable):
-        left = deadline_epoch - datetime.now(timezone.utc).timestamp()
+        left = remaining()
         if left <= 0:
             raise asyncio.TimeoutError
-        return await asyncio.wait_for(awaitable, timeout=min(15, left))
+        return await asyncio.wait_for(awaitable, timeout=left)
 
-    def has_credentials(device):
-        return bool(device and device.get("username") and device.get("password"))
+    def set_transport_timeout(driver, seconds):
+        inner = getattr(driver, "_client", driver)
+        inner.timeout = max(1, min(90, math.ceil(seconds) + 1))
 
-    def saved_cpe_credentials(saved):
+    ap_macs = {identity["ethernet_mac"], identity["radio_mac"]}
+    candidates = {current_ip}
+    have_complete_peer_report = False
+    last_reason = "saved CPE peer reports were unavailable"
+    round_number = initial_round
+    while round_number < 20 and remaining() > 0:
+        wait = max(0, next_round_at - monotonic())
+        if wait:
+            await asyncio.sleep(min(wait, max(0, remaining())))
+        if remaining() <= 0:
+            break
+        round_started = monotonic()
+        if on_round_start:
+            on_round_start(round_number, round_started)
+        round_number += 1
+        next_round_at = round_started + 30
+
+        round_has_peer_report = False
+        for saved in cpes:
+            if remaining() <= 0:
+                break
+            cpe_ip = saved.get("ip")
+            credentials = credentials_for_cpe(saved)
+            if not (cpe_ip and saved.get("serial") and saved.get("model") and credentials):
+                continue
+            seconds = min(90, remaining())
+            cpe = get_driver("tachyon")(cpe_ip, *credentials, timeout=max(1, math.ceil(seconds) + 1))
+            try:
+                if await before_deadline(cpe.connect()) is not True:
+                    continue
+                info = await before_deadline(cpe.get_device_info())
+                if (getattr(info, "serial", None) != saved["serial"]
+                        or str(getattr(info, "model", "")).lower() != saved["model"].lower()):
+                    continue
+                peers = await before_deadline(cpe.get_connected_aps())
+                if getattr(cpe, "last_connected_aps_valid", True) is not True:
+                    continue
+                have_complete_peer_report = True
+                round_has_peer_report = True
+                for ap in peers:
+                    if _normalize_recovery_mac(ap.get("mac")) not in ap_macs:
+                        continue
+                    try:
+                        address = ipaddress.IPv4Address(ap.get("ip"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not (address.is_multicast or address.is_unspecified
+                            or address.is_loopback or address.is_link_local):
+                        candidates.add(str(address))
+                        if len(candidates) > 32:
+                            return None, "AP recovery exceeded 32 distinct candidates"
+            except asyncio.TimeoutError:
+                last_reason = "CPE discovery timed out"
+            except Exception:
+                last_reason = "a saved CPE could not be reconciled"
+
+        if not round_has_peer_report and not have_complete_peer_report:
+            return None, last_reason
+
+        matches = []
+        unready = set()
+        identity_mismatch = False
+        for address in sorted(candidates):
+            if remaining() <= 0:
+                break
+            seconds = remaining()
+            candidate_client = ap_client or get_driver("tachyon")(
+                address, *ap_credentials, timeout=max(1, math.ceil(min(90, seconds)) + 1),
+            )
+            if ap_client is not None:
+                _set_driver_locator(candidate_client, address)
+            set_transport_timeout(candidate_client, seconds)
+            try:
+                if await before_deadline(candidate_client.connect()) is not True:
+                    if address != current_ip:
+                        unready.add(address)
+                    continue
+                info = await before_deadline(candidate_client.get_device_info())
+            except asyncio.TimeoutError:
+                if address != current_ip:
+                    unready.add(address)
+                continue
+            except Exception:
+                if address != current_ip:
+                    unready.add(address)
+                continue
+            candidate_model = getattr(info, "model", None)
+            if (getattr(info, "serial", None) == serial
+                    and isinstance(candidate_model, str)
+                    and candidate_model.lower() == model.lower()):
+                matches.append(address)
+            else:
+                identity_mismatch = True
+        if len(matches) > 1:
+            return None, "multiple matching addresses reported the saved serial and model"
+        if len(matches) == 1 and not unready:
+            return matches[0], None
+        if not matches and identity_mismatch and not unready:
+            return None, "no matching address reported the saved AP identity"
+        if remaining() <= 0:
+            break
+        if not have_complete_peer_report:
+            return None, last_reason
+        await asyncio.sleep(min(max(0, next_round_at - monotonic()), max(0, remaining())))
+    if remaining() <= 0:
+        return None, "AP reboot deadline expired"
+    return None, "AP recovery reached its 20-round limit"
+
+
+async def _reconcile_crashed_ap_read_only(locator):
+    """Reconcile a crashed AP using only its saved reboot window and evidence."""
+    try:
+        deadline_dt = datetime.fromisoformat(locator.get("reboot_deadline_utc"))
+        started_dt = datetime.fromisoformat(locator.get("reboot_started_utc"))
+        if deadline_dt.tzinfo is None or started_dt.tzinfo is None:
+            return "saved AP reboot deadline is invalid; operator action required"
+        now_utc = datetime.now(timezone.utc)
+        remaining = (deadline_dt - now_utc).total_seconds()
+        elapsed = (now_utc - started_dt).total_seconds()
+        if remaining <= 0:
+            return "saved AP reboot deadline expired; operator action required"
+        deadline = monotonic() + remaining
+        # Startup stays read-only. It derives elapsed slots and in-run saved
+        # rounds, but repeated restarts within one slot can retry that slot.
+        rounds = max(
+            int(locator.get("ap_recovery_rounds", 0)),
+            math.floor(max(0, elapsed) / 30),
+        )
+        saved_next = datetime.fromisoformat(locator.get("ap_recovery_next_round_utc", started_dt.isoformat()))
+        next_round = monotonic() + max(0, (saved_next - now_utc).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return "saved AP reboot deadline is missing or invalid; operator action required"
+
+    ap_row = db.get_access_point(locator.get("ip"))
+    if not ap_row or not ap_row.get("username") or not ap_row.get("password"):
+        return "saved AP credentials are unavailable; operator action required"
+
+    def credentials_for_cpe(saved):
         credential_ref = saved.get("credential_ref")
         if isinstance(credential_ref, int) and not isinstance(credential_ref, bool):
             source = db.get_device_by_id(credential_ref)
@@ -632,103 +767,21 @@ async def _reconcile_crashed_ap_read_only(locator):
             source = db.get_access_point(credential_ref)
         else:
             source = None
-        if has_credentials(source):
+        if source and source.get("username") and source.get("password"):
             return source["username"], source["password"]
-        # Older locators may lack a usable device reference. Use only the
-        # saved parent AP as the supported inherited-credential fallback.
-        parent_ip = saved.get("parent_ap_ip") or locator.get("original_ip") or current_ip
+        parent_ip = saved.get("parent_ap_ip") or locator.get("original_ip") or locator.get("ip")
         parent = db.get_access_point(parent_ip)
-        if has_credentials(parent):
+        if parent and parent.get("username") and parent.get("password"):
             return parent["username"], parent["password"]
         return None
 
-    try:
-        ap_credentials_row = db.get_access_point(current_ip)
-        if not has_credentials(ap_credentials_row):
-            return "saved AP credentials are unavailable; operator action required"
-        ap_credentials = (ap_credentials_row["username"], ap_credentials_row["password"])
-        ap_macs = {identity["ethernet_mac"], identity["radio_mac"]}
-        candidates = {current_ip}
-        have_complete_peer_report = False
-        while datetime.now(timezone.utc).timestamp() < deadline_epoch:
-            round_candidates = {current_ip}
-            round_has_complete_peer_report = False
-            round_timed_out = False
-            for saved in cpes:
-                if datetime.now(timezone.utc).timestamp() >= deadline_epoch:
-                    return "saved AP reboot deadline expired during CPE discovery; operator action required"
-                cpe_ip, cpe_serial, cpe_model = saved.get("ip"), saved.get("serial"), saved.get("model")
-                credentials = saved_cpe_credentials(saved)
-                if not (cpe_ip and cpe_serial and cpe_model and credentials):
-                    continue
-                timeout = max(0.05, min(15, deadline_epoch - datetime.now(timezone.utc).timestamp()))
-                cpe = get_driver("tachyon")(cpe_ip, *credentials, timeout=timeout)
-                try:
-                    if await before_deadline(cpe.connect()) is not True:
-                        continue
-                    info = await before_deadline(cpe.get_device_info())
-                    if (getattr(info, "serial", None) != cpe_serial
-                            or str(getattr(info, "model", "")).lower() != cpe_model.lower()):
-                        continue
-                    aps = await before_deadline(cpe.get_connected_aps())
-                    if getattr(cpe, "last_connected_aps_valid", True) is not True:
-                        continue
-                    have_complete_peer_report = True
-                    round_has_complete_peer_report = True
-                    for ap in aps:
-                        if _normalize_recovery_mac(ap.get("mac")) not in ap_macs:
-                            continue
-                        address = ipaddress.ip_address(ap.get("ip"))
-                        if isinstance(address, ipaddress.IPv4Address) and not (
-                            address.is_multicast or address.is_unspecified
-                            or address.is_loopback or address.is_link_local
-                        ):
-                            round_candidates.add(str(address))
-                            if len(candidates | round_candidates) > 32:
-                                return "read-only AP recovery exceeded 32 distinct candidates; operator action required"
-                except asyncio.TimeoutError:
-                    round_timed_out = True
-                    continue
-                except Exception:
-                    continue
-
-            if not round_has_complete_peer_report and not have_complete_peer_report:
-                message = "CPE discovery timed out" if round_timed_out else "saved CPE peer reports were unavailable"
-                return f"{message} before the AP reboot deadline; operator action required"
-            candidates.update(round_candidates)
-            if len(candidates) > 32:
-                return "read-only AP recovery exceeded 32 distinct candidates; operator action required"
-            matches = []
-            for address in candidates:
-                if datetime.now(timezone.utc).timestamp() >= deadline_epoch:
-                    return "saved AP reboot deadline expired during identity confirmation; operator action required"
-                timeout = max(0.05, min(15, deadline_epoch - datetime.now(timezone.utc).timestamp()))
-                client = get_driver("tachyon")(address, *ap_credentials, timeout=timeout)
-                try:
-                    if await before_deadline(client.connect()) is not True:
-                        continue
-                    info = await before_deadline(client.get_device_info())
-                except asyncio.TimeoutError:
-                    continue
-                except Exception:
-                    continue
-                if (getattr(info, "serial", None) == serial
-                        and str(getattr(info, "model", "")).lower() == model.lower()):
-                    matches.append(address)
-            if len(matches) == 1:
-                return f"read-only recovery confirmed AP serial {serial} at {matches[0]}; operator action required"
-            if len(matches) > 1:
-                return "read-only AP recovery found multiple matching addresses; operator action required"
-            if len(round_candidates) > 1:
-                return "read-only AP recovery found no matching address; operator action required"
-            remaining = deadline_epoch - datetime.now(timezone.utc).timestamp()
-            if remaining > 0:
-                await asyncio.sleep(min(5, remaining))
-        if not have_complete_peer_report:
-            return "saved CPE peer reports were incomplete before the AP reboot deadline; operator action required"
-        return "saved AP reboot deadline expired without matching AP identity; operator action required"
-    except Exception:
-        return "read-only AP recovery could not be completed; operator action required"
+    address, reason = await _locate_ap_read_only(
+        locator, deadline, next_round, credentials_for_cpe,
+        (ap_row["username"], ap_row["password"]), initial_round=rounds,
+    )
+    if address:
+        return f"read-only recovery confirmed AP serial {locator['serial']} at {address}; operator action required"
+    return f"read-only AP recovery failed: {reason}; operator action required"
 
 
 def _migrate_users_template_password_hashing() -> None:
@@ -4305,9 +4358,13 @@ def _persist_ap_reboot_deadline(job, ip, timeout):
     locator = job.recovery_locators.get(ip)
     if not locator or not locator.get("ap_identity"):
         return
-    locator["reboot_deadline_utc"] = (
-        datetime.now(timezone.utc) + timedelta(seconds=timeout)
-    ).isoformat()
+    started = datetime.now(timezone.utc)
+    locator.update({
+        "reboot_started_utc": started.isoformat(),
+        "reboot_deadline_utc": (started + timedelta(seconds=timeout)).isoformat(),
+        "ap_recovery_rounds": 0,
+        "ap_recovery_next_round_utc": started.isoformat(),
+    })
     _persist_recovery_locator(job, ip)
 
 
@@ -4409,72 +4466,38 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
             if monotonic() >= deadline or ap_rounds >= 20:
                 failure["reason"] = "Device not found after update"
                 return False
-            wait = max(0, next_ap_round - monotonic())
-            if wait:
-                await asyncio.sleep(min(wait, max(0, deadline - monotonic())))
-            ap_rounds += 1
-            next_ap_round = monotonic() + 30
-            addresses = {current_ip}
-            for saved in locator["cpe_locators"]:
-                if monotonic() >= deadline:
-                    break
-                credentials = _recovery_credentials(job, saved["ip"], original_ip)
-                if not credentials:
-                    continue
-                timeout = max(1, min(30, int(deadline - monotonic())))
-                cpe = get_driver("tachyon")(saved["ip"], *credentials, timeout=timeout)
-                try:
-                    if await asyncio.wait_for(cpe.connect(), timeout=deadline - monotonic()) is not True:
-                        continue
-                    cpe_info = await asyncio.wait_for(cpe.get_device_info(), timeout=deadline - monotonic())
-                    if (getattr(cpe_info, "serial", None) != saved["serial"]
-                            or (saved.get("model") and getattr(cpe_info, "model", "").lower()
-                                != saved["model"].lower())):
-                        continue
-                    aps = await asyncio.wait_for(cpe.get_connected_aps(), timeout=deadline - monotonic())
-                    if getattr(cpe, "last_connected_aps_valid", True) is not True:
-                        continue
-                    for ap in aps:
-                        if ap.get("mac") in macs:
-                            address = ap.get("ip")
-                            try:
-                                parsed = ipaddress.IPv4Address(address)
-                            except (ValueError, TypeError):
-                                continue
-                            if not (parsed.is_multicast or parsed.is_unspecified
-                                    or parsed.is_loopback or parsed.is_link_local):
-                                addresses.add(str(parsed))
-                except Exception:
-                    continue
-            new_addresses = addresses - ap_candidates
-            ap_candidates.update(new_addresses)
-            if len(ap_candidates) > 32:
-                failure["reason"] = "Device not found after update"
-                return False
-            matches = []
-            for address in addresses:
-                if monotonic() >= deadline:
-                    failure["reason"] = "Device not found after update"
-                    return False
-                _set_driver_locator(client, address)
-                try:
-                    if await asyncio.wait_for(client.connect(), timeout=deadline - monotonic()) is not True:
-                        continue
-                    candidate_info = await asyncio.wait_for(client.get_device_info(), timeout=deadline - monotonic())
-                except Exception:
-                    continue
-                candidate_model = getattr(candidate_info, "model", None)
-                if (getattr(candidate_info, "serial", None) == expected_serial
-                        and isinstance(candidate_model, str)
-                        and candidate_model.lower() == expected_model.lower()):
-                    matches.append((address, candidate_info))
-            if len(matches) != 1:
+            now_utc = datetime.now(timezone.utc)
+            next_round = next_ap_round or monotonic()
+
+            def credentials_for_cpe(saved):
+                return _recovery_credentials(job, saved.get("ip"), original_ip)
+
+            def persist_round(round_number, round_started):
+                locator["ap_recovery_rounds"] = round_number + 1
+                locator["ap_recovery_next_round_utc"] = (
+                    now_utc + timedelta(seconds=max(0, round_started + 30 - monotonic()))
+                ).isoformat()
+                _persist_recovery_locator(job, original_ip)
+
+            ap_credentials = _recovery_credentials(job, current_ip, original_ip)
+            candidate, reason = await _locate_ap_read_only(
+                locator, deadline, next_round, credentials_for_cpe, ap_credentials,
+                ap_client=client, on_round_start=persist_round, initial_round=ap_rounds,
+            )
+            ap_rounds = int(locator.get("ap_recovery_rounds", ap_rounds))
+            try:
+                next_ap_round = monotonic() + max(
+                    0, (datetime.fromisoformat(locator["ap_recovery_next_round_utc"])
+                        - datetime.now(timezone.utc)).total_seconds()
+                )
+            except (KeyError, TypeError, ValueError):
+                next_ap_round = monotonic()
+            if candidate is None:
                 failure["reason"] = (
                     "Ambiguous AP candidates after update; multiple addresses matched the expected identity"
-                    if len(matches) > 1 else "Device not found after update"
+                    if "multiple matching addresses" in (reason or "") else "Device not found after update"
                 )
                 return False
-            candidate, info = matches[0]
             if candidate != current_ip:
                 if any(_has_open_recovery_identity_conflict(expected_serial, mac) for mac in macs):
                     failure["reason"] = "Device not found after update"
@@ -4631,16 +4654,15 @@ async def _capture_ap_recovery_baseline(job, ap_ip, ap_client):
                     serial = getattr(cpe_info, "serial", None)
             except Exception:
                 pass
-        if serial:
-            if not hasattr(job, "recovery_locators"):
-                cpe_device = None
-            cpe_locators.append({
-                "device_id": cpe_device.get("id") if cpe_device else None,
-                "ip": peer.ip, "serial": serial,
-                "model": getattr(cpe_info, "model", None), "mac": mac,
-                "credential_ref": cpe_device.get("id") if cpe_device else ap_ip,
-                "parent_ap_ip": ap_ip,
-            })
+        if not hasattr(job, "recovery_locators"):
+            cpe_device = None
+        cpe_locators.append({
+            "device_id": cpe_device.get("id") if cpe_device else None,
+            "ip": peer.ip, "serial": serial,
+            "model": getattr(cpe_info, "model", None), "mac": mac,
+            "credential_ref": cpe_device.get("id") if cpe_device else ap_ip,
+            "parent_ap_ip": ap_ip,
+        })
         try:
             link_up = await _read_cpe_eth0_link(job, ap_ip, peer)
         except Exception:
