@@ -1140,6 +1140,90 @@ async def test_in_run_ap_ambiguity_does_not_move_ap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_in_run_ap_round_timestamp_uses_delayed_round_start(monkeypatch):
+    job = recovery_job(role="ap")
+    job.credentials = {OLD_IP: ("ap-user", "ap-pass"), NEW_IP: ("cpe-user", "cpe-pass")}
+    locator = job.recovery_locators[OLD_IP]
+    locator.update({
+        "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+                        "radio_mac": "02:00:00:00:00:20"},
+        "management_baseline": {"vlan": 12, "ip_mode": "dhcp", "address": OLD_IP},
+        "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+        "cpe_locator_count": 1,
+    })
+    clock = [100.0]
+    wall_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = wall_start + timedelta(seconds=clock[0] - 100.0)
+            return value.astimezone(tz) if tz else value
+
+    monkeypatch.setattr(app, "datetime", FakeDateTime)
+    monkeypatch.setattr(app, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(app, "get_poller", lambda: None)
+
+    class APClient:
+        ip = OLD_IP
+        _client = SimpleNamespace(ip=OLD_IP, _base_url=f"https://{OLD_IP}", _token=None)
+
+        async def connect(self):
+            return False
+
+    async def delayed_locator(*_args, **kwargs):
+        clock[0] = 130.0
+        kwargs["on_round_start"](1, clock[0])
+        return None, "AP reboot deadline expired"
+
+    monkeypatch.setattr(app, "_locate_ap_read_only", delayed_locator)
+    persisted = MagicMock()
+    monkeypatch.setattr(app, "_persist_recovery_locator", persisted)
+    callback = app._make_recovery_callback(job, OLD_IP, APClient(), SERIAL, "TNA-301", RADIO_MAC)
+
+    assert not await callback(180.0, 100.0)
+    assert datetime.fromisoformat(locator["ap_recovery_next_round_utc"]) == wall_start + timedelta(seconds=60)
+    persisted.assert_called_once_with(job, OLD_IP)
+
+
+@pytest.mark.asyncio
+async def test_in_run_ap_round_persistence_failure_stops_recovery(monkeypatch):
+    job = recovery_job(role="ap")
+    job.credentials = {OLD_IP: ("ap-user", "ap-pass"), NEW_IP: ("cpe-user", "cpe-pass")}
+    locator = job.recovery_locators[OLD_IP]
+    locator.update({
+        "ap_identity": {"device_id": 7, "ethernet_mac": "02:00:00:00:00:21",
+                        "radio_mac": "02:00:00:00:00:20"},
+        "management_baseline": {"vlan": 12, "ip_mode": "dhcp", "address": OLD_IP},
+        "cpe_locators": [{"ip": NEW_IP, "serial": "CPE-SERIAL", "model": "TNA-303X"}],
+        "cpe_locator_count": 1,
+    })
+    monkeypatch.setattr(app, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(app, "get_poller", lambda: None)
+
+    class APClient:
+        ip = OLD_IP
+        _client = SimpleNamespace(ip=OLD_IP, _base_url=f"https://{OLD_IP}", _token=None)
+
+        async def connect(self):
+            return False
+
+    async def locator_with_round(*_args, **kwargs):
+        kwargs["on_round_start"](0, 100.0)
+        return None, "AP reboot deadline expired"
+
+    monkeypatch.setattr(app, "_locate_ap_read_only", locator_with_round)
+    monkeypatch.setattr(
+        app, "_persist_recovery_locator",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("progress write failed")),
+    )
+    callback = app._make_recovery_callback(job, OLD_IP, APClient(), SERIAL, "TNA-301", RADIO_MAC)
+
+    with pytest.raises(RuntimeError, match="progress write failed"):
+        await callback(180.0, 100.0)
+
+
+@pytest.mark.asyncio
 async def test_upload_attempt_stops_when_serial_check_fails(monkeypatch):
     client = tachyon.TachyonClient(OLD_IP, "synthetic", "synthetic")
     request = AsyncMock(return_value=(0, b'{"status":"ok"}'))

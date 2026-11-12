@@ -4486,7 +4486,6 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
             if monotonic() >= deadline or ap_rounds >= 20:
                 failure["reason"] = "Device not found after update"
                 return False
-            now_utc = datetime.now(timezone.utc)
             next_round = next_ap_round or monotonic()
 
             def credentials_for_cpe(saved):
@@ -4495,7 +4494,8 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
             def persist_round(round_number, round_started):
                 locator["ap_recovery_rounds"] = round_number + 1
                 locator["ap_recovery_next_round_utc"] = (
-                    now_utc + timedelta(seconds=max(0, round_started + 30 - monotonic()))
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=max(0, round_started + 30 - monotonic()))
                 ).isoformat()
                 _persist_recovery_locator(job, original_ip)
 
