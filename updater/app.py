@@ -6577,11 +6577,48 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             if not target or _normalize_version(getattr(recovered_info, "current_version", None)) != _normalize_version(target):
                 raise RuntimeError("Target firmware version was not confirmed after firmware reboot")
             if ap_management_baseline is not None:
+                recovered_settings = _management_settings(recovered_info)
                 changed = _management_settings_changes(
-                    ap_management_baseline, _management_settings(recovered_info),
+                    ap_management_baseline, recovered_settings,
                 )
                 if changed:
                     raise RuntimeError("; ".join(changed))
+                if recovered_settings["address"] != ap_management_baseline["address"]:
+                    new_address = recovered_settings["address"]
+                    _set_driver_locator(client, new_address)
+                    if await client.connect() is not True:
+                        raise RuntimeError(
+                            "Authentication failed at the new management address"
+                        )
+                    address_info = await client.get_device_info()
+                    if getattr(address_info, "serial", None) != expected_serial:
+                        raise RuntimeError(
+                            "Expected serial did not match at the new management address"
+                        )
+                    expected_model = (job.recovery_locators.get(ip, {}).get("model")
+                                      or device_status.model)
+                    address_model = getattr(address_info, "model", None)
+                    if expected_model and (
+                        not address_model or address_model.lower() != expected_model.lower()
+                    ):
+                        raise RuntimeError(
+                            "Device model did not match at the new management address"
+                        )
+                    address_settings = _management_settings(address_info)
+                    if address_settings["address"] != new_address:
+                        raise RuntimeError(
+                            "Management address did not match the authenticated read"
+                        )
+                    changed = _management_settings_changes(
+                        ap_management_baseline, address_settings,
+                    )
+                    if changed:
+                        raise RuntimeError("; ".join(changed))
+                    if (_normalize_version(getattr(address_info, "current_version", None))
+                            != _normalize_version(target)):
+                        raise RuntimeError(
+                            "Target firmware version was not confirmed at the new management address"
+                        )
             if flash_ap_baseline is not None:
                 passed, evidence = await _check_ap_recovery_after_cpe_rejoin(
                     job, ip, client, flash_ap_baseline,
