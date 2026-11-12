@@ -17,6 +17,7 @@ class _DeviceClient:
     fail_at = None
     connect_calls = {}
     management_after_update = None
+    management_before_update = None
 
     def __init__(self, ip, username, password):
         self.ip = ip
@@ -47,7 +48,10 @@ class _DeviceClient:
         return {"system": {"name": "test"}}
 
     async def get_device_info(self):
-        management = self.management_after_update if self.updated else None
+        management = (
+            self.management_after_update if self.updated
+            else self.management_before_update
+        )
         management = management or {
             "management_vlan_id": 12,
             "management_ip_mode": "static",
@@ -56,7 +60,7 @@ class _DeviceClient:
         return SimpleNamespace(
             model="TNA-301", serial="SYNTHETIC-SERIAL",
             current_version="2.0.0.1" if self.updated else "1.0.0.100",
-            ip="192.0.2.1", extra=management,
+            ip=management.get("ip", "192.0.2.1"), extra=management,
         )
 
     def get_hardware_id(self, model):
@@ -1009,12 +1013,21 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("after", "expected_reason"), [
     ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.1"}, None),
+    ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.2"}, None),
     ({"management_vlan_id": 20, "management_ip_mode": "static", "management_address": "192.0.2.1"},
+     "management VLAN changed from 12 to 20 after update"),
+    ({"management_vlan_id": 20, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
      "management VLAN changed from 12 to 20 after update"),
     ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
      "management IP mode changed from static to dhcp after update"),
     ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.2"},
      "management address changed after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "unknown", "management_address": "192.0.2.1"},
+     "management IP mode is unavailable after update"),
+    ({"management_vlan_id": None, "management_ip_mode": "static", "management_address": "192.0.2.1"},
+     "management VLAN is unavailable after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": None, "ip": None},
+     "management address is unavailable after update"),
 ])
 async def test_changed_management_settings_stop_firmware_window(
     mock_db, monkeypatch, utc_window_clock, after, expected_reason,
@@ -1025,6 +1038,11 @@ async def test_changed_management_settings_stop_firmware_window(
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = None
     _DeviceClient.management_after_update = after
+    _DeviceClient.management_before_update = (
+        {"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"}
+        if after.get("management_ip_mode") == "dhcp" and expected_reason is None
+        else None
+    )
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
     monkeypatch.setattr(app_module, "_shutting_down", False)

@@ -4117,11 +4117,24 @@ def _management_settings(info) -> dict:
 
 def _management_settings_changes(before: dict, after: dict) -> list[str]:
     changes = []
+    for settings, phase in ((before, "before"), (after, "after")):
+        if settings["vlan"] is None:
+            changes.append(f"management VLAN is unavailable {phase} update")
+        if settings["ip_mode"] not in {"static", "dhcp"}:
+            changes.append(f"management IP mode is unavailable {phase} update")
+        if not settings["address"]:
+            changes.append(f"management address is unavailable {phase} update")
     if before["vlan"] != after["vlan"]:
         changes.append(f"management VLAN changed from {before['vlan']} to {after['vlan']} after update")
     if before["ip_mode"] != after["ip_mode"]:
         changes.append(f"management IP mode changed from {before['ip_mode']} to {after['ip_mode']} after update")
-    if before["address"] != after["address"]:
+    if (
+        before["address"] != after["address"]
+        and not (
+            before["ip_mode"] == after["ip_mode"] == "dhcp"
+            and before["vlan"] == after["vlan"]
+        )
+    ):
         changes.append("management address changed after update")
     return changes
 
