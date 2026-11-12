@@ -1177,6 +1177,13 @@ def get_device(ip: str) -> Optional[dict]:
         return _decrypt_device_row(dict(row)) if row else None
 
 
+def get_device_by_id(device_id: int) -> Optional[dict]:
+    """Get a device by its stable row ID from the unified table."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
+        return _decrypt_device_row(dict(row)) if row else None
+
+
 def upsert_device(ip: str, role: str, username: str, password: str,
                   vendor: str = "tachyon", tower_site_id: int = None, **kwargs) -> int:
     """Create or update a device in the unified table."""
