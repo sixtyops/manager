@@ -242,6 +242,7 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
     progress_messages = []
     run_curl = AsyncMock()
     monkeypatch.setattr("updater.vendors.tachyon.client._run_curl", run_curl)
+    monkeypatch.setattr(app_module.db, "get_device", lambda _ip: {"id": 1})
 
     def make_driver(*args):
         driver = TachyonDriver(*args)
@@ -252,9 +253,10 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
         monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=SimpleNamespace(
                 ip="192.0.2.1", model="TNA-301", serial="SERIAL-1", current_version="1.2.3.100",
             bank1_version="1.2.3", bank2_version="1.0.0", active_bank=1,
-            mac=None, macs={}, management_interface=None, management_vlan_id=100,
+            mac="02:00:00:00:00:21", macs={}, management_interface=None, management_vlan_id=100,
             management_mac=None, firmware_sha256="a" * 64, management_ip_mode="dhcp",
         )))
+        monkeypatch.setattr(client, "get_ap_radio_mac", AsyncMock(return_value="02:00:00:00:00:20"))
         monkeypatch.setattr(client, "get_connected_cpes", AsyncMock(return_value=[]))
         client.last_connected_cpes_valid = True
         monkeypatch.setattr(client, "get_bridge_table", AsyncMock(return_value=[]))

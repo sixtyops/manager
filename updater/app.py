@@ -4335,6 +4335,7 @@ def _make_recovery_callback(job, original_ip, client, expected_serial,
                 locator["ip"] = candidate
                 locator["address_changed"] = True
                 _persist_recovery_locator(job, original_ip)
+            _set_driver_locator(client, candidate)
             return True
         parent = job.recovery_locators.get(original_ip, {}).get(
             "parent_ap", job.devices[original_ip].parent_ap
@@ -4494,10 +4495,13 @@ async def _capture_ap_recovery_baseline(job, ap_ip, ap_client):
             "ip": peer.ip,
             "eth0_link_was_up": link_up,
         }
-    if callable(getattr(ap_client, "get_ap_radio_mac", None)):
+    radio_mac_reader = getattr(ap_client, "get_ap_radio_mac", None)
+    if not callable(radio_mac_reader):
+        radio_mac_reader = getattr(getattr(ap_client, "_client", None), "get_ap_radio_mac", None)
+    if callable(radio_mac_reader):
         info = await ap_client.get_device_info()
         ethernet_mac = _normalize_recovery_mac(getattr(info, "mac", None))
-        radio_mac = _normalize_recovery_mac(await ap_client.get_ap_radio_mac())
+        radio_mac = _normalize_recovery_mac(await radio_mac_reader())
         device = db.get_device(ap_ip)
         management = _management_settings(info)
         if not (getattr(info, "serial", None) and getattr(info, "model", None)

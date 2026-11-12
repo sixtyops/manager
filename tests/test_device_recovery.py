@@ -145,6 +145,43 @@ async def test_ap_recovery_uses_saved_cpe_peer_and_commits_verified_move(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_ap_baseline_reads_radio_mac_from_wrapped_tachyon_client(monkeypatch):
+    job = recovery_job(role="ap")
+    job.credentials = {}
+
+    class APClient:
+        last_connected_cpes_valid = True
+
+        def __init__(self):
+            self._client = SimpleNamespace(
+                get_ap_radio_mac=AsyncMock(return_value="02:00:00:00:00:20")
+            )
+
+        async def get_connected_cpes(self):
+            return [peer(NEW_IP)]
+
+        async def get_device_info(self):
+            return SimpleNamespace(
+                ip=OLD_IP, serial=SERIAL, model="TNA-301", mac="02:00:00:00:00:21",
+                management_vlan_id=12, management_ip_mode="dhcp",
+                management_address=OLD_IP,
+            )
+
+    monkeypatch.setattr(app.db, "get_device", lambda ip: {"id": 1} if ip == OLD_IP else None)
+    monkeypatch.setattr(app.db, "save_active_job", lambda *args: None)
+
+    baseline = await app._capture_ap_recovery_baseline(job, OLD_IP, APClient())
+
+    assert baseline == {"peers": {RADIO_MAC: {"ip": NEW_IP, "eth0_link_was_up": None}}}
+    assert job.recovery_locators[OLD_IP]["ap_identity"] == {
+        "device_id": 1,
+        "ethernet_mac": "02:00:00:00:00:21",
+        "radio_mac": "02:00:00:00:00:20",
+    }
+    assert job.recovery_locators[OLD_IP]["cpe_locators"] == []
+
+
+@pytest.mark.asyncio
 async def test_open_identity_conflict_stops_recovery(monkeypatch):
     connection = SimpleNamespace(execute=lambda query: SimpleNamespace(
         fetchall=lambda: [("mac", RADIO_MAC.lower().replace(":", "-"))],
