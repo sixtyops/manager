@@ -37,6 +37,9 @@ class _DeviceClient:
     async def get_connected_cpes(self):
         return []
 
+    async def get_ap_radio_mac(self):
+        return "02:00:00:00:00:10"
+
     async def get_bridge_table(self):
         return []
 
@@ -56,7 +59,7 @@ class _DeviceClient:
         return SimpleNamespace(
             model="TNA-301", serial="SYNTHETIC-SERIAL",
             current_version="2.0.0.1" if self.updated else "1.0.0.100",
-            ip="192.0.2.1", extra=management,
+            ip=self.ip, mac="02:00:00:00:00:11", extra=management,
         )
 
     def get_hardware_id(self, model):
@@ -99,6 +102,18 @@ class _DeviceClient:
 class _ManagementDeviceClient(_DeviceClient):
     """Tachyon-like test client that enables management recovery checks."""
     _client = object()
+
+
+@pytest.fixture(autouse=True)
+def seed_recovery_ap_rows(request):
+    if "mock_db" not in request.fixturenames:
+        return
+    request.getfixturevalue("mock_db")
+    for ip in ("192.0.2.1", "192.0.2.2"):
+        db.upsert_access_point(
+            ip, "user", "password", enabled=True, model="TNA-301",
+            mac="02:00:00:00:00:11", firmware_version="1.0.0.100",
+        )
 
 
 def _install_snapshot_store(monkeypatch, *, failure=None):
@@ -794,6 +809,9 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
         await app_module.run_update_job(manual_job, concurrency=1)
 
     assert manual_job.devices["192.0.2.1"].status == "success"
+    assert manual_job.recovery_locators["192.0.2.1"]["ap_identity"]["device_id"]
+    assert db.bulk_set_enabled("ap", ["192.0.2.1", "192.0.2.2"], False) == 2
+    assert db.get_device("192.0.2.1")["enabled"] == 0
 
     firmware = "tna-30x-1.2.3-r123.bin"
     db.set_settings({

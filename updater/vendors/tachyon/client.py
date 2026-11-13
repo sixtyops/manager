@@ -1026,6 +1026,7 @@ class TachyonClient:
         bandwidth_limit_kbps: int = 0,
         admission_check: Optional[Callable[[], tuple[bool, str]]] = None,
         upload_started_callback: Optional[Callable[[], None]] = None,
+        reboot_started_callback: Optional[Callable[[], None]] = None,
         serial_check=None,
         recovery_callback=None,
     ) -> UpdateResult:
@@ -1148,6 +1149,8 @@ class TachyonClient:
                     return await reconcile_readback(reason)
             if serial_check and not await serial_check("install"):
                 return await reconcile_readback("Expected serial did not match before install")
+            if reboot_started_callback:
+                reboot_started_callback()
             if not await self.trigger_update():
                 return await reconcile_readback("Failed to trigger update", allow_target_success=True)
 
