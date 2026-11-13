@@ -208,7 +208,7 @@ set +e
     unset SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
   fi
   if [ "$mode" = firmware-stop ]; then
-    unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP
+    unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP
   fi
   redact_n=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -228,6 +228,7 @@ set +e
     fi
     case $key in
       "Manager URL") export SIXTYOPS_TEST_URL="$value" ;;
+      "Manager CA file") export SIXTYOPS_TEST_CA_FILE="$value" ;;
       "Manager username") export SIXTYOPS_TEST_USER="$value" ;;
       "Manager password") export SIXTYOPS_TEST_PASS="$value" ;;
       "AP IP")
@@ -260,7 +261,7 @@ set +e
 
   case $mode in
     local-switch) required="SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
-    firmware-stop) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
+    firmware-stop) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
     integration) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_TEST_AP_IP SIXTYOPS_TEST_SWITCH_IP" ;;
     *) required="SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
   esac
@@ -306,7 +307,7 @@ set +e
         echo "run-readonly-bench: REFUSED: the Manager URL is not the authorized dev host" >&2
         exit 2
       fi
-      env "${unset_args[@]}" "$python" "$bench_dir/readonly_stop.py" --repo "$code_dir" --stop-id "$stop_id" 2>/dev/null
+      env "${unset_args[@]}" "$python" "$bench_dir/readonly_stop.py" --repo "$code_dir" --checkout "$repo" --stop-id "$stop_id" 2>/dev/null
       status=$?
       ;;
     local-poll)

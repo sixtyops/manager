@@ -1,6 +1,8 @@
 """Mocked checks for the read-only firmware-stop bench mode."""
 
 import os
+import shutil
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -43,11 +45,13 @@ class TachyonClient:
 HTTPX = '''
 import json
 import os
+import ssl
 
 class Response:
-    def __init__(self, status, body=None):
+    def __init__(self, status, body=None, headers=None):
         self.status_code = status
         self._body = body
+        self.headers = headers or {}
 
     def json(self):
         if self._body == "invalid-json":
@@ -64,9 +68,11 @@ class Client:
         assert kwargs["base_url"] == "https://sixtyops-dev.infra.treehouse.mn"
         self.cookies = {}
         self.hooks = kwargs["event_hooks"]["request"]
-        assert kwargs["verify"].verify_mode == 0
-        assert kwargs["verify"].check_hostname is False
-        assert kwargs["follow_redirects"] is True
+        assert isinstance(kwargs["verify"], ssl.SSLContext)
+        assert kwargs["verify"].verify_mode == ssl.CERT_REQUIRED
+        assert kwargs["verify"].check_hostname is True
+        assert kwargs["verify"].get_ca_certs()
+        assert kwargs["follow_redirects"] is False
 
     def __enter__(self):
         return self
@@ -82,9 +88,14 @@ class Client:
         with open(os.environ["BENCH_CONTACT_MARKER"], "a") as marker:
             marker.write(f"manager:POST:{path}:{request.headers.get('Origin', '')}\\n")
         print("PRIVATE_MANAGER_LOGIN")
-        if os.environ.get("BENCH_CASE") != "manager-login-fail":
+        case = os.environ.get("BENCH_CASE")
+        if case not in ("manager-login-fail", "external-login-redirect", "unknown-login-redirect"):
             self.cookies["session_id"] = "PRIVATE_SESSION"
-            return Response(200)
+            return Response(303, headers={"location": "/"})
+        if case == "external-login-redirect":
+            return Response(303, headers={"location": "https://other.example/"})
+        if case == "unknown-login-redirect":
+            return Response(303, headers={"location": "/login"})
         return Response(401)
 
     def get(self, path):
@@ -119,6 +130,7 @@ def bench_stop(tmp_path):
         "PATH": os.environ["PATH"],
         "HOME": str(tmp_path),
         "SIXTYOPS_TEST_URL": "https://sixtyops-dev.infra.treehouse.mn",
+        "SIXTYOPS_TEST_CA_FILE": str(tmp_path / "manager-ca.pem"),
         "SIXTYOPS_TEST_USER": "bench-user",
         "SIXTYOPS_TEST_PASS": "PRIVATE_MANAGER_PASSWORD",
         "SIXTYOPS_BENCH_AP_IP": "192.0.2.10",
@@ -126,6 +138,7 @@ def bench_stop(tmp_path):
         "SIXTYOPS_BENCH_AP_PASS": "PRIVATE_DEVICE_PASSWORD",
         "BENCH_CONTACT_MARKER": str(marker),
     }
+    shutil.copyfile(ssl.get_default_verify_paths().cafile, env["SIXTYOPS_TEST_CA_FILE"])
     for command in (
         ["git", "init", "-q"],
         ["git", "add", "."],
@@ -141,7 +154,7 @@ def bench_stop(tmp_path):
 def run_helper(bench_stop, case="match", stop_id="77"):
     repo, _, _, env = bench_stop
     return subprocess.run(
-        [sys.executable, str(HELPER), "--repo", str(repo), "--stop-id", stop_id],
+        [sys.executable, str(HELPER), "--repo", str(repo), "--checkout", str(repo), "--stop-id", stop_id],
         env={**env, "BENCH_CASE": case},
         capture_output=True,
         text=True,
@@ -173,7 +186,8 @@ def test_stop_check_matches_serial_with_authenticated_reads_only(bench_stop):
 
 
 @pytest.mark.parametrize("case", [
-    "manager-login-fail", "api-fail", "invalid-json", "missing-stop",
+    "manager-login-fail", "external-login-redirect", "unknown-login-redirect",
+    "api-fail", "invalid-json", "missing-stop",
     "ambiguous-stop", "missing-expected-serial", "ap-login-fail",
     "read-fail", "missing-ap-serial", "mismatch",
 ])
@@ -196,11 +210,64 @@ def test_helper_does_not_read_access_file_or_accept_serial_argument():
     assert 'add_argument("--serial"' not in source
 
 
+@pytest.mark.parametrize("ca_state", ["missing", "invalid"])
+def test_manager_ca_failure_is_closed_before_contact(bench_stop, ca_state):
+    repo, _, marker, env = bench_stop
+    invalid_ca = Path(env["SIXTYOPS_TEST_CA_FILE"])
+    if ca_state == "missing":
+        invalid_ca.unlink()
+    else:
+        invalid_ca.write_text("not a certificate")
+
+    result = subprocess.run(
+        [sys.executable, str(HELPER), "--repo", str(repo), "--checkout", str(repo), "--stop-id", "77"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 1
+    assert "manager_login: FAIL" in result.stdout
+    assert not marker.exists()
+    assert str(invalid_ca) not in result.stdout + result.stderr
+
+
+def test_manager_ca_inside_checkout_is_rejected(bench_stop):
+    repo, _, marker, env = bench_stop
+    repo_ca = repo / "manager-ca.pem"
+    shutil.copyfile(env["SIXTYOPS_TEST_CA_FILE"], repo_ca)
+
+    result = subprocess.run(
+        [sys.executable, str(HELPER), "--repo", str(repo), "--checkout", str(repo), "--stop-id", "77"],
+        env={**env, "SIXTYOPS_TEST_CA_FILE": str(repo_ca)},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 1
+    assert "manager_login: FAIL" in result.stdout
+    assert not marker.exists()
+
+
+def test_external_manager_login_redirect_does_not_forward_credentials(bench_stop):
+    result = run_helper(bench_stop, "external-login-redirect")
+    _, _, marker, _ = bench_stop
+
+    assert result.returncode == 1
+    assert marker.read_text().splitlines() == [
+        "manager:POST:/login:https://sixtyops-dev.infra.treehouse.mn",
+    ]
+    assert "PRIVATE_MANAGER_PASSWORD" not in result.stdout + result.stderr
+
+
 def test_wrapper_reads_private_access_file_and_dispatches_stop_id(bench_stop, tmp_path):
     repo, head, marker, _ = bench_stop
     access = tmp_path / "bench-access"
     access.write_text(
         "Manager URL: https://sixtyops-dev.infra.treehouse.mn\n"
+        f"Manager CA file: {bench_stop[3]['SIXTYOPS_TEST_CA_FILE']}\n"
         "Manager username: bench-user\nManager password: PRIVATE_MANAGER_PASSWORD\n"
         "AP IP: 192.0.2.10\nShared device username: device-user\n"
         "Shared device password: PRIVATE_DEVICE_PASSWORD\n"
@@ -224,6 +291,7 @@ def test_wrapper_reads_private_access_file_and_dispatches_stop_id(bench_stop, tm
             "SIXTYOPS_BENCH_SUMMARY_DIR": str(summary),
             "SIXTYOPS_BENCH_PYTHON": sys.executable,
             "SIXTYOPS_TEST_URL": "https://wrong.example",
+            "SIXTYOPS_TEST_CA_FILE": "/wrong/inherited-ca.pem",
             "SIXTYOPS_BENCH_AP_IP": "192.0.2.99",
             "BENCH_CONTACT_MARKER": str(marker),
             "BENCH_CASE": "match",
@@ -237,8 +305,16 @@ def test_wrapper_reads_private_access_file_and_dispatches_stop_id(bench_stop, tm
     assert "PRIVATE_" not in result.stdout + result.stderr
     assert "SYNTHETIC-SERIAL" not in result.stdout + result.stderr
     assert "firmware-stop: serial_match: PASS" in result.stdout
+    assert "firmware-stop: stop_selection: PASS" in result.stdout
     assert marker.read_text().splitlines()[:2] == [
         "manager:POST:/login:https://sixtyops-dev.infra.treehouse.mn",
         "manager:GET:/api/firmware-window-stops",
     ]
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in summary.iterdir())
+
+
+def test_missing_expected_serial_keeps_selection_failed(bench_stop):
+    result = run_helper(bench_stop, "missing-expected-serial")
+
+    assert result.returncode == 1
+    assert "firmware-stop: stop_selection: FAIL" in result.stdout

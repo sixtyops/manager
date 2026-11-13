@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 REQUIRED_ENV = (
     "SIXTYOPS_TEST_URL",
+    "SIXTYOPS_TEST_CA_FILE",
     "SIXTYOPS_TEST_USER",
     "SIXTYOPS_TEST_PASS",
     "SIXTYOPS_BENCH_AP_IP",
@@ -28,7 +29,7 @@ DEVICE_GETS = {
 }
 
 
-async def _check(stop_id: int, results: dict[str, bool]) -> None:
+async def _check(stop_id: int, results: dict[str, bool], checkout: Path) -> None:
     import httpx
 
     from updater.vendors.tachyon.client import TachyonClient
@@ -38,14 +39,31 @@ async def _check(stop_id: int, results: dict[str, bool]) -> None:
         return
     manager_url = values["SIXTYOPS_TEST_URL"].rstrip("/")
     parsed_url = urlsplit(manager_url)
-    if parsed_url.scheme != "https" or not parsed_url.netloc or parsed_url.username or parsed_url.password:
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.netloc != "sixtyops-dev.infra.treehouse.mn"
+        or parsed_url.username
+        or parsed_url.password
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
         return
     ap_ip = str(ipaddress.ip_address(values["SIXTYOPS_BENCH_AP_IP"]))
 
+    ca_file = Path(values["SIXTYOPS_TEST_CA_FILE"])
+    if not ca_file.is_absolute() or ca_file.is_symlink() or not ca_file.is_file():
+        return
+    resolved_ca_file = ca_file.resolve(strict=True)
+    repo_root = checkout.resolve()
+    if resolved_ca_file == repo_root or repo_root in resolved_ca_file.parents:
+        return
+    if not os.access(resolved_ca_file, os.R_OK):
+        return
+
     origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
+    ssl_context = ssl.create_default_context(cafile=str(resolved_ca_file))
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
+    ssl_context.check_hostname = True
 
     def set_login_origin(request):
         if request.method == "POST":
@@ -55,14 +73,23 @@ async def _check(stop_id: int, results: dict[str, bool]) -> None:
         base_url=manager_url,
         verify=ssl_context,
         timeout=30.0,
-        follow_redirects=True,
+        follow_redirects=False,
         event_hooks={"request": [set_login_origin]},
     ) as session:
         login = session.post(
             "/login",
             data={"username": values["SIXTYOPS_TEST_USER"], "password": values["SIXTYOPS_TEST_PASS"]},
         )
-        if login.status_code != 200 or "session_id" not in session.cookies:
+        location = urlsplit(login.headers.get("location", ""))
+        if (
+            login.status_code != 303
+            or location.scheme
+            or location.netloc
+            or location.path not in ("/", "/setup")
+            or location.query
+            or location.fragment
+            or "session_id" not in session.cookies
+        ):
             return
         results["manager_login"] = True
 
@@ -80,7 +107,6 @@ async def _check(stop_id: int, results: dict[str, bool]) -> None:
         return
     expected_serial = selected[0].get("expected_serial")
     if not isinstance(expected_serial, str) or not expected_serial.strip():
-        results["stop_selection"] = True
         return
     expected_serial = expected_serial.strip()
     results["stop_selection"] = True
@@ -110,6 +136,7 @@ async def _check(stop_id: int, results: dict[str, bool]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
+    parser.add_argument("--checkout", required=True)
     parser.add_argument("--stop-id", required=True, type=int)
     args = parser.parse_args()
     results = dict.fromkeys(("manager_login", "stop_selection", "ap_login", "serial_match"), False)
@@ -120,7 +147,7 @@ def main() -> int:
     with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
         try:
             sys.path.insert(0, str(Path(args.repo).resolve()))
-            asyncio.run(_check(args.stop_id, results))
+            asyncio.run(_check(args.stop_id, results, Path(args.checkout)))
         except BaseException:
             pass
     _print_results(results)

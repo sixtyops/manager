@@ -339,7 +339,7 @@ Guards, in this order:
    `SIXTYOPS_BENCH_SUMMARY_DIR`. The default is
    `sixtyops-bench` in `XDG_STATE_HOME`, or in `~/.local/state`.
 
-Access file keys: `Manager URL`, `Manager username`, `Manager password`,
+Access file keys: `Manager URL`, `Manager CA file`, `Manager username`, `Manager password`,
 `TNS-100 IP`, `AP IP`, `303L SM IP`, `303X SM IP`, `Shared device username`,
 and `Shared device password`.
 
@@ -361,8 +361,11 @@ Modes:
 - `firmware-stop`: pass `--stop-id N` to select one unresolved stop row. The
   wrapper creates the normal Manager auth session and audit entry, reads the
   expected serial from the stop list, then logs in to the AP and compares its
-  serial. It emits fixed status fields only. It does not change stop,
-  inventory, schedule, or device data, and it does not resolve the stop.
+  serial. It verifies Manager with the supplied CA file and the Manager host
+  name. It does not follow redirects. Login must return the expected local
+  redirect and session cookie. It emits fixed status fields only. It does not
+  change stop, inventory, schedule, or device data, and it does not resolve
+  the stop.
 - `local-poll`: logs in to the AP with the commit's driver and reads device
   information and the CPE list.
 - `session-proof`: for the CPE session reuse proof
@@ -385,9 +388,15 @@ login. Unsafe output permissions or a failed file creation stop the run before
 device contact. `local-switch` uses the existing `TNS-100 IP`, `Shared device
 username`, and `Shared device password` fields. `firmware-stop` uses `Manager
 URL`, `Manager username`, `Manager password`, `AP IP`, `Shared device username`,
-and `Shared device password`. Missing fields fail the run. Inherited device
-inputs cannot replace missing fields in the access file. A log write failure
-makes the lane fail even when reads succeed.
+and `Shared device password`. It also requires `Manager CA file`, which must
+give the absolute path to the trusted Manager CA certificate. Store the CA
+file outside the repository in an owner-only directory. Use a readable,
+regular file that is not a symlink. Keep the directory owner-only and the file
+owner-readable. Do not put the path or certificate contents in logs. The
+helper does not read the access file. Missing or invalid CA files fail closed.
+Missing fields fail the run. Inherited device inputs cannot replace missing
+fields in the access file. A log write failure makes the lane fail even when
+reads succeed.
 
 The tool-only change can merge after the normal review and offline gates,
 before a lab run. This makes the wrapper available from trusted `main`.
