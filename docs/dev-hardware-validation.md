@@ -318,7 +318,8 @@ the current directory:
 cd <checkout-under-test>
 SIXTYOPS_BENCH_ACCESS_FILE=<private-file> \
   <main-checkout>/scripts/bench/run-readonly-bench.sh <full-commit-sha> \
-  [--mode integration|local-poll|session-proof|local-switch] [--duration-min 35]
+  [--mode integration|local-poll|session-proof|local-switch|firmware-stop] \
+  [--duration-min 35] [--stop-id N]
 ```
 
 Guards, in this order:
@@ -357,6 +358,11 @@ Modes:
   The firmware and bank results must stay the same. It emits only fixed
   PASS/FAIL fields. It does not save model labels, versions, serials, MAC
   addresses, raw responses, or exception text.
+- `firmware-stop`: pass `--stop-id N` to select one unresolved stop row. The
+  wrapper creates the normal Manager auth session and audit entry, reads the
+  expected serial from the stop list, then logs in to the AP and compares its
+  serial. It emits fixed status fields only. It does not change stop,
+  inventory, schedule, or device data, and it does not resolve the stop.
 - `local-poll`: logs in to the AP with the commit's driver and reads device
   information and the CPE list.
 - `session-proof`: for the CPE session reuse proof
@@ -373,13 +379,15 @@ For session-sensitive changes, run the exact-head session proof for at least
 three minutes. Follow the session policy in that commit. Record login, reuse,
 renewal, and logout recovery evidence in the sanitized summary.
 
-For `local-switch`, the wrapper also requires an owner-only output directory
-with mode `700`. It creates a new log and summary with mode `600` before
+For `local-switch` and `firmware-stop`, the wrapper also requires an owner-only
+output directory with mode `700`. It creates a new log and summary with mode `600` before
 login. Unsafe output permissions or a failed file creation stop the run before
-device contact. It uses the existing `TNS-100 IP`, `Shared device username`,
-and `Shared device password` fields. Missing fields fail the run. Inherited
-device inputs cannot replace missing fields in the access file. A log write
-failure makes the lane fail even when both device reads succeed.
+device contact. `local-switch` uses the existing `TNS-100 IP`, `Shared device
+username`, and `Shared device password` fields. `firmware-stop` uses `Manager
+URL`, `Manager username`, `Manager password`, `AP IP`, `Shared device username`,
+and `Shared device password`. Missing fields fail the run. Inherited device
+inputs cannot replace missing fields in the access file. A log write failure
+makes the lane fail even when reads succeed.
 
 The tool-only change can merge after the normal review and offline gates,
 before a lab run. This makes the wrapper available from trusted `main`.
