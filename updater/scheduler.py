@@ -4,8 +4,9 @@ import asyncio
 import ipaddress
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 from . import database as db
 from .firmware_policy import (
@@ -63,6 +64,39 @@ def _resolved_failure_recovery_ip(window_key) -> Optional[str]:
                 return None if verified else stop["device_ip"]
     except Exception:
         raise
+    return None
+
+
+def _scheduled_freeze_hold_reason(now: datetime) -> Optional[str]:
+    """Return a read-only freeze hold for the supplied admission time."""
+    try:
+        freeze = db.is_in_freeze_window(now.isoformat())
+    except Exception:
+        return "Could not verify maintenance freeze windows"
+    if freeze:
+        return f"Maintenance freeze: {freeze['name']}"
+    return None
+
+
+def _scheduled_environment_hold_reason(now: datetime, window_key=None) -> Optional[str]:
+    """Return the shared freeze or firmware-stop admission hold, read-only."""
+    freeze_reason = _scheduled_freeze_hold_reason(now)
+    if freeze_reason:
+        return freeze_reason
+    if not window_key:
+        return None
+    try:
+        if db.get_firmware_window_stop(window_key):
+            return "This maintenance window stopped after a device failure"
+        unresolved = db.get_unresolved_firmware_window_stops()
+    except Exception:
+        return "Could not verify firmware failure stops"
+    if unresolved:
+        stop = unresolved[0]
+        return (
+            f"Firmware queue stopped at {stop.get('device_ip', 'a device')}; "
+            "resolve the failure before a later window"
+        )
     return None
 
 
@@ -209,6 +243,32 @@ def _device_needs_update(
     return classify_device_version(current_version, target_version, allow_downgrade).needs_update
 
 
+def _stored_timestamp_clock(value: str, evaluation_time: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    """Evaluate naive stored timestamps in host-local time and aware ones in their zone."""
+    stored = datetime.fromisoformat(value)
+    if evaluation_time is None:
+        now = datetime.now(stored.tzinfo) if stored.tzinfo else datetime.now()
+    elif stored.tzinfo is None:
+        now = evaluation_time.astimezone().replace(tzinfo=None)
+    else:
+        now = evaluation_time.astimezone(stored.tzinfo)
+    return stored, now
+
+
+def _device_cooldown_reason(device: dict, cooldown_days: int, evaluation_time: Optional[datetime] = None) -> Optional[str]:
+    """Return the queue hold reason when an otherwise-behind device is cooling down."""
+    last_update_iso = device.get("last_firmware_update")
+    if cooldown_days <= 0 or not last_update_iso:
+        return None
+    try:
+        last_update, now = _stored_timestamp_clock(last_update_iso, evaluation_time)
+        if now - last_update < timedelta(days=cooldown_days):
+            return f"Device is in the {cooldown_days}-day firmware update cooldown"
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 def _known_firmware_family(model: Optional[str]) -> Optional[str]:
     """Return the supported firmware family, or None for an unknown model."""
     if not model:
@@ -227,6 +287,84 @@ def _normalized_ip(ip: str) -> tuple[int, int]:
     """Sort IPv4 and IPv6 addresses by numeric value, independent of spelling."""
     address = ipaddress.ip_address(ip.strip())
     return address.version, int(address)
+
+
+def _scheduled_window_bounds(schedule: MaintenanceSchedule, now: datetime):
+    """Return the active or next window bounds and a probe inside that window."""
+    if now.tzinfo is None or now.utcoffset() is None or not schedule.days:
+        return None
+    try:
+        zone = ZoneInfo(schedule.tz) if schedule.tz else now.tzinfo
+        local_now = now.astimezone(zone)
+    except Exception:
+        return None
+    settings = {
+        "schedule_days": ",".join(day for day, index in _DAY_INDEX.items() if index in schedule.days),
+        "schedule_start_hour": schedule.start_hour,
+        "schedule_end_hour": schedule.end_hour,
+        "schedule_timezone": schedule.tz,
+    }
+    active_key = rollout_gate.firmware_window_key(settings, local_now)
+    if active_key:
+        start_date = date.fromisoformat(active_key[1])
+        end_date = start_date + timedelta(days=1) if schedule.end_hour <= schedule.start_hour else start_date
+        start = datetime.combine(start_date, time(schedule.start_hour), tzinfo=zone)
+        end = datetime.combine(end_date, time(schedule.end_hour), tzinfo=zone)
+        return active_key, start, end, local_now
+
+    now_utc = local_now.astimezone(timezone.utc)
+    for offset in range(0, 15):
+        start_date = local_now.date() + timedelta(days=offset)
+        if start_date.weekday() not in schedule.days:
+            continue
+        end_date = start_date + timedelta(days=1) if schedule.end_hour <= schedule.start_hour else start_date
+        start = datetime.combine(start_date, time(schedule.start_hour), tzinfo=zone)
+        end = datetime.combine(end_date, time(schedule.end_hour), tzinfo=zone)
+        if start.astimezone(timezone.utc) <= now_utc:
+            continue
+        probe = start + timedelta(seconds=1)
+        window_key = rollout_gate.firmware_window_key(settings, probe)
+        if window_key:
+            return window_key, start, end, probe
+    return None
+
+
+def _firmware_window_admission_timing(
+    family: str,
+    artifact: str,
+    schedule: MaintenanceSchedule,
+    now: datetime,
+    window_key,
+    ramp_minutes: list[int],
+):
+    """Resolve timing without writing; admission and preview use this decision."""
+    target_sha256 = db.get_firmware_sha256(artifact) if artifact else None
+    if not target_sha256:
+        raise ValueError(f"Firmware artifact hash is unavailable for {family}")
+    with db.get_db() as conn:
+        prior = conn.execute(
+            "SELECT ordinal, last_window_key, cutoff_utc FROM firmware_window_timing "
+            "WHERE family = ? AND target_sha256 = ?",
+            (family, target_sha256),
+        ).fetchone()
+    encoded_key = json.dumps(list(window_key), separators=(",", ":"))
+    same_window = bool(prior and prior["last_window_key"] == encoded_key)
+    ordinal = int(prior["ordinal"]) if same_window else (int(prior["ordinal"]) + 1 if prior else 1)
+    stored_cutoff = prior["cutoff_utc"] if same_window else None
+    cutoff = firmware_window_cutoff(schedule, now, ordinal, ramp_minutes, stored_cutoff)
+    if cutoff is None:
+        raise ValueError(f"Firmware cutoff is invalid for {family}")
+    return family, target_sha256, cutoff, encoded_key, ordinal
+
+
+def _queue_order_key(item: dict, recovery_ip: Optional[str] = None):
+    """Return the serial queue order shared by admission and preview."""
+    return (
+        0 if item["ip"] == recovery_ip else 1,
+        {"cpe": 0, "ap": 1, "switch": 2}[item["device_type"]],
+        _normalized_ip(item["ip"]),
+        _normalized_ip(item["parent_ip"]) if item.get("parent_ip") else (0, 0),
+    )
 
 
 def _as_int(value, default: int) -> int:
@@ -422,14 +560,14 @@ class AutoUpdateScheduler:
             now = time_result
         logger.info(f"Time validation: {'passed' if time_ok else 'degraded (system clock)'}")
 
-        # Check freeze windows
-        freeze = db.is_in_freeze_window(now.isoformat())
-        if freeze:
+        # Check the shared read-only admission holds before queue selection.
+        environment_hold = _scheduled_environment_hold_reason(now)
+        if environment_hold:
             if self._state != "frozen":
                 self._state = "frozen"
-                self._block_reason = f"Maintenance freeze: {freeze['name']}"
+                self._block_reason = environment_hold
                 db.log_schedule_event("frozen", self._block_reason)
-                logger.info(f"Scheduler frozen: {freeze['name']} (until {freeze['end_date']})")
+                logger.info("Scheduler frozen or held: %s", environment_hold)
                 await self._broadcast_status()
             return
 
@@ -483,21 +621,18 @@ class AutoUpdateScheduler:
 
             if not weather_ok:
                 self._state = "blocked_weather"
-                temp_c = self._weather_info.get("temperature_c") if self._weather_info else None
-                min_temp_c = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
                 temp_unit = await services.resolve_temperature_unit(settings.get("temperature_unit", "auto"))
-                temp_str = format_temperature(temp_c, temp_unit) if temp_c is not None else "?"
-                min_temp_str = format_temperature(min_temp_c, temp_unit)
-                self._block_reason = f"Temperature {temp_str} is below minimum {min_temp_str}"
+                self._weather_temperature_unit = temp_unit
+                self._block_reason = self._weather_admission_reason(settings, now, temp_unit)
                 db.log_schedule_event("blocked_weather", self._block_reason)
                 logger.warning(f"Scheduler blocked by weather: {self._block_reason}")
                 await self._broadcast_status()
                 return
 
         fw_30x = settings.get("selected_firmware_30x", "")
-        if not fw_30x:
+        if self._firmware_admission_reason(settings):
             self._state = "blocked_no_firmware"
-            self._block_reason = "No firmware selected"
+            self._block_reason = self._firmware_admission_reason(settings)
             await self._broadcast_status()
             return
 
@@ -534,92 +669,18 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        try:
-            if db.get_firmware_window_stop(window_key):
-                self._state = "blocked_safety"
-                self._block_reason = "This maintenance window stopped after a device failure"
-                await self._broadcast_status()
-                return
-            unresolved = db.get_unresolved_firmware_window_stops()
-        except Exception as exc:
-            logger.warning("Could not read firmware window stops; holding queue: %s", exc)
+        environment_hold = _scheduled_environment_hold_reason(now, window_key)
+        if environment_hold:
             self._state = "blocked_safety"
-            self._block_reason = "Could not verify firmware failure stops"
-            await self._broadcast_status()
-            return
-        if unresolved:
-            stop = unresolved[0]
-            self._state = "blocked_safety"
-            self._block_reason = (
-                f"Firmware queue stopped at {stop.get('device_ip', 'a device')}; "
-                "resolve the failure before a later window"
-            )
+            self._block_reason = environment_hold
             await self._broadcast_status()
             return
 
-        held_families: set[str] = set()
-        family_holds: dict = {}
-        try:
-            held_families, family_holds = self._held_families(settings, None)
-            if recovery_ip:
-                recovery_queue = self._derive_pending_queue(
-                    settings, None, allow_downgrade, held_families=set(),
-                    recovery_ip=recovery_ip,
-                )
-                recovery_entry = next(
-                    (entry for entry in recovery_queue if entry["ip"] == recovery_ip), None,
-                )
-                if recovery_entry is None:
-                    self._state = "blocked_safety"
-                    self._block_reason = "Could not verify the previously failed device"
-                    await self._broadcast_status()
-                    return
-                recovery_block = _missing_serial_recovery_reason(
-                    recovery_ip, recovery_entry, window_key,
-                )
-                if recovery_block:
-                    self._state = "blocked_safety"
-                    self._block_reason = recovery_block
-                    await self._broadcast_status()
-                    return
-                if recovery_entry["family"] in held_families:
-                    self._state = "blocked_firmware_hold"
-                    self._block_reason = self._firmware_hold_block_reason(
-                        {recovery_entry["family"]}, family_holds,
-                    )
-                    await self._broadcast_status()
-                    return
-                queue = [recovery_entry]
-            else:
-                queue = self._derive_pending_queue(
-                    settings, None, allow_downgrade, held_families=held_families,
-                )
-        except Exception as exc:
-            logger.warning("Derived firmware queue failed closed: %s", exc)
-            if held_families:
-                self._state = "blocked_firmware_hold"
-                self._block_reason = self._firmware_hold_block_reason(held_families, family_holds)
-            else:
-                self._state = "waiting"
-                self._block_reason = str(exc) or "Could not build firmware queue"
-            await self._broadcast_status()
-            return
-
-        if not queue:
-            try:
-                held_queue = self._derive_pending_queue(
-                    settings, None, allow_downgrade, held_families=set(),
-                    recovery_ip=recovery_ip,
-                ) if held_families else []
-            except Exception as exc:
-                logger.warning("Could not verify held queue entries: %s", exc)
-                held_queue = [True]
-            if held_queue:
-                self._state = "blocked_firmware_hold"
-                self._block_reason = self._firmware_hold_block_reason(held_families, family_holds)
-            else:
-                self._state = "blocked_all_current"
-                self._block_reason = "All devices up to date"
+        queue, state, reason = self._queue_admission_decision(
+            settings, allow_downgrade, recovery_ip, window_key,
+        )
+        if state:
+            self._state, self._block_reason = state, reason
             await self._broadcast_status()
             return
 
@@ -641,25 +702,9 @@ class AutoUpdateScheduler:
             families = dict.fromkeys(entry["family"] for entry in queue)
             for family in families:
                 artifact = filenames.get(family)
-                target_sha256 = db.get_firmware_sha256(artifact) if artifact else None
-                if not target_sha256:
-                    raise ValueError(f"Firmware artifact hash is unavailable for {family}")
-                with db.get_db() as conn:
-                    prior = conn.execute(
-                        "SELECT ordinal, last_window_key, cutoff_utc FROM firmware_window_timing "
-                        "WHERE family = ? AND target_sha256 = ?",
-                        (family, target_sha256),
-                    ).fetchone()
-                encoded_key = json.dumps(list(window_key), separators=(",", ":"))
-                same_window = bool(prior and prior["last_window_key"] == encoded_key)
-                ordinal = int(prior["ordinal"]) if same_window else (int(prior["ordinal"]) + 1 if prior else 1)
-                stored_cutoff = prior["cutoff_utc"] if same_window else None
-                cutoff = firmware_window_cutoff(
-                    schedule, now, ordinal, ramp_minutes, stored_cutoff,
-                )
-                if cutoff is None:
-                    raise ValueError(f"Firmware cutoff is invalid for {family}")
-                timing_admissions.append((family, target_sha256, cutoff, encoded_key, ordinal))
+                timing_admissions.append(_firmware_window_admission_timing(
+                    family, artifact, schedule, now, window_key, ramp_minutes,
+                ))
         except Exception as exc:
             logger.warning("Could not persist firmware window timing; holding queue: %s", exc)
             self._state = "waiting"
@@ -722,6 +767,82 @@ class AutoUpdateScheduler:
         }
         db.log_schedule_event("job_started", f"Job {job_id} for derived firmware queue", job_id=job_id)
         return
+
+    def _firmware_admission_reason(self, settings):
+        return None if settings.get("selected_firmware_30x") else "No firmware selected"
+
+    def _weather_admission_reason(self, settings, now, temperature_unit="c"):
+        if settings.get("weather_check_enabled") != "true":
+            return None
+        if self._weather_checked_today != now.strftime("%Y-%m-%d") or self._weather_ok is None:
+            return "Weather admission is unverified for this window"
+        if self._weather_ok:
+            return None
+        temp_c = self._weather_info.get("temperature_c") if self._weather_info else None
+        minimum = _as_float(settings.get("min_temperature_c", "-10"), -10.0)
+        temperature = format_temperature(temp_c, temperature_unit) if temp_c is not None else "?"
+        return f"Temperature {temperature} is below minimum {format_temperature(minimum, temperature_unit)}"
+
+    def _queue_admission_decision(
+        self, settings, allow_downgrade, recovery_ip, window_key, evaluation_time=None,
+    ):
+        """Return the eligible queue and its admission hold without writes."""
+        held_families: set[str] = set()
+        family_holds: dict = {}
+        try:
+            held_families, family_holds = self._held_families(settings, None) if evaluation_time is None else self._held_families(settings, None, evaluation_time)
+            if recovery_ip:
+                recovery_queue = self._derive_pending_queue(
+                    settings, None, allow_downgrade, held_families=set(),
+                    recovery_ip=recovery_ip, evaluation_time=evaluation_time,
+                )
+                recovery_entry = next(
+                    (entry for entry in recovery_queue if entry["ip"] == recovery_ip), None,
+                )
+                if recovery_entry is None:
+                    return [], "blocked_safety", "Could not verify the previously failed device"
+                recovery_block = _missing_serial_recovery_reason(
+                    recovery_ip, recovery_entry, window_key,
+                )
+                if recovery_block:
+                    return [], "blocked_safety", recovery_block
+                if recovery_entry["family"] in held_families:
+                    return [], "blocked_firmware_hold", self._firmware_hold_block_reason(
+                        {recovery_entry["family"]}, family_holds,
+                    )
+                queue = [recovery_entry]
+            else:
+                queue = self._derive_pending_queue(
+                    settings, None, allow_downgrade, held_families=held_families, evaluation_time=evaluation_time,
+                )
+        except Exception as exc:
+            logger.warning("Derived firmware queue failed closed: %s", exc)
+            if held_families:
+                state = "blocked_firmware_hold"
+                reason = self._firmware_hold_block_reason(held_families, family_holds)
+            else:
+                state = "waiting"
+                reason = str(exc) or "Could not build firmware queue"
+            return [], state, reason
+
+        if not queue:
+            try:
+                held_queue = self._derive_pending_queue(
+                    settings, None, allow_downgrade, held_families=set(),
+                    recovery_ip=recovery_ip, evaluation_time=evaluation_time,
+                ) if held_families else []
+            except Exception as exc:
+                logger.warning("Could not verify held queue entries: %s", exc)
+                held_queue = [True]
+            if held_queue:
+                state = "blocked_firmware_hold"
+                reason = self._firmware_hold_block_reason(held_families, family_holds)
+            else:
+                state = "blocked_all_current"
+                reason = "All devices up to date"
+            return [], state, reason
+
+        return queue, None, None
 
     def _scheduled_admission_allowed(self) -> bool:
         """Check current readiness without yielding before admission."""
@@ -834,7 +955,7 @@ class AutoUpdateScheduler:
                 result[fam] = dev["ip"]
         return result
 
-    def _held_families(self, settings: dict, rollout: Optional[dict]) -> tuple[set, dict]:
+    def _held_families(self, settings: dict, rollout: Optional[dict], evaluation_time: Optional[datetime] = None) -> tuple[set, dict]:
         """Per-family Firmware Hold state for the firmware this rollout is rolling.
 
         A family is HELD when its target firmware's release-date hold has not
@@ -871,6 +992,9 @@ class AutoUpdateScheduler:
                 continue
             info = db.get_firmware_hold_info(fname, hold_days)
             cleared_by_time = bool(info.get("cleared", True))
+            if info.get("clears_at"):
+                clears_at, hold_now = _stored_timestamp_clock(info["clears_at"], evaluation_time)
+                cleared_by_time = hold_now >= clears_at
             prover = confirmed_by.get(fam)
             is_held = (not cleared_by_time) and (prover is None)
             family_holds[fam] = {
@@ -973,67 +1097,170 @@ class AutoUpdateScheduler:
         allow_downgrade: bool = False,
         held_families: Optional[set[str]] = None,
         recovery_ip: Optional[str] = None,
+        include_all: bool = False,
+        evaluation_time: Optional[datetime] = None,
     ) -> list[dict]:
-        """Build the current ordered queue from enabled Manager inventory.
+        """Build the ordered queue from enabled Manager inventory.
 
-        This is a selector only. The existing wave dispatcher remains the
-        runtime admission path until the queue cutover.
+        `include_all` exposes the same decisions for read-only previews,
+        including current, held, and unauthenticated CPE entries.
         """
         target_versions = self._target_versions(settings, rollout or {})
         cooldown_days = _as_int(settings.get("firmware_update_cooldown_days", "30"), 30)
         if held_families is None:
-            held_families, _ = self._held_families(settings, rollout)
+            held_families, family_holds = self._held_families(settings, rollout)
+        elif include_all:
+            family_holds = self._held_families(settings, rollout, evaluation_time)[1]
+        else:
+            family_holds = {}
         ap_scope = set(self._resolve_scope(settings))
         switch_scope = set(self._resolve_switch_scope(settings))
         aps = db.get_all_access_points_dict(enabled_only=True)
         switches = db.get_all_switches_dict(enabled_only=True)
         cpes_by_ap = db.get_all_cpes_grouped()
         entries: list[dict] = []
-        address_owners: set[tuple[int, int]] = set()
+        address_owners: dict[tuple[int, int], dict] = {}
 
-        def add_device(device: dict, role: str, parent_ip: Optional[str] = None) -> None:
+        def add_device(
+            device: dict, role: str, parent_ip: Optional[str] = None,
+            cpe_auth_ok: bool = True,
+        ) -> None:
+            if include_all and role == "cpe" and not cpe_auth_ok:
+                isolated = self._derive_excluded_cpe(settings, device, parent_ip, allow_downgrade)
+                entries.append(isolated)
+                return
             ip = device.get("ip")
             family = _known_firmware_family(device.get("model"))
             if not family:
+                if include_all and ip:
+                    entries.append({
+                        "ip": ip, "device_type": role, "parent_ip": parent_ip,
+                        "model": device.get("model"), "family": None,
+                        "current_version": device.get("firmware_version"),
+                        "target_version": None, "needs_update": False,
+                        "held": True,
+                        "hold_reason": f"Unsupported model for scheduled firmware updates: {device.get('model') or 'unknown'}",
+                    })
+                    return
                 if not any(target_versions.values()):
                     return
                 raise ValueError(f"Pending queue held: unknown model for {role} {ip or 'without address'}")
             target = target_versions.get(family, "")
             if not target:
+                if include_all:
+                    entries.append({
+                        "ip": ip, "device_type": role, "parent_ip": parent_ip,
+                        "model": device.get("model"), "family": family,
+                        "current_version": device.get("firmware_version"),
+                        "target_version": None, "needs_update": False,
+                        "held": True, "hold_reason": "No target firmware is selected for this model",
+                    })
                 return
             if target == "__unknown__":
+                if include_all:
+                    entries.append({
+                        "ip": ip, "device_type": role, "parent_ip": parent_ip,
+                        "model": device.get("model"), "family": family,
+                        "current_version": device.get("firmware_version"),
+                        "target_version": None, "needs_update": False,
+                        "held": True, "hold_reason": "Target firmware version is unreadable",
+                        "queue_blocking": True,
+                    })
+                    return
                 raise ValueError(f"Pending queue held: target version is unreadable for {family}")
+            address_reason = None
             if not ip:
-                raise ValueError(f"Pending queue held: {role} has no management address")
+                address_reason = f"Pending queue held: {role} has no management address"
             try:
-                address_key = _normalized_ip(ip)
-            except ValueError as exc:
-                raise ValueError(f"Pending queue held: invalid management address for {role} {ip}") from exc
-            if address_key in address_owners:
-                raise ValueError(f"Pending queue held: duplicate management address {ip}")
-            address_owners.add(address_key)
+                address_key = _normalized_ip(ip) if ip else None
+            except (ValueError, AttributeError):
+                address_key = None
+                address_reason = f"Pending queue held: invalid management address for {role} {ip}"
+            is_duplicate = address_key is not None and address_key in address_owners
+            duplicate_owner = address_owners.get(address_key) if is_duplicate else None
+            if is_duplicate:
+                address_reason = f"Pending queue held: duplicate management address {ip}"
+                if include_all:
+                    if isinstance(duplicate_owner, dict):
+                        duplicate_owner["held"] = True
+                        duplicate_owner["hold_reason"] = address_reason
+                        duplicate_owner["queue_blocking"] = True
+            elif address_key is not None:
+                # Keep the row so preview can explain an admission failure.
+                address_owners[address_key] = None
+
+            if address_reason:
+                if not include_all:
+                    raise ValueError(address_reason)
+                entry = {
+                    "ip": ip, "device_type": role, "parent_ip": parent_ip,
+                    "model": device.get("model"), "family": family,
+                    "current_version": device.get("firmware_version"),
+                    "target_version": target, "needs_update": True,
+                    "held": True, "hold_reason": address_reason,
+                    "queue_blocking": True,
+                }
+                entries.append(entry)
+                if address_key is not None and not is_duplicate:
+                    address_owners[address_key] = entry
+                return
 
             version = device.get("firmware_version")
             if not version:
+                if include_all:
+                    entry = {
+                        "ip": ip, "device_type": role, "parent_ip": parent_ip,
+                        "model": device.get("model"), "family": family,
+                        "current_version": version,
+                        "target_version": target, "needs_update": False,
+                        "held": True, "hold_reason": "Reported firmware version is unreadable",
+                        "queue_blocking": True,
+                    }
+                    entries.append(entry)
+                    if address_key is not None and not is_duplicate:
+                        address_owners[address_key] = entry
+                    return
                 raise ValueError(f"Pending queue held: reported version is unreadable for {role} {ip}")
-            if family in held_families:
-                return
             needs_update = _device_needs_update(
                 version, target, allow_downgrade,
-                last_update_iso=device.get("last_firmware_update"),
-                cooldown_days=cooldown_days,
             )
-            if not needs_update and ip != recovery_ip:
+            cooldown_reason = (
+                _device_cooldown_reason(device, cooldown_days, evaluation_time)
+                if needs_update else None
+            )
+            auth_reason = (
+                "CPE credentials are not verified"
+                if needs_update and role == "cpe" and not cpe_auth_ok else None
+            )
+            if (cooldown_reason or auth_reason) and not include_all:
                 return
+            held = needs_update and (
+                family in held_families or cooldown_reason is not None or auth_reason is not None
+            )
+            if held and not include_all:
+                return
+            if not needs_update and ip != recovery_ip and not include_all:
+                return
+            hold_reason = cooldown_reason or auth_reason
+            if not hold_reason and family in held_families:
+                hold_reason = self._firmware_hold_block_reason({family}, {
+                    family: (family_holds.get(family) or {})
+                })
             entries.append({
                 "ip": ip,
                 "device_type": role,
                 "parent_ip": parent_ip,
                 "model": device.get("model"),
                 "family": family,
+                "current_version": version,
                 "target_version": target,
                 "verify_recovery_if_current": ip == recovery_ip and not needs_update,
+                "needs_update": needs_update,
+                "held": held,
+                "hold_reason": hold_reason,
             })
+            if address_key is not None and not is_duplicate:
+                address_owners[address_key] = entries[-1]
 
         for parent_ip in sorted(ap_scope):
             ap = aps.get(parent_ip)
@@ -1043,20 +1270,41 @@ class AutoUpdateScheduler:
             for cpe in cpes_by_ap.get(parent_ip, []):
                 # The cache is populated by the AP peer report. Keep the same
                 # authenticated-peer eligibility used by existing scheduling.
-                if cpe.get("auth_status") == "ok":
-                    add_device(cpe, "cpe", parent_ip)
+                if cpe.get("auth_status") == "ok" or include_all:
+                    add_device(cpe, "cpe", parent_ip, cpe.get("auth_status") == "ok")
         for ip in sorted(switch_scope):
             switch = switches.get(ip)
             if switch:
                 add_device(switch, "switch")
 
-        entries.sort(key=lambda item: (
-            0 if item["ip"] == recovery_ip else 1,
-            {"cpe": 0, "ap": 1, "switch": 2}[item["device_type"]],
-            _normalized_ip(item["ip"]),
-            _normalized_ip(item["parent_ip"]) if item["parent_ip"] else (0, 0),
-        ))
+        if include_all:
+            def preview_order(item):
+                try:
+                    return (0, _queue_order_key(item, recovery_ip))
+                except (ValueError, AttributeError):
+                    return (
+                        1, (1, {"cpe": 0, "ap": 1, "switch": 2}[item["device_type"]],
+                            (0, 0), (0, 0)),
+                        str(item.get("ip") or ""),
+                    )
+            entries.sort(key=preview_order)
+        else:
+            entries.sort(key=lambda item: _queue_order_key(item, recovery_ip))
         return entries
+
+    def _derive_excluded_cpe(self, settings, device, parent_ip, allow_downgrade):
+        family = _known_firmware_family(device.get("model"))
+        target = self._target_versions(settings, None).get(family, "")
+        current = device.get("firmware_version")
+        needs_update = bool(target and _device_needs_update(current or "", target, allow_downgrade))
+        held = needs_update or not family or not current or target == "__unknown__"
+        return {
+            "ip": device.get("ip"), "device_type": "cpe", "parent_ip": parent_ip,
+            "model": device.get("model"), "family": family,
+            "current_version": current, "target_version": target or None,
+            "needs_update": needs_update, "held": held, "excluded": True,
+            "hold_reason": "CPE credentials are not verified" if held else None,
+        }
 
     def on_job_completed(
         self,
@@ -1346,6 +1594,251 @@ class AutoUpdateScheduler:
             "rollout": rollout_info,
             "firmware_hold": firmware_hold,
             "hold_clear_reason": self._hold_clear_reason,
+        }
+
+    def get_preview(
+        self,
+        settings: dict,
+        now: datetime,
+        timezone_name: str,
+        scheduler_enabled: bool = True,
+    ) -> dict:
+        """Build a read-only view of the next serial scheduled firmware window."""
+        schedule_enabled = settings.get("schedule_enabled") == "true"
+        manager_auto_updates_enabled = settings.get("autoupdate_enabled") == "true"
+        safety_ready, safety_reason = rollout_gate.scheduled_admission_decision(settings)
+        auto_update_enabled = schedule_enabled
+        timing_error = None
+        ramp_minutes = [30, 120]
+        try:
+            start_hour = int(settings.get("schedule_start_hour", "3"))
+            end_hour = int(settings.get("schedule_end_hour", "4"))
+        except (TypeError, ValueError):
+            start_hour, end_hour = 3, 4
+            timing_error = "Maintenance window timing is invalid or unavailable"
+        days = _parse_schedule_days(settings.get("schedule_days", ""))
+        if not (0 <= start_hour <= 23 and 0 <= end_hour <= 23) or not days:
+            timing_error = "Maintenance window timing is invalid or unavailable"
+        schedule = MaintenanceSchedule(
+            schedule_id="firmware", days=frozenset(days),
+            start_hour=start_hour, end_hour=end_hour, tz=timezone_name,
+        )
+        try:
+            window = _scheduled_window_bounds(schedule, now) if not timing_error else None
+        except (TypeError, ValueError, OverflowError):
+            window = None
+            timing_error = "Maintenance window timing is invalid or unavailable"
+        if window is None and timing_error is None:
+            timing_error = "Maintenance window timing is unavailable"
+        window_key = window[0] if window else None
+        timing_now = window[3] if window else None
+
+        global_hold_reason = None
+        if not scheduler_enabled:
+            global_hold_reason = "Scheduler is not initialized"
+        elif not schedule_enabled:
+            global_hold_reason = "Auto-update is off"
+        elif not safety_ready:
+            global_hold_reason = safety_reason
+
+        recovery_ip = None
+        if window_key:
+            try:
+                recovery_ip = _resolved_failure_recovery_ip(window_key)
+            except Exception:
+                global_hold_reason = "Could not verify firmware failure stops"
+        projected_admission_time = now
+        if window and window[1] > now.astimezone(window[1].tzinfo):
+            projected_admission_time = window[1]
+        environment_hold = _scheduled_environment_hold_reason(
+            projected_admission_time, window_key,
+        )
+        if environment_hold:
+            global_hold_reason = environment_hold
+
+        if not global_hold_reason and settings.get("weather_check_enabled") == "true" and projected_admission_time > now:
+            global_hold_reason = "Weather admission is unverified for this window"
+        if not global_hold_reason:
+            global_hold_reason = self._weather_admission_reason(
+                settings, projected_admission_time,
+                getattr(self, "_weather_temperature_unit", settings.get("temperature_unit", "c")),
+            )
+        if not global_hold_reason:
+            global_hold_reason = self._firmware_admission_reason(settings)
+
+        devices = []
+        timing_by_family = {}
+        try:
+            held_families, _family_holds = self._held_families(settings, None, projected_admission_time)
+            candidates = self._derive_pending_queue(
+                settings, None,
+                settings.get("allow_downgrade", "false") == "true",
+                held_families=held_families,
+                recovery_ip=recovery_ip,
+                include_all=True, evaluation_time=projected_admission_time,
+            )
+            admitted_queue, queue_state, queue_reason = self._queue_admission_decision(
+                settings, settings.get("allow_downgrade", "false") == "true",
+                recovery_ip, window_key, projected_admission_time,
+            )
+            if queue_state and queue_state != "blocked_all_current" and not global_hold_reason:
+                global_hold_reason = queue_reason
+            admitted_keys = {(entry["ip"], entry["device_type"]) for entry in admitted_queue}
+            for item in candidates:
+                held = bool(item.get("held"))
+                reason = item.get("hold_reason")
+                actionable = item.get("needs_update") or item.get("verify_recovery_if_current")
+                if actionable and global_hold_reason and not (item.get("excluded") or item.get("queue_blocking")):
+                    held, reason = True, global_hold_reason
+                elif actionable and recovery_ip and (item["ip"], item["device_type"]) not in admitted_keys and not reason:
+                    held, reason = True, "Waiting for the previously failed device to recover"
+                devices.append({
+                    "ip": item["ip"],
+                    "role": item["device_type"],
+                    "model": item.get("model"),
+                    "current_firmware": item.get("current_version"),
+                    "target_firmware": item.get("target_version"),
+                    "needs_update": bool(item.get("needs_update")),
+                    "held": held,
+                    "hold_reason": reason,
+                })
+            if window_key and timing_now:
+                ramp_minutes = json.loads(settings.get("firmware_window_ramp_minutes", "[30, 120]"))
+                artifacts = {
+                    "tna-30x": settings.get("selected_firmware_30x", ""),
+                    "tna-303l": settings.get("selected_firmware_303l", ""),
+                    "tns-100": settings.get("selected_firmware_tns100", ""),
+                }
+                eligible_families = {
+                    item.get("family") for item, device in zip(candidates, devices)
+                    if item.get("family") and item.get("target_version")
+                    and (item.get("needs_update") or item.get("verify_recovery_if_current")) and not device["held"]
+                }
+                candidate_families = dict.fromkeys(
+                    item.get("family") for item in candidates
+                    if item.get("family") and item.get("target_version") and not item.get("excluded")
+                    and (item.get("needs_update") or item.get("verify_recovery_if_current"))
+                )
+                families = {}
+                for family in candidate_families:
+                    if (
+                        family not in eligible_families
+                        and not db.get_firmware_sha256(artifacts.get(family))
+                    ):
+                        continue
+                    families[family] = None
+                for family in families:
+                    timing_by_family[family] = _firmware_window_admission_timing(
+                        family, artifacts.get(family), schedule, timing_now,
+                        window_key, ramp_minutes,
+                    )
+                active_window = window[1] <= now.astimezone(window[1].tzinfo) < window[2]
+                if active_window:
+                    local_now = now.astimezone(timezone.utc)
+                    family_by_device = {(item["ip"], item["device_type"]): item.get("family") for item in candidates}
+                    for device in devices:
+                        if not device["needs_update"] or global_hold_reason:
+                            continue
+                        family = family_by_device.get((device["ip"], device["role"]))
+                        family_timing = timing_by_family.get(family)
+                        if not family_timing:
+                            continue
+                        cutoff_reason = None
+                        if local_now >= family_timing[2]:
+                            cutoff_reason = "Firmware window cutoff has passed; device will retry next window"
+                        elif local_now >= window[2] - timedelta(minutes=SCHEDULE_END_BUFFER_MINUTES):
+                            cutoff_reason = "Maintenance window is ending; device will retry next window"
+                        if cutoff_reason:
+                            if (device.get("hold_reason") or "").startswith((
+                                "Unsupported model", "Scheduled queue held", "Pending queue held",
+                            )):
+                                continue
+                            device["held"] = True
+                            device["hold_reason"] = cutoff_reason
+        except Exception as exc:
+            timing_error = "Firmware window timing or queue data is unavailable"
+            logger.warning("Could not build scheduler preview: %s", exc)
+
+        if timing_error:
+            for item in devices:
+                if item["needs_update"]:
+                    item["held"] = True
+                    item["hold_reason"] = timing_error
+
+        selected_timing = next(iter(timing_by_family.values()), None)
+        cutoff = selected_timing[2] if selected_timing else None
+        ramp_limit = None
+        ramp_ordinal = None
+        if selected_timing:
+            ramp_ordinal = selected_timing[4]
+            if ramp_ordinal <= len(ramp_minutes):
+                ramp_limit = ramp_minutes[ramp_ordinal - 1]
+
+        scope_type = settings.get("schedule_scope", "all")
+        scope_names = []
+        if scope_type == "sites":
+            site_ids = [
+                int(value.strip()) for value in settings.get("schedule_scope_data", "").split(",")
+                if value.strip().isdigit()
+            ]
+            for site_id in site_ids:
+                site = db.get_tower_site(site_id)
+                scope_names.append(site.get("name") if site else f"Site {site_id}")
+        elif scope_type == "aps":
+            ap_ips = [value.strip() for value in settings.get("schedule_scope_data", "").split(",") if value.strip()]
+            for ap_ip in ap_ips:
+                ap = db.get_access_point(ap_ip)
+                scope_names.append((ap or {}).get("system_name") or ap_ip)
+                site_id = (ap or {}).get("tower_site_id")
+                if site_id is not None:
+                    site = db.get_tower_site(site_id)
+                    site_name = site.get("name") if site else None
+                    if site_name and site_name not in scope_names:
+                        scope_names.append(site_name)
+        elif scope_type == "all":
+            for ap in db.get_access_points(enabled_only=True):
+                ap_name = ap.get("system_name") or ap.get("ip")
+                if ap_name and ap_name not in scope_names:
+                    scope_names.append(ap_name)
+                site_id = ap.get("tower_site_id")
+                if site_id is not None:
+                    site = db.get_tower_site(site_id)
+                    site_name = site.get("name") if site else None
+                    if site_name and site_name not in scope_names:
+                        scope_names.append(site_name)
+        scope_label = ", ".join(scope_names) if scope_names else {
+            "all": "All enabled sites", "sites": "Selected sites",
+            "aps": "Selected access points and their sites",
+        }.get(scope_type, "No devices selected")
+        return {
+            "timezone": timezone_name,
+            "window_start": window[1].isoformat() if window else None,
+            "window_end": window[2].isoformat() if window else None,
+            "cutoff_utc": cutoff.isoformat() if cutoff else None,
+            "ramp_limit_minutes": ramp_limit,
+            "ramp_ordinal": ramp_ordinal,
+            "family_timing": {
+                family: {
+                    "ramp_ordinal": timing[4],
+                    "ramp_limit_minutes": (
+                        ramp_minutes[timing[4] - 1]
+                        if timing[4] <= len(ramp_minutes) else None
+                    ),
+                    "cutoff_utc": timing[2].isoformat(),
+                }
+                for family, timing in timing_by_family.items()
+            },
+            "scope": scope_type,
+            "scope_label": scope_label,
+            "scope_names": scope_names,
+            "safety_ready": safety_ready,
+            "safety_reason": safety_reason,
+            "scheduler_enabled": scheduler_enabled,
+            "schedule_enabled": schedule_enabled,
+            "auto_update_enabled": auto_update_enabled,
+            "manager_auto_updates_enabled": manager_auto_updates_enabled,
+            "devices": devices,
+            "hold_reason": global_hold_reason or timing_error,
         }
 
     async def _broadcast_status(self):
