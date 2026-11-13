@@ -1,7 +1,9 @@
 """Mocked checks for the read-only firmware-stop bench mode."""
 
+import importlib.util
 import os
 import shutil
+import stat
 import ssl
 import subprocess
 import sys
@@ -11,6 +13,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 HELPER = REPO / "scripts/bench/readonly_stop.py"
+SPEC = importlib.util.spec_from_file_location("readonly_stop", HELPER)
+readonly_stop = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(readonly_stop)
 DRIVER = '''
 import os
 from types import SimpleNamespace
@@ -249,6 +254,101 @@ def test_manager_ca_inside_checkout_is_rejected(bench_stop):
     assert result.returncode == 1
     assert "manager_login: FAIL" in result.stdout
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("case", ["file-mode", "ancestor-mode", "file-symlink", "component-symlink"])
+def test_manager_ca_unsafe_path_is_rejected_before_contact(bench_stop, case):
+    repo, _, marker, env = bench_stop
+    ca_file = Path(env["SIXTYOPS_TEST_CA_FILE"])
+    configured = ca_file
+    if case == "file-mode":
+        ca_file.chmod(0o620)
+    elif case == "ancestor-mode":
+        ca_file.parent.chmod(0o777)
+    elif case == "file-symlink":
+        alias = ca_file.with_name("manager-ca-link.pem")
+        alias.symlink_to(ca_file)
+        configured = alias
+    else:
+        link = ca_file.parent / "linked-dir"
+        link.symlink_to(ca_file.parent, target_is_directory=True)
+        configured = link / ca_file.name
+
+    result = subprocess.run(
+        [sys.executable, str(HELPER), "--repo", str(repo), "--checkout", str(repo), "--stop-id", "77"],
+        env={**env, "SIXTYOPS_TEST_CA_FILE": str(configured)},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 1
+    assert "manager_login: FAIL" in result.stdout
+    assert not marker.exists()
+
+
+def test_manager_ca_replacement_during_read_fails_closed(bench_stop, monkeypatch):
+    ca_file = Path(bench_stop[3]["SIXTYOPS_TEST_CA_FILE"])
+    replacement = b"not the provisioned CA"
+    original_read = os.read
+    replaced = False
+
+    def replace_before_read(descriptor, size):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            swap_file = ca_file.with_name("replacement.pem")
+            swap_file.write_bytes(replacement)
+            os.replace(swap_file, ca_file)
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(readonly_stop.os, "read", replace_before_read)
+    with pytest.raises(OSError):
+        readonly_stop._manager_ssl_context(ca_file, bench_stop[0])
+
+    assert replaced
+    assert ca_file.read_bytes() == replacement
+
+
+def test_manager_tls_load_uses_bytes_read_before_path_replacement(bench_stop, monkeypatch):
+    ca_file = Path(bench_stop[3]["SIXTYOPS_TEST_CA_FILE"])
+    original_bytes = ca_file.read_bytes()
+    original_load = ssl.SSLContext.load_verify_locations
+    loaded = []
+
+    def replace_before_load(context, cafile=None, capath=None, cadata=None):
+        replacement = ca_file.with_name("replacement.pem")
+        replacement.write_bytes(b"not the provisioned CA")
+        os.replace(replacement, ca_file)
+        loaded.append(cadata)
+        return original_load(context, cafile=cafile, capath=capath, cadata=cadata)
+
+    monkeypatch.setattr(ssl.SSLContext, "load_verify_locations", replace_before_load)
+    context = readonly_stop._manager_ssl_context(ca_file, bench_stop[0])
+
+    assert loaded == [original_bytes.decode("ascii")]
+    assert context.get_ca_certs()
+    assert ca_file.read_bytes() == b"not the provisioned CA"
+
+
+def test_manager_tls_trust_contains_only_the_provisioned_ca(bench_stop):
+    ca_file = Path(bench_stop[3]["SIXTYOPS_TEST_CA_FILE"])
+    bundle = ca_file.read_bytes()
+    first = bundle.split(b"-----END CERTIFICATE-----", 1)[0] + b"-----END CERTIFICATE-----\n"
+    ca_file.write_bytes(first)
+
+    context = readonly_stop._manager_ssl_context(ca_file, bench_stop[0])
+
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert len(context.get_ca_certs()) == 1
+
+
+def test_manager_ca_owner_check_rejects_other_uid():
+    info = type("Stat", (), {"st_uid": os.geteuid() + 1, "st_mode": stat.S_IFREG | 0o600})()
+
+    with pytest.raises(OSError):
+        readonly_stop._check_ca_stat(info, directory=False)
 
 
 def test_external_manager_login_redirect_does_not_forward_credentials(bench_stop):

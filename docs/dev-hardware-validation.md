@@ -390,10 +390,17 @@ username`, and `Shared device password` fields. `firmware-stop` uses `Manager
 URL`, `Manager username`, `Manager password`, `AP IP`, `Shared device username`,
 and `Shared device password`. It also requires `Manager CA file`, which must
 give the absolute path to the trusted Manager CA certificate. Store the CA
-file outside the repository in an owner-only directory. Use a readable,
-regular file that is not a symlink. Keep the directory owner-only and the file
-owner-readable. Do not put the path or certificate contents in logs. The
-helper does not read the access file. Missing or invalid CA files fail closed.
+file outside the repository in an owner-only directory. Provision the PEM from
+the approved certificate source, then set the directory to mode `700` and the
+file to mode `600`. For example, use `install -d -m 700` for the destination
+directory and `install -m 600` to place the provisioned CA file there. Confirm
+its fingerprint through a separate trusted channel. Do not paste certificate
+or credential contents into commands, logs, or the repository. Keep the
+directory and file owned by root or the user running the helper. The helper
+rejects symlinks and group or world write access on the CA file and path
+components. It reads the CA through verified file descriptors and uses only
+that certificate for Manager TLS. The helper does not read the access file.
+Missing or invalid CA files fail closed.
 Missing fields fail the run. Inherited device inputs cannot replace missing
 fields in the access file. A log write failure makes the lane fail even when
 reads succeed.

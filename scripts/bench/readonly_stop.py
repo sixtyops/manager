@@ -8,6 +8,7 @@ import contextlib
 import ipaddress
 import logging
 import os
+import stat
 import ssl
 import sys
 from pathlib import Path
@@ -27,6 +28,81 @@ DEVICE_GETS = {
     "/cgi.lua/bootbank",
     "/cgi.lua/status?type=interfaces",
 }
+_WRITABLE_BITS = stat.S_IWGRP | stat.S_IWOTH
+_STICKY_BIT = stat.S_ISVTX
+_MAX_CA_BYTES = 16 * 1024 * 1024
+
+
+def _check_ca_stat(info: os.stat_result, *, directory: bool) -> None:
+    allowed_owners = {0, os.geteuid()}
+    if info.st_uid not in allowed_owners:
+        raise OSError("unsafe CA path owner")
+    if directory:
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError("invalid CA path component")
+        if info.st_mode & _WRITABLE_BITS and not (
+            info.st_uid == 0 and info.st_mode & _STICKY_BIT
+        ):
+            raise OSError("unsafe CA path permissions")
+    elif not stat.S_ISREG(info.st_mode) or info.st_mode & _WRITABLE_BITS:
+        raise OSError("unsafe CA file permissions")
+
+
+def _read_verified_ca(path: Path, checkout: Path) -> bytes:
+    if not path.is_absolute() or not checkout.is_absolute():
+        raise OSError("CA paths must be absolute")
+    normalized = Path(os.path.normpath(path))
+    repo_root = Path(os.path.realpath(checkout))
+    if normalized == repo_root or repo_root in normalized.parents:
+        raise OSError("CA file must be outside checkout")
+    parts = normalized.parts[1:]
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise OSError("invalid CA path")
+
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    dir_flags = flags | os.O_DIRECTORY
+    descriptors = []
+    try:
+        current_fd = os.open("/", dir_flags)
+        descriptors.append(current_fd)
+        _check_ca_stat(os.fstat(current_fd), directory=True)
+        for component in parts[:-1]:
+            current_fd = os.open(component, dir_flags, dir_fd=current_fd)
+            descriptors.append(current_fd)
+            _check_ca_stat(os.fstat(current_fd), directory=True)
+
+        ca_fd = os.open(parts[-1], flags, dir_fd=current_fd)
+        descriptors.append(ca_fd)
+        before = os.fstat(ca_fd)
+        _check_ca_stat(before, directory=False)
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(ca_fd, min(65536, _MAX_CA_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > _MAX_CA_BYTES:
+                raise OSError("CA file is too large")
+        after = os.fstat(ca_fd)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+        ):
+            raise OSError("CA file changed while reading")
+        return b"".join(chunks)
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _manager_ssl_context(ca_path: Path, checkout: Path) -> ssl.SSLContext:
+    ca_bytes = _read_verified_ca(ca_path, checkout)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(cadata=ca_bytes.decode("ascii"))
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.check_hostname = True
+    return context
 
 
 async def _check(stop_id: int, results: dict[str, bool], checkout: Path) -> None:
@@ -50,20 +126,8 @@ async def _check(stop_id: int, results: dict[str, bool], checkout: Path) -> None
         return
     ap_ip = str(ipaddress.ip_address(values["SIXTYOPS_BENCH_AP_IP"]))
 
-    ca_file = Path(values["SIXTYOPS_TEST_CA_FILE"])
-    if not ca_file.is_absolute() or ca_file.is_symlink() or not ca_file.is_file():
-        return
-    resolved_ca_file = ca_file.resolve(strict=True)
-    repo_root = checkout.resolve()
-    if resolved_ca_file == repo_root or repo_root in resolved_ca_file.parents:
-        return
-    if not os.access(resolved_ca_file, os.R_OK):
-        return
-
     origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
-    ssl_context = ssl.create_default_context(cafile=str(resolved_ca_file))
-    ssl_context.verify_mode = ssl.CERT_REQUIRED
-    ssl_context.check_hostname = True
+    ssl_context = _manager_ssl_context(Path(values["SIXTYOPS_TEST_CA_FILE"]), checkout)
 
     def set_login_origin(request):
         if request.method == "POST":
