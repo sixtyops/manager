@@ -5,8 +5,8 @@ from typing import Optional
 
 
 SCHEDULED_ROLLOUT_SAFETY_REASON = (
-    "Scheduled firmware updates are paused for safety qualification. "
-    "Complete the rollout safety fixes and bench tests, then have the operator record readiness."
+    "Scheduled updates are off for this network until an admin turns them on. "
+    "Manual updates still work."
 )
 
 

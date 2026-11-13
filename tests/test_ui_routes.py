@@ -202,7 +202,7 @@ def test_ui_api_requests_match_openapi(authed_client: TestClient):
     assert page.status_code == 200
     source_requests = _ui_requests(TEMPLATE.read_text())
     rendered_requests = _ui_requests(page.text)
-    assert len(source_requests) == 90
+    assert len(source_requests) == 93
     assert rendered_requests == source_requests
     routes = _openapi_routes(response.json())
     _assert_requests_match_routes(source_requests, routes)

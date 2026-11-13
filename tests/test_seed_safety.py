@@ -113,6 +113,9 @@ def test_fresh_seed_plants_no_credentials(tmp_path):
     assert setting("schedule_enabled") == "false"
     assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
     con.close()
+    # The dashboard WebSocket reads seeded job history at connect.
+    with patch.object(database, "DB_PATH", db_path):
+        assert database.get_job_history()
 
     # A later dev.sh run must accept the known sample inventory as seeded.
     with patch.object(seed, "DB_PATH", db_path):

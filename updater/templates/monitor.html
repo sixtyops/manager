@@ -2204,6 +2204,11 @@
         }
 
         /* Pause reason gets its own row so queue facts stay scannable. */
+        /* Show the whole hold reason. It tells the operator what to do. */
+        #barBlockReason {
+            max-width: 560px;
+            white-space: normal;
+        }
         .status-bar-queue .status-bar-reason {
             flex-basis: 100%;
             max-width: none;
@@ -2513,6 +2518,10 @@
         .confirm-modal h3 { margin: 0 0 10px 0; }
         .confirm-message { font-size: var(--text-base); color: var(--text-muted); line-height: 1.5; white-space: pre-line; }
         .confirm-actions { display: flex; justify-content: flex-end; gap: var(--space-4); margin-top: var(--space-6); }
+        .confirm-list { max-height: min(40vh, 320px); overflow-y: auto; margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); font-size: var(--text-sm); }
+        .confirm-list h4 { margin: 0 0 4px 0; font-size: var(--text-sm); }
+        .confirm-list ul { margin: 0 0 var(--space-3) 0; padding-left: 18px; color: var(--text-muted); }
+        .confirm-list ul:last-child { margin-bottom: 0; }
 
         /* Edit login dialog */
         .device-login-fields { display: grid; gap: var(--space-5); margin-top: var(--space-6); }
@@ -3033,6 +3042,11 @@
                                 <option value="19">7 PM</option><option value="20">8 PM</option><option value="21">9 PM</option>
                                 <option value="22">10 PM</option><option value="23">11 PM</option>
                             </select></div>
+                        </div>
+                        <div class="toggle-sm-row" style="margin-top:8px;">
+                            <button class="toggle-sm" id="drawerScheduledUpdatesToggle" type="button" aria-label="Scheduled updates for this network" aria-pressed="false" aria-describedby="drawerScheduledUpdatesState" onclick="toggleScheduledUpdates()" data-min-role-disable="admin" title="Only an admin can change this."></button>
+                            <span class="toggle-sm-label">Scheduled updates</span>
+                            <span class="u-text-xxs-dim" id="drawerScheduledUpdatesState">Off until an admin turns them on</span>
                         </div>
                     </div>
 
@@ -3898,11 +3912,12 @@
     </div>
 
     <div class="backup-overlay" id="confirmOverlay" onclick="if(event.target===this)closeConfirmDialog(false)">
-        <div class="backup-modal confirm-modal">
+        <div class="backup-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
             <h3 id="confirmTitle">Confirm Action</h3>
             <p class="confirm-message" id="confirmMessage"></p>
+            <div class="confirm-list" id="confirmList" role="region" aria-label="Devices in scope" tabindex="0" hidden></div>
             <div class="confirm-actions">
-                <button class="btn btn-sm btn-ghost" type="button" onclick="closeConfirmDialog(false)">Cancel</button>
+                <button class="btn btn-sm btn-ghost" type="button" id="confirmCancelBtn" onclick="closeConfirmDialog(false)">Cancel</button>
                 <button class="btn btn-sm btn-danger" type="button" id="confirmAcceptBtn" onclick="closeConfirmDialog(true)">Confirm</button>
             </div>
         </div>
@@ -4040,7 +4055,8 @@
                     inputs.forEach(lock);
                 } else {
                     container.classList.remove('viewer-locked-tree');
-                    inputs.forEach(unlock);
+                    // A control with its own minimum role keeps the lock set above.
+                    inputs.forEach(el => { if (!el.dataset.minRoleDisable) unlock(el); });
                 }
             });
         }
@@ -4059,6 +4075,7 @@
         let licenseState = { tier: 'pro', status: 'active', features: {}, is_pro: true, should_nag: false, feature_info: {} };
         let _confirmResolve = null;
         let _confirmKeyHandler = null;
+        let _confirmReturnFocus = null;
 
         function showToast(message, type = 'info', timeoutMs = 3600) {
             const container = document.getElementById('toastContainer');
@@ -4150,20 +4167,61 @@
             acceptBtn.textContent = options.confirmText || 'Confirm';
             acceptBtn.classList.toggle('btn-danger', !!options.danger);
             acceptBtn.classList.toggle('btn-primary', !options.danger);
+            // options.groups: [{ heading, items }]. Show every item in a scrollable list.
+            const listEl = document.getElementById('confirmList');
+            if (listEl) {
+                listEl.replaceChildren(...(options.groups || []).flatMap(group => {
+                    const heading = document.createElement('h4');
+                    heading.textContent = group.heading;
+                    const list = document.createElement('ul');
+                    list.replaceChildren(...group.items.map(item => {
+                        const li = document.createElement('li');
+                        li.textContent = item;
+                        return li;
+                    }));
+                    return [heading, list];
+                }));
+                listEl.hidden = !options.groups?.length;
+            }
             overlay.classList.add('open');
+            _confirmReturnFocus = options.returnFocus || document.activeElement;
+            document.getElementById('confirmCancelBtn')?.focus();
 
             return new Promise(resolve => {
                 _confirmResolve = resolve;
-                _confirmKeyHandler = (event) => {
-                    if (event.key === 'Escape') closeConfirmDialog(false);
-                };
+                _confirmKeyHandler = handleConfirmKeydown;
                 document.addEventListener('keydown', _confirmKeyHandler);
             });
+        }
+
+        // Escape cancels. Tab and Shift+Tab stay inside the dialog.
+        function handleConfirmKeydown(event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeConfirmDialog(false);
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const dialog = document.querySelector('#confirmOverlay [role="dialog"]');
+            const controls = [...dialog.querySelectorAll('button, [tabindex="0"]')]
+                .filter(el => !el.disabled && !el.hidden);
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            const inside = dialog.contains(document.activeElement);
+            if (event.shiftKey && (!inside || document.activeElement === first)) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && (!inside || document.activeElement === last)) {
+                event.preventDefault();
+                first.focus();
+            }
         }
 
         function closeConfirmDialog(result) {
             const overlay = document.getElementById('confirmOverlay');
             if (overlay) overlay.classList.remove('open');
+            if (_confirmReturnFocus && _confirmReturnFocus.focus) _confirmReturnFocus.focus();
+            _confirmReturnFocus = null;
             if (_confirmKeyHandler) {
                 document.removeEventListener('keydown', _confirmKeyHandler);
                 _confirmKeyHandler = null;
@@ -8895,6 +8953,7 @@
             badge.className = 'status-badge status-bar-badge';
             reason.textContent = status.safety_block_reason || '';
             reason.title = status.safety_block_reason || '';
+            renderScheduledUpdatesToggle(!status.safety_block_reason);
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
@@ -9041,6 +9100,140 @@
             // Skip the reason when the Auto-Update section already shows it.
             const barReason = document.getElementById('barBlockReason').textContent;
             reasonEl.textContent = queue.pause_reason && queue.pause_reason !== barReason ? queue.pause_reason : '';
+        }
+
+        function renderScheduledUpdatesToggle(on) {
+            setToggleActive('drawerScheduledUpdatesToggle', on);
+            const stateEl = document.getElementById('drawerScheduledUpdatesState');
+            if (stateEl) stateEl.textContent = on ? 'On' : 'Off until an admin turns them on';
+        }
+
+        function formatHour(hour) {
+            return `${hour % 12 || 12} ${hour < 12 ? 'AM' : 'PM'}`;
+        }
+
+        // Match the scheduler's window check (services.is_in_schedule_window).
+        // Hours are in the network time zone, and an overnight window belongs
+        // to the day it starts. Step calendar dates, not 24-hour blocks, so a
+        // DST change cannot skip a day.
+        function nextWindowText(settings, timeZone, now = new Date()) {
+            const days = String(settings.schedule_days || '').split(',').map(d => d.trim()).filter(Boolean);
+            const asInt = (value, fallback) => /^-?\d+$/.test(String(value ?? '').trim()) ? Number(value) : fallback;
+            const start = asInt(settings.schedule_start_hour, 3);
+            const end = asInt(settings.schedule_end_hour, 4);
+            if (!days.length) return 'none (no maintenance days are set)';
+            const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+                timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hourCycle: 'h23',
+            }).formatToParts(now).map(part => [part.type, part.value]));
+            const hour = Number(parts.hour);
+            // A UTC date holds the network calendar date for day arithmetic.
+            const date = (offset) => new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + offset));
+            const dayKey = (offset) => date(offset).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short' }).toLowerCase();
+            const label = (offset) => date(offset).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+            const overnight = start >= end;
+            const open = overnight
+                ? (hour >= start && days.includes(dayKey(0))) || (hour < end && days.includes(dayKey(-1)))
+                : hour >= start && hour < end && days.includes(dayKey(0));
+            if (open) return `open now, until ${formatHour(end)} ${label(overnight && hour >= start ? 1 : 0)} (${timeZone})`;
+            for (let offset = 0; offset < 8; offset++) {
+                if (!days.includes(dayKey(offset)) || (offset === 0 && hour >= start)) continue;
+                const endText = overnight ? `${formatHour(end)} ${label(offset + 1)}` : formatHour(end);
+                return `${label(offset)}, ${formatHour(start)} to ${endText} (${timeZone})`;
+            }
+            return 'none (no maintenance days are set)';
+        }
+
+        // Match the scheduler's _resolve_scope and _resolve_switch_scope.
+        function scheduleScope(settings, sites, aps, switches) {
+            const scope = settings.schedule_scope || 'all';
+            const data = String(settings.schedule_scope_data || '').split(',').map(v => v.trim()).filter(Boolean);
+            const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+            const deviceName = (device) => device.system_name ? `${device.system_name} (${device.ip})` : device.ip;
+            if (scope === 'all') return { summary: 'all sites and devices', groups: [] };
+            if (scope === 'sites') {
+                const ids = data.filter(v => /^\d+$/.test(v)).map(Number);
+                if (!ids.length) return { summary: 'no sites (the site list is empty)', groups: [] };
+                const names = ids.map(id => sites.find(site => site.id === id)?.name || `site ${id} (not found)`);
+                return { summary: count(ids.length, 'site', 'sites'), groups: [{ heading: 'Sites', items: names }] };
+            }
+            if (scope === 'aps') {
+                if (!data.length) return { summary: 'no APs (the AP list is empty)', groups: [] };
+                const devices = new Map([...switches, ...aps].map(device => [device.ip, device]));
+                const apItems = data.map(ip => aps.find(ap => ap.ip === ip) ? deviceName(devices.get(ip)) : `${ip} (not found)`);
+                const siteIds = new Set(data.map(ip => devices.get(ip)?.tower_site_id).filter(id => id != null));
+                const siteSwitches = switches.filter(sw => sw.enabled && siteIds.has(sw.tower_site_id));
+                const groups = [{ heading: 'APs and their CPEs', items: apItems }];
+                if (siteSwitches.length) groups.push({ heading: "Switches at these APs' sites", items: siteSwitches.map(deviceName) });
+                return {
+                    summary: `${count(data.length, 'AP', 'APs')} and their CPEs, and ${count(siteSwitches.length, 'switch', 'switches')} at their sites`,
+                    groups,
+                };
+            }
+            return { summary: `unknown scope "${scope}". Scheduled updates select no devices`, groups: [] };
+        }
+
+        async function toggleScheduledUpdates() {
+            if (currentUserRole !== 'admin') return;
+            const toggle = document.getElementById('drawerScheduledUpdatesToggle');
+            const turnOn = !toggle.classList.contains('active');
+            if (turnOn) {
+                const readJson = async (request) => {
+                    const resp = await request;
+                    if (!resp.ok) throw new Error(resp.url);
+                    return resp.json();
+                };
+                let settings, scope, timeZone;
+                try {
+                    settings = (await readJson(fetch('/api/settings'))).settings;
+                    const scopeName = settings.schedule_scope || 'all';
+                    const autoZone = !settings.timezone || settings.timezone === 'auto';
+                    const [sites, aps, switches, time] = await Promise.all([
+                        scopeName === 'sites' ? readJson(fetch('/api/sites')).then(d => d.sites) : [],
+                        scopeName === 'aps' ? readJson(fetch('/api/aps')).then(d => d.aps) : [],
+                        scopeName === 'aps' ? readJson(fetch('/api/switches')).then(d => d.switches) : [],
+                        autoZone ? readJson(fetch('/api/time')) : null,
+                    ]);
+                    scope = scheduleScope(settings, sites, aps, switches);
+                    // The scheduler uses the zone setting, or the detected zone for "auto".
+                    timeZone = autoZone ? time.timezone : settings.timezone;
+                    if (!timeZone) throw new Error('timezone');
+                    new Intl.DateTimeFormat('en-US', { timeZone });
+                } catch (e) {
+                    showToast('Could not read the schedule, scope, or network time zone. Scheduled updates stay off. Try again.', 'error');
+                    return;
+                }
+                const lines = [
+                    'Manager will update devices that need the selected firmware in each maintenance window, one device at a time.',
+                    '',
+                    `Scope: ${scope.summary}`,
+                    `Next window: ${nextWindowText(settings, timeZone)}`,
+                ];
+                if (settings.schedule_enabled !== 'true') {
+                    lines.push('', 'Auto-Update is off. Scheduled updates start only when Auto-Update is on.');
+                }
+                const ok = await showConfirmDialog(lines.join('\n'), {
+                    title: 'Turn on scheduled updates?',
+                    confirmText: 'Turn on scheduled updates',
+                    groups: scope.groups,
+                    returnFocus: toggle,
+                });
+                if (!ok) return;
+            }
+            try {
+                const resp = await fetch('/api/settings/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scheduled_rollout_safety_ready: turnOn ? 'true' : 'false' }),
+                });
+                if (!resp.ok) {
+                    showToast(await readSaveError(resp, 'Could not change scheduled updates'), 'error');
+                    return;
+                }
+                renderScheduledUpdatesToggle(turnOn);
+                showToast(turnOn ? 'Scheduled updates are on.' : 'Scheduled updates are off. Manual updates still work.', 'success');
+            } catch (e) {
+                showToast('Could not change scheduled updates. Check the connection and try again.', 'error');
+            }
         }
 
         async function toggleAutoSchedule(event) {
@@ -9590,7 +9783,8 @@
         document.addEventListener('click', function(e) {
             const drawer = document.getElementById('bottomDrawer');
             if (!drawer || !drawer.classList.contains('open')) return;
-            if (e.target.closest('.bottom-drawer')) return;
+            // A dialog opened from the drawer keeps the drawer open.
+            if (e.target.closest('.bottom-drawer, .backup-overlay')) return;
             drawer.classList.remove('open');
             requestAnimationFrame(() => {
                 setTimeout(() => {

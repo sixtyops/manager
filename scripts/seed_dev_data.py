@@ -185,9 +185,10 @@ def seed():
         )
         db.execute(
             """INSERT INTO job_history
-            (job_id, started_at, completed_at, duration, bank_mode, success_count, failed_count, skipped_count, cancelled_count, devices_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (job_id, ts, te, 2700.0, "both", sc, fc, 0, 0, devices_json),
+            (job_id, started_at, completed_at, duration, bank_mode, success_count, failed_count, skipped_count, cancelled_count,
+             devices_json, ap_cpe_map_json, device_roles_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (job_id, ts, te, 2700.0, "both", sc, fc, 0, 0, devices_json, "{}", "{}"),
         )
         for j, ip in enumerate(ips):
             s = "success" if j < sc else "failed"
