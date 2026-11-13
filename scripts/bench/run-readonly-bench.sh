@@ -4,7 +4,7 @@
 #
 # Usage, from the root of the checkout under test:
 #   /path/to/run-readonly-bench.sh <full-commit-sha> \
-#     [--mode integration|local-poll|session-proof|local-switch] [--duration-min N]
+#     [--mode integration|local-poll|session-proof|local-switch|firmware-stop] [--duration-min N] [--stop-id N]
 #
 # Run this script from a trusted checkout of main. It tests the checkout in
 # the current directory, so the commit under test does not need to contain it.
@@ -38,7 +38,7 @@ refuse() {
 }
 
 usage() {
-  echo "usage: run-readonly-bench.sh <full-commit-sha> [--mode integration|local-poll|session-proof|local-switch] [--duration-min N]" >&2
+  echo "usage: run-readonly-bench.sh <full-commit-sha> [--mode integration|local-poll|session-proof|local-switch|firmware-stop] [--duration-min N] [--stop-id N]" >&2
   exit 2
 }
 
@@ -61,6 +61,7 @@ shift
 mode=integration
 duration_min=35
 duration_explicit=0
+stop_id=""
 while [ $# -gt 0 ]; do
   case $1 in
     --mode)
@@ -74,14 +75,24 @@ while [ $# -gt 0 ]; do
       duration_explicit=1
       shift
       ;;
+    --stop-id)
+      [ $# -ge 2 ] || usage
+      stop_id=$2
+      shift
+      ;;
     *) refuse "unknown option" ;;
   esac
   shift
 done
 case $mode in
-  integration | local-poll | session-proof | local-switch) ;;
+  integration | local-poll | session-proof | local-switch | firmware-stop) ;;
   *) refuse "unknown mode" ;;
 esac
+if [ "$mode" = firmware-stop ]; then
+  [[ $stop_id =~ ^[1-9][0-9]*$ ]] || refuse "firmware-stop requires a positive --stop-id"
+elif [ -n "$stop_id" ]; then
+  refuse "--stop-id is only valid with firmware-stop"
+fi
 if [ "$mode" = session-proof ] && [ "$duration_explicit" = 0 ]; then
   duration_min=3
 fi
@@ -131,7 +142,7 @@ esac
 umask 077
 summary_dir=${SIXTYOPS_BENCH_SUMMARY_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/sixtyops-bench}
 mkdir -p "$summary_dir" 2>/dev/null || refuse "cannot create the summary directory"
-if [ "$mode" = local-switch ]; then
+if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
   [ ! -L "$summary_dir" ] && [ -O "$summary_dir" ] || refuse "the summary directory must belong to the current user and must not be a symlink"
   summary_mode=$(stat -c %a "$summary_dir" 2>/dev/null || stat -f %Lp "$summary_dir")
   [ "$summary_mode" = 700 ] || refuse "the summary directory mode must be 700"
@@ -144,8 +155,8 @@ run_id="$(date -u +%Y%m%dT%H%M%SZ)-${head_sha:0:12}-$mode"
 log_file="$summary_dir/$run_id.log"
 summary_file="$summary_dir/$run_id.summary.txt"
 
-# Reserve both private output files before the switch reader can log in.
-if [ "$mode" = local-switch ]; then
+# Reserve private output files before a local reader can log in.
+if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
   for output_file in "$log_file" "$summary_file"; do
     (set -o noclobber; : > "$output_file") 2>/dev/null || refuse "cannot reserve a private output file"
     output_mode=$(stat -c %a "$output_file" 2>/dev/null || stat -f %Lp "$output_file")
@@ -183,7 +194,7 @@ if [ "$mode" != integration ]; then
   mkdir "$code_dir"
   git archive HEAD > "$archive_file"
   tar -x -f "$archive_file" -C "$code_dir"
-  if [ "$mode" != local-switch ]; then
+  if [ "$mode" != local-switch ] && [ "$mode" != firmware-stop ]; then
     (cd "$code_dir" && "$python" -c "from updater import database; database.init_db(); import updater.poller" >/dev/null 2>&1) || refuse "the commit dependencies are not installed for this Python (set SIXTYOPS_BENCH_PYTHON)"
   fi
 fi
@@ -193,8 +204,11 @@ fi
 set +e
 (
   set +x
-  if [ "$mode" = local-switch ]; then
+  if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
     unset SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
+  fi
+  if [ "$mode" = firmware-stop ]; then
+    unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP
   fi
   redact_n=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -214,6 +228,7 @@ set +e
     fi
     case $key in
       "Manager URL") export SIXTYOPS_TEST_URL="$value" ;;
+      "Manager CA file") export SIXTYOPS_TEST_CA_FILE="$value" ;;
       "Manager username") export SIXTYOPS_TEST_USER="$value" ;;
       "Manager password") export SIXTYOPS_TEST_PASS="$value" ;;
       "AP IP")
@@ -246,6 +261,7 @@ set +e
 
   case $mode in
     local-switch) required="SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
+    firmware-stop) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
     integration) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_TEST_AP_IP SIXTYOPS_TEST_SWITCH_IP" ;;
     *) required="SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
   esac
@@ -286,6 +302,14 @@ set +e
       env "${unset_args[@]}" "$python" "$bench_dir/readonly_switch.py" --repo "$code_dir" 2>/dev/null
       status=$?
       ;;
+    firmware-stop)
+      if [ "${SIXTYOPS_TEST_URL%%://*}" != https ] || [ "$url_host" != "$ALLOWED_TEST_HOST" ]; then
+        echo "run-readonly-bench: REFUSED: the Manager URL is not the authorized dev host" >&2
+        exit 2
+      fi
+      env "${unset_args[@]}" "$python" "$bench_dir/readonly_stop.py" --repo "$code_dir" --checkout "$repo" --stop-id "$stop_id" 2>/dev/null
+      status=$?
+      ;;
     local-poll)
       echo "== lane: local-poll (checked-out commit, read-only)"
       env "${unset_args[@]}" "$python" "$bench_dir/readonly_poll.py" --repo "$code_dir" 2>&1 \
@@ -307,13 +331,13 @@ set +e
 ) 2>&1 | tee "$log_file"
 run_statuses=("${PIPESTATUS[@]}")
 run_status=${run_statuses[0]}
-if [ "$mode" = local-switch ] && [ "${run_statuses[1]}" -ne 0 ]; then
+if { [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; } && [ "${run_statuses[1]}" -ne 0 ]; then
   run_status=1
 fi
 set -e
 
 # The switch reader emits only fixed fields. Keep its summary private.
-if [ "$mode" = local-switch ]; then
+if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
   {
     echo "commit: $head_sha"
     cat "$log_file"
