@@ -220,7 +220,7 @@ def _access_file(path, contents, mode=0o600):
     return path
 
 
-def _run_local_poll(tmp_path, *, manager=None, ap=None, legacy=None, python_stub=None):
+def _run_local_poll(tmp_path, *, manager=None, ap=None, legacy=None, python_stub=None, env_extra=None):
     base_env, repo, head = _make_bench_repo(tmp_path)
     calls = tmp_path / "calls"
     stub = python_stub or (tmp_path / "python")
@@ -237,6 +237,8 @@ def _run_local_poll(tmp_path, *, manager=None, ap=None, legacy=None, python_stub
         env["SIXTYOPS_BENCH_AP_ACCESS_FILE"] = str(ap)
     if legacy is not None:
         env["SIXTYOPS_BENCH_ACCESS_FILE"] = str(legacy)
+    if env_extra is not None:
+        env.update(env_extra)
     result = subprocess.run([str(WRAPPER), head, "--mode", "local-poll"], cwd=repo,
                             env=env, capture_output=True, text=True, timeout=60)
     return result, calls
@@ -387,6 +389,52 @@ def test_wrapper_fails_closed_on_missing_fields_before_lane(tmp_path):
     assert "required access fields are missing" in result.stdout + result.stderr
     assert "== lane:" not in result.stdout + result.stderr
     assert not calls.exists() or "readonly_poll.py" not in calls.read_text()
+
+
+def test_inherited_ap_values_do_not_fill_missing_ap_file_fields(tmp_path):
+    ap = _access_file(tmp_path / "ap.env", "AP IP: 192.0.2.20\n")
+    inherited = {
+        "SIXTYOPS_TEST_AP_IP": "198.51.100.20",
+        "SIXTYOPS_TEST_CONFIG_AP_IP": "198.51.100.20",
+        "SIXTYOPS_BENCH_AP_IP": "198.51.100.20",
+        "SIXTYOPS_BENCH_AP_USER": "synthetic-inherited-user",
+        "SIXTYOPS_BENCH_AP_PASS": "synthetic-inherited-password",
+    }
+
+    result, calls = _run_local_poll(tmp_path, ap=ap, env_extra=inherited)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 2
+    assert "required access fields are missing" in output
+    assert "== lane:" not in output
+    assert "synthetic-inherited" not in output
+    assert not calls.exists() or "readonly_poll.py" not in calls.read_text()
+
+
+def test_inherited_manager_values_do_not_fill_missing_manager_file_fields(tmp_path):
+    base_env, repo, head = _make_bench_repo(tmp_path)
+    manager = _access_file(tmp_path / "manager.env",
+                            "Manager URL: https://sixtyops-dev.infra.treehouse.mn\n"
+                            "Manager username: synthetic-manager\n")
+    ap = _access_file(tmp_path / "ap.env",
+                      "AP IP: 192.0.2.20\nTNS-100 IP: 192.0.2.21\n")
+    calls = tmp_path / "calls"
+    stub = tmp_path / "python"
+    stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BENCH_CALLS_FILE\"\nexit 0\n")
+    stub.chmod(0o755)
+    result = subprocess.run(
+        [str(WRAPPER), head, "--mode", "integration"], cwd=repo,
+        env={**base_env, "SIXTYOPS_BENCH_MANAGER_ACCESS_FILE": str(manager),
+             "SIXTYOPS_BENCH_AP_ACCESS_FILE": str(ap),
+             "SIXTYOPS_TEST_PASS": "synthetic-inherited-password",
+             "SIXTYOPS_BENCH_PYTHON": str(stub), "BENCH_CALLS_FILE": str(calls)},
+        capture_output=True, text=True, timeout=60)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 2
+    assert "required access fields are missing" in output
+    assert "synthetic-inherited-password" not in output
+    assert not calls.exists() or "-m pytest" not in calls.read_text()
 
 
 @pytest.mark.parametrize(("duration_args", "expected"), [([], "3"), (["--duration-min", "9"], "9")])

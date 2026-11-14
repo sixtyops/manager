@@ -240,12 +240,11 @@ fi
 set +e
 (
   set +x
-  if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
-    unset SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
-  fi
-  if [ "$mode" = firmware-stop ]; then
-    unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP
-  fi
+  # Only values parsed from the selected access source can satisfy a mode.
+  unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS
+  unset SIXTYOPS_TEST_AP_IP SIXTYOPS_TEST_CONFIG_AP_IP SIXTYOPS_TEST_SWITCH_IP
+  unset SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_SM_303L_IP SIXTYOPS_BENCH_SM_303X_IP
+  unset SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
   redact_n=0
   seen_keys="|"
   parse_access_source() {
