@@ -1,5 +1,6 @@
 import os
 import stat
+import sys
 
 from updater import memdiag
 
@@ -23,3 +24,18 @@ def test_report_has_all_sections_and_does_not_write_object_contents(tmp_path):
 def test_malloc_info_skips_non_glibc(monkeypatch):
     monkeypatch.setattr(memdiag.platform, "libc_ver", lambda: ("musl", "1.2"))
     assert memdiag._malloc_info() is None
+
+
+def test_report_finds_large_bytes_on_object_attribute_without_contents(tmp_path):
+    class Holder:
+        pass
+
+    secret = b"ATTRIBUTE-SECRET-CONTENT-" * (2 * 1024 * 1024 // 25) + b"xx"
+    holder = Holder()
+    holder.payload = secret
+
+    report = memdiag._write_report(tmp_path).read_text()
+
+    assert "ATTRIBUTE-SECRET-CONTENT" not in report
+    assert f"size={sys.getsizeof(secret)}, type=bytes" in report
+    assert holder.payload is secret

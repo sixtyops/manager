@@ -11,11 +11,11 @@ import sys
 import threading
 import tracemalloc
 from collections import defaultdict
-from itertools import chain
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _busy = False
+_thread_start_failed = False
 
 
 def _malloc_info() -> str | None:
@@ -47,36 +47,42 @@ def _malloc_info() -> str | None:
 def _make_report() -> str:
     objects = gc.get_objects()
     totals = defaultdict(lambda: [0, 0])
-    large = []
-    seen_large = set()
-    seen_containers = set()
+    large = {}
     for obj in objects:
         kind = type(obj)
         size = sys.getsizeof(obj, 0)
         totals[f"{kind.__module__}.{kind.__qualname__}"][0] += 1
         totals[f"{kind.__module__}.{kind.__qualname__}"][1] += size
-    pending = [obj for obj in objects if isinstance(obj, (list, tuple, dict, set, frozenset))]
+    pending = list(objects)
+    seen_objects = set()
     while pending:
-        container = pending.pop()
-        if id(container) in seen_containers:
+        obj = pending.pop()
+        object_id = id(obj)
+        if object_id in seen_objects:
             continue
-        seen_containers.add(id(container))
-        values = chain(container.keys(), container.values()) if isinstance(container, dict) else container
-        for value in values:
-            if isinstance(value, (bytes, bytearray, str)) and sys.getsizeof(value, 0) > 1024 * 1024:
-                if id(value) not in seen_large:
-                    seen_large.add(id(value))
-                    large.append((sys.getsizeof(value, 0), value))
-            elif isinstance(value, (list, tuple, dict, set, frozenset)):
+        seen_objects.add(object_id)
+        try:
+            referents = gc.get_referents(obj)
+        except Exception:
+            continue
+        referrer_type = type(obj).__name__
+        for value in referents:
+            if isinstance(value, (bytes, bytearray, str)):
+                value_id = id(value)
+                size = sys.getsizeof(value, 0)
+                if size > 1024 * 1024:
+                    if value_id not in large:
+                        large[value_id] = [size, type(value).__name__, set()]
+                    large[value_id][2].add(referrer_type)
+            else:
                 pending.append(value)
 
     lines = ["Section 1: GC census (top 30 by summed size)"]
     lines.extend(f"{name}: count={count}, size={size}" for name, (count, size) in
                  sorted(totals.items(), key=lambda item: item[1][1], reverse=True)[:30])
     lines.append("Section 2: largest strings and byte objects (top 20)")
-    for size, value in sorted(large, key=lambda item: item[0], reverse=True)[:20]:
-        referrers = ", ".join(sorted({type(ref).__name__ for ref in gc.get_referrers(value)}))
-        lines.append(f"size={size}, type={type(value).__name__}, referrers={referrers}")
+    for size, kind, referrers in sorted(large.values(), key=lambda item: item[0], reverse=True)[:20]:
+        lines.append(f"size={size}, type={kind}, referrers={', '.join(sorted(referrers))}")
 
     lines.append("Section 3: tracemalloc")
     if tracemalloc.is_tracing():
@@ -114,14 +120,17 @@ def _write_report(data_dir: Path) -> Path:
 def register(data_dir: Path) -> None:
     """Register the SIGUSR2 handler for this process."""
     def handler(_signum, _frame):
-        global _busy
+        global _busy, _thread_start_failed
         if _busy:
             return
         _busy = True
 
         def write_one():
-            global _busy
+            global _busy, _thread_start_failed
             try:
+                if _thread_start_failed:
+                    _thread_start_failed = False
+                    logger.error("Could not start previous memory report thread")
                 path = _write_report(Path(data_dir))
                 logger.info("Memory report written: %s", path)
             except Exception:
@@ -133,6 +142,6 @@ def register(data_dir: Path) -> None:
             threading.Thread(target=write_one, name="memdiag", daemon=True).start()
         except Exception:
             _busy = False
-            logger.exception("Could not start memory report thread")
+            _thread_start_failed = True
 
     signal.signal(signal.SIGUSR2, handler)
