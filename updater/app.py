@@ -9167,6 +9167,8 @@ async def resolve_device_group_api(group_id: int,
 def main():
     """Run the application."""
     import uvicorn
+    from .memdiag import register as register_memdiag
+    register_memdiag(DATA_DIR)
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
 
