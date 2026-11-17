@@ -235,6 +235,7 @@ async def test_upload_checks_readiness_before_first_attempt(runtime_mocks, monke
 @pytest.mark.asyncio
 async def test_upload_admission_denial_after_progress_stays_pending(runtime_mocks, monkeypatch):
     job = scheduled_job()
+    db.upsert_device("192.0.2.1", "ap", *job.credentials["192.0.2.1"])
     job.window_key = ("firmware", "2026-06-02T03:00:00Z")
     job.pre_update_reboot = False
     job.device_firmware_map["192.0.2.1"] = "/tmp/tna-30x-1.2.3-r200.bin"
@@ -252,10 +253,11 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
         monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=SimpleNamespace(
                 ip="192.0.2.1", model="TNA-301", serial="SERIAL-1", current_version="1.2.3.100",
             bank1_version="1.2.3", bank2_version="1.0.0", active_bank=1,
-            mac=None, macs={}, management_interface=None, management_vlan_id=100,
+            mac="02:00:00:00:00:01", macs={}, management_interface=None, management_vlan_id=100,
             management_mac=None, firmware_sha256="a" * 64, management_ip_mode="dhcp",
         )))
         monkeypatch.setattr(client, "get_connected_cpes", AsyncMock(return_value=[]))
+        monkeypatch.setattr(client, "get_ap_radio_mac", AsyncMock(return_value="02:00:00:00:00:02"))
         client.last_connected_cpes_valid = True
         monkeypatch.setattr(client, "get_bridge_table", AsyncMock(return_value=[]))
         monkeypatch.setattr(client, "reboot", AsyncMock(return_value=True))

@@ -113,6 +113,14 @@ class _ManagementDeviceClient(_DeviceClient):
         super().__init__(ip, username, password)
         self._client = SimpleNamespace(ip=ip, _base_url=f"https://{ip}", _token=None)
 
+    async def get_ap_radio_mac(self):
+        return "02:00:00:00:00:02"
+
+    async def get_device_info(self):
+        info = await super().get_device_info()
+        info.mac = "02:00:00:00:00:01"
+        return info
+
 
 def _install_snapshot_store(monkeypatch, *, failure=None):
     snapshots = {}
@@ -1041,6 +1049,7 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
 async def test_changed_management_settings_stop_firmware_window(
     mock_db, monkeypatch, utc_window_clock, after, expected_reason,
 ):
+    db.upsert_device("192.0.2.1", "ap", "u", "p")
     key = ("firmware", "2026-10-27")
     db.set_setting("scheduled_rollout_safety_ready", "true")
     _DeviceClient.calls = {}
@@ -1096,6 +1105,7 @@ async def test_changed_dhcp_address_requires_authenticated_serial_at_new_address
     mock_db, monkeypatch, utc_window_clock,
     new_address_serial, new_address_auth, expected_reason,
 ):
+    db.upsert_device("192.0.2.1", "ap", "u", "p")
     key = ("firmware", "2026-10-27")
     db.set_setting("scheduled_rollout_safety_ready", "true")
     _DeviceClient.calls = {}
@@ -1144,6 +1154,7 @@ async def test_changed_dhcp_address_requires_authenticated_serial_at_new_address
 async def test_unreachable_ap_stop_records_pre_update_management_settings(
     mock_db, monkeypatch, utc_window_clock,
 ):
+    db.upsert_device("192.0.2.1", "ap", "u", "p")
     key = ("firmware", "2026-10-27")
     db.set_setting("scheduled_rollout_safety_ready", "true")
     _DeviceClient.calls = {}
