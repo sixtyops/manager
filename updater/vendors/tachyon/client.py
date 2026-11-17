@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # SSL verification for device connections (disabled by default for self-signed certs)
 VERIFY_SSL = os.environ.get("TACHYON_VERIFY_SSL", "").lower() in ("1", "true", "yes")
+HTTP_TIMEOUT_S = 30
 
 
 def _curl_config_value(value: str) -> str:
@@ -78,7 +79,16 @@ async def _run_curl(args: list[str]) -> tuple[int, bytes]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _stderr = await proc.communicate(config)
+    try:
+        stdout, _stderr = await proc.communicate(config)
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        await proc.communicate()
+        raise
     # Curl diagnostics can include request values. Expose only its exit code.
     return proc.returncode, stdout
 
@@ -276,6 +286,7 @@ class TachyonClient:
         self.username = username
         self.password = password
         self.timeout = timeout
+        self.read_deadline: Optional[float] = None
         self._token: Optional[str] = None
         self._base_url = f"https://{ip}"
         # Set as a side-effect by get_connected_cpes() — channel/BW/freq/kit
@@ -441,6 +452,15 @@ class TachyonClient:
         address = ip_config.get("ipaddr")
         return address.strip() if isinstance(address, str) and address.strip() else None
 
+    def _request_timeout(self) -> float:
+        """Bound each recovery request by the remaining read deadline."""
+        if self.read_deadline is None:
+            return self.timeout
+        remaining = self.read_deadline - asyncio.get_running_loop().time()
+        if not math.isfinite(remaining) or remaining <= 0:
+            raise TimeoutError("Recovery read deadline expired")
+        return min(HTTP_TIMEOUT_S, remaining)
+
     async def _curl(
         self,
         method: str,
@@ -453,7 +473,7 @@ class TachyonClient:
         """Execute curl command and return (status_code, response_body)."""
         url = f"{self._base_url}{endpoint}"
 
-        cmd = ["-s", "-m", str(self.timeout)]
+        cmd = ["-s", "-m", str(self._request_timeout())]
         if not VERIFY_SSL:
             cmd.append("-k")  # Skip certificate verification for self-signed certs
 
@@ -484,7 +504,8 @@ class TachyonClient:
         cmd.extend(["-w", "\n%{http_code}"])
         cmd.append(url)
 
-        returncode, stdout = await _run_curl(cmd)
+        async with asyncio.timeout_at(self.read_deadline):
+            returncode, stdout = await _run_curl(cmd)
 
         if returncode != 0:
             detail = ": request timed out" if returncode == 28 else ""
@@ -519,7 +540,7 @@ class TachyonClient:
                 "password": self.password,
             })
 
-            cmd = ["-s", "-m", str(self.timeout)]
+            cmd = ["-s", "-m", str(self._request_timeout())]
             if not VERIFY_SSL:
                 cmd.append("-k")
             cmd.extend([
@@ -530,7 +551,8 @@ class TachyonClient:
                 url,
             ])
 
-            returncode, stdout = await _run_curl(cmd)
+            async with asyncio.timeout_at(self.read_deadline):
+                returncode, stdout = await _run_curl(cmd)
 
             if returncode != 0:
                 logger.error(f"Login curl failed for {self.ip} (exit code {returncode})")
