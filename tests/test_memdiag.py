@@ -39,3 +39,21 @@ def test_report_finds_large_bytes_on_object_attribute_without_contents(tmp_path)
     assert "ATTRIBUTE-SECRET-CONTENT" not in report
     assert f"size={sys.getsizeof(secret)}, type=bytes" in report
     assert holder.payload is secret
+
+
+def test_scan_does_not_queue_untracked_leaf_values(monkeypatch):
+    values = list(range(20_000))
+    calls = []
+    original_get_referents = memdiag.gc.get_referents
+
+    monkeypatch.setattr(memdiag.gc, "get_objects", lambda: [values])
+
+    def get_referents(obj):
+        calls.append(obj)
+        return original_get_referents(obj)
+
+    monkeypatch.setattr(memdiag.gc, "get_referents", get_referents)
+
+    memdiag._make_report()
+
+    assert calls == [values]
