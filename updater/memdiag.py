@@ -16,7 +16,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 _busy = False
 _thread_start_failed = False
-_MAX_SCAN_OBJECTS = 100_000
 
 
 def _malloc_info() -> str | None:
@@ -48,51 +47,15 @@ def _malloc_info() -> str | None:
 def _make_report() -> str:
     objects = gc.get_objects()
     totals = defaultdict(lambda: [0, 0])
-    large = {}
     for obj in objects:
         kind = type(obj)
         size = sys.getsizeof(obj, 0)
         totals[f"{kind.__module__}.{kind.__qualname__}"][0] += 1
         totals[f"{kind.__module__}.{kind.__qualname__}"][1] += size
-    pending = list(objects[:_MAX_SCAN_OBJECTS])
-    seen_objects = set()
-    visited = 0
-    truncated = len(objects) > _MAX_SCAN_OBJECTS
-    while pending and visited < _MAX_SCAN_OBJECTS:
-        obj = pending.pop()
-        object_id = id(obj)
-        if object_id in seen_objects:
-            continue
-        seen_objects.add(object_id)
-        visited += 1
-        try:
-            referents = gc.get_referents(obj)
-        except Exception:
-            continue
-        referrer_type = type(obj).__name__
-        for value in referents:
-            if isinstance(value, (bytes, bytearray, str)):
-                value_id = id(value)
-                size = sys.getsizeof(value, 0)
-                if size > 1024 * 1024:
-                    if value_id not in large:
-                        large[value_id] = [size, type(value).__name__, set()]
-                    large[value_id][2].add(referrer_type)
-            elif gc.is_tracked(value):
-                if len(pending) + visited < _MAX_SCAN_OBJECTS:
-                    pending.append(value)
-                else:
-                    truncated = True
 
     lines = ["Section 1: GC census (top 30 by summed size)"]
     lines.extend(f"{name}: count={count}, size={size}" for name, (count, size) in
                  sorted(totals.items(), key=lambda item: item[1][1], reverse=True)[:30])
-    lines.append("Section 2: largest strings and byte objects (top 20)")
-    if pending or truncated:
-        lines.append("scan truncated")
-    for size, kind, referrers in sorted(large.values(), key=lambda item: item[0], reverse=True)[:20]:
-        lines.append(f"size={size}, type={kind}, referrers={', '.join(sorted(referrers))}")
-
     lines.append("Section 3: tracemalloc")
     if tracemalloc.is_tracing():
         snapshot = tracemalloc.take_snapshot()
