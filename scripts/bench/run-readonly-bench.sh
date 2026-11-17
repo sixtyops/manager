@@ -9,10 +9,11 @@
 # Run this script from a trusted checkout of main. It tests the checkout in
 # the current directory, so the commit under test does not need to contain it.
 #
-# The operator sets SIXTYOPS_BENCH_ACCESS_FILE to a private access file with
-# "Key: value" lines. This script parses that file in a subshell, runs one
-# fixed mode, limits device output, and writes a summary outside the
-# repository. See docs/dev-hardware-validation.md, "Read-only bench wrapper".
+# Set SIXTYOPS_BENCH_MANAGER_ACCESS_FILE and SIXTYOPS_BENCH_AP_ACCESS_FILE to
+# separate private files with "Key: value" lines. SIXTYOPS_BENCH_ACCESS_FILE
+# remains available for one-file setups. This script parses each file in a
+# subshell, runs one fixed mode, limits device output, and writes a summary
+# outside the repository. See docs/dev-hardware-validation.md.
 #
 # Do not add tracing (set -x) or an environment dump to this script.
 
@@ -53,6 +54,26 @@ trim() {
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s' "$s"
+}
+
+# Reject symlinks in every component before resolving the path.
+has_symlink_component() {
+  local path=$1 current part
+  [[ $path = /* ]] || path="$PWD/$path"
+  current=""
+  IFS=/ read -r -a path_parts <<< "$path"
+  for part in "${path_parts[@]}"; do
+    [ -n "$part" ] || continue
+    if [ "$part" = . ]; then
+      continue
+    elif [ "$part" = .. ]; then
+      current="$current/.."
+    else
+      current="$current/$part"
+    fi
+    [ ! -L "$current" ] || return 0
+  done
+  return 1
 }
 
 [ $# -ge 1 ] || usage
@@ -121,22 +142,37 @@ base=$(git merge-base origin/main HEAD 2>/dev/null) || refuse "cannot find the m
 # shellcheck disable=SC2086
 git diff --quiet "$base" HEAD -- $PROTECTED_PATHS || refuse "the commit changes test infrastructure; the operator must run it manually"
 
-# 2. Access file checks. Do not print the path or the contents.
-access_file=${SIXTYOPS_BENCH_ACCESS_FILE:-}
-[ -n "$access_file" ] || refuse "SIXTYOPS_BENCH_ACCESS_FILE is not set"
-[ ! -L "$access_file" ] && [ -f "$access_file" ] && [ -r "$access_file" ] || refuse "the access file is missing or not readable"
-[ -O "$access_file" ] || refuse "the current user does not own the access file"
-# Try GNU stat first. GNU "stat -f" reports the file system, prints to
-# stdout, and fails, so the BSD form must come second.
-access_mode=$(stat -c %a "$access_file" 2>/dev/null || stat -f %Lp "$access_file")
-case $access_mode in
-  600 | 400) ;;
-  *) refuse "the access file mode must be 600 or 400 (chmod 600)" ;;
+# 2. Validate every supplied source. Do not print paths or file contents.
+manager_access_file=${SIXTYOPS_BENCH_MANAGER_ACCESS_FILE:-}
+ap_access_file=${SIXTYOPS_BENCH_AP_ACCESS_FILE:-}
+legacy_access_file=${SIXTYOPS_BENCH_ACCESS_FILE:-}
+legacy_mode=0
+if [ -n "$legacy_access_file" ]; then
+  [ -z "$manager_access_file" ] && [ -z "$ap_access_file" ] || refuse "use either the legacy access file or separate source files"
+  manager_access_file=$legacy_access_file
+  ap_access_file=$legacy_access_file
+  legacy_mode=1
+fi
+need_manager=0
+case $mode in integration | firmware-stop) need_manager=1 ;; esac
+if [ "$need_manager" = 1 ] && { [ -z "$manager_access_file" ] || [ -z "$ap_access_file" ]; }; then
+  refuse "Manager and AP access sources are required for this mode"
+fi
+case $mode in
+  local-poll | session-proof | local-switch) [ -n "$ap_access_file" ] || refuse "the AP access source is required for this mode" ;;
 esac
-access_dir=$(physical_dir "$(dirname "$access_file")")
-case "$access_dir/" in
-  "$repo"/* | "$bench_dir"/*) refuse "the access file must be outside the repository" ;;
-esac
+for access_file in "$manager_access_file" "$ap_access_file"; do
+  [ -n "$access_file" ] || continue
+  has_symlink_component "$access_file" && refuse "an access source path contains a symlink"
+  [ -f "$access_file" ] && [ -r "$access_file" ] || refuse "an access source is missing or not a readable regular file"
+  [ -O "$access_file" ] || refuse "an access source is not owned by the current user"
+  access_mode=$(stat -c %a "$access_file" 2>/dev/null || stat -f %Lp "$access_file")
+  case $access_mode in 600 | 400) ;; *) refuse "an access source mode must be 600 or 400" ;; esac
+  access_dir=$(physical_dir "$(dirname "$access_file")")
+  case "$access_dir/" in
+    "$repo"/* | "$bench_dir"/*) refuse "an access source must be outside the repository" ;;
+  esac
+done
 
 # 3. Summary location, outside the repository.
 umask 077
@@ -204,50 +240,61 @@ fi
 set +e
 (
   set +x
-  if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
-    unset SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
-  fi
-  if [ "$mode" = firmware-stop ]; then
-    unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP
-  fi
+  # Only values parsed from the selected access source can satisfy a mode.
+  unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS
+  unset SIXTYOPS_TEST_AP_IP SIXTYOPS_TEST_CONFIG_AP_IP SIXTYOPS_TEST_SWITCH_IP
+  unset SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_SM_303L_IP SIXTYOPS_BENCH_SM_303X_IP
+  unset SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
   redact_n=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=${line%$'\r'}
-    case $line in
-      "#"* | "") continue ;;
-      *:*) ;;
-      *) continue ;;
-    esac
-    key=$(trim "${line%%:*}")
-    value=$(trim "${line#*:}")
-    # redact.py does not replace values shorter than 3 characters. Stop
-    # before a run can print such a value. Do not print the key or value.
-    if [ -n "$value" ] && [ "${#value}" -lt 3 ]; then
-      echo "run-readonly-bench: REFUSED: an access file value is shorter than 3 characters" >&2
-      exit 2
-    fi
-    case $key in
-      "Manager URL") export SIXTYOPS_TEST_URL="$value" ;;
-      "Manager CA file") export SIXTYOPS_TEST_CA_FILE="$value" ;;
-      "Manager username") export SIXTYOPS_TEST_USER="$value" ;;
-      "Manager password") export SIXTYOPS_TEST_PASS="$value" ;;
-      "AP IP")
-        export SIXTYOPS_TEST_AP_IP="$value"
-        export SIXTYOPS_TEST_CONFIG_AP_IP="$value"
-        export SIXTYOPS_BENCH_AP_IP="$value"
-        ;;
-      "TNS-100 IP") export SIXTYOPS_TEST_SWITCH_IP="$value" ;;
-      "303L SM IP") export SIXTYOPS_BENCH_SM_303L_IP="$value" ;;
-      "303X SM IP") export SIXTYOPS_BENCH_SM_303X_IP="$value" ;;
-      "Shared device username") export SIXTYOPS_BENCH_AP_USER="$value" ;;
-      "Shared device password") export SIXTYOPS_BENCH_AP_PASS="$value" ;;
-    esac
-    # Redact every value in the file, also values with no mapped name.
-    if [ -n "$value" ]; then
-      redact_n=$((redact_n + 1))
-      export "SIXTYOPS_BENCH_REDACT_$redact_n=$value"
-    fi
-  done < "$access_file"
+  seen_keys="|"
+  parse_access_source() {
+    local access_file=$1 source_kind=$2 line key value
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%$'\r'}
+      case $line in "#"* | "") continue ;; *:*) ;; *) echo "run-readonly-bench: REFUSED: an access source has an invalid line" >&2; return 2 ;; esac
+      key=$(trim "${line%%:*}")
+      value=$(trim "${line#*:}")
+      case "$seen_keys" in *"|$key|"*) echo "run-readonly-bench: REFUSED: an access source has a duplicate key" >&2; return 2 ;; esac
+      seen_keys="$seen_keys$key|"
+      case $key in
+        "Manager URL" | "Manager CA file" | "Manager username" | "Manager password")
+          [ "$source_kind" = manager ] || [ "$source_kind" = legacy ] || { echo "run-readonly-bench: REFUSED: a key is in the wrong access source" >&2; return 2; }
+          ;;
+        "AP IP" | "TNS-100 IP" | "303L SM IP" | "303X SM IP" | "Shared device username" | "Shared device password")
+          [ "$source_kind" = ap ] || [ "$source_kind" = legacy ] || { echo "run-readonly-bench: REFUSED: a key is in the wrong access source" >&2; return 2; }
+          ;;
+        *) echo "run-readonly-bench: REFUSED: an access source has an unsupported key" >&2; return 2 ;;
+      esac
+      if [ -n "$value" ] && [ "${#value}" -lt 3 ]; then
+        echo "run-readonly-bench: REFUSED: an access source value is too short" >&2
+        return 2
+      fi
+      case $key in
+        "Manager URL") export SIXTYOPS_TEST_URL="$value" ;;
+        "Manager CA file") export SIXTYOPS_TEST_CA_FILE="$value" ;;
+        "Manager username") export SIXTYOPS_TEST_USER="$value" ;;
+        "Manager password") export SIXTYOPS_TEST_PASS="$value" ;;
+        "AP IP") export SIXTYOPS_TEST_AP_IP="$value" SIXTYOPS_TEST_CONFIG_AP_IP="$value" SIXTYOPS_BENCH_AP_IP="$value" ;;
+        "TNS-100 IP") export SIXTYOPS_TEST_SWITCH_IP="$value" ;;
+        "303L SM IP") export SIXTYOPS_BENCH_SM_303L_IP="$value" ;;
+        "303X SM IP") export SIXTYOPS_BENCH_SM_303X_IP="$value" ;;
+        "Shared device username") export SIXTYOPS_BENCH_AP_USER="$value" ;;
+        "Shared device password") export SIXTYOPS_BENCH_AP_PASS="$value" ;;
+      esac
+      if [ -n "$value" ]; then
+        redact_n=$((redact_n + 1))
+        export "SIXTYOPS_BENCH_REDACT_$redact_n=$value"
+      fi
+    done < "$access_file"
+  }
+  if [ "$legacy_mode" = 1 ]; then
+    parse_access_source "$legacy_access_file" legacy || exit 2
+  else
+    [ -z "$manager_access_file" ] || parse_access_source "$manager_access_file" manager || exit 2
+  fi
+  if [ "$legacy_mode" = 0 ] && [ -n "$ap_access_file" ]; then
+    parse_access_source "$ap_access_file" ap || exit 2
+  fi
 
   # Also redact the Manager host name alone.
   url_host=${SIXTYOPS_TEST_URL:-}
@@ -270,7 +317,7 @@ set +e
     [ -n "${!name:-}" ] || missing="$missing $name"
   done
   if [ -n "$missing" ]; then
-    echo "run-readonly-bench: REFUSED: the access file does not give:$missing" >&2
+    echo "run-readonly-bench: REFUSED: required access fields are missing" >&2
     exit 2
   fi
 

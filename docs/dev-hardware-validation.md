@@ -305,8 +305,8 @@ read-only customer-router signals and their current limits.
 ## Read-only bench wrapper
 
 **Key points:** The owner runs `scripts/bench/run-readonly-bench.sh` to get
-read-only bench evidence on an exact commit. The wrapper reads the private
-access file and never prints its values. The wrapper does not change device
+read-only bench evidence on an exact commit. The wrapper reads private access
+files and never prints their values. The wrapper does not change device
 firmware or configuration.
 
 **Detail:**
@@ -316,7 +316,8 @@ the current directory:
 
 ```bash
 cd <checkout-under-test>
-SIXTYOPS_BENCH_ACCESS_FILE=<private-file> \
+SIXTYOPS_BENCH_MANAGER_ACCESS_FILE=<manager-file> \
+SIXTYOPS_BENCH_AP_ACCESS_FILE=<ap-file> \
   <main-checkout>/scripts/bench/run-readonly-bench.sh <full-commit-sha> \
   [--mode integration|local-poll|session-proof|local-switch|firmware-stop] \
   [--duration-min 35] [--stop-id N]
@@ -328,20 +329,25 @@ Guards, in this order:
    clean. The wrapper checks this before it reads the access file.
 2. The commit must not change `tests/integration/`, `tests/conftest.py`,
    `conftest.py`, or `pyproject.toml`.
-3. The access file must be owned by the current user, have mode `600` or
-   `400`, and be outside the repository. The wrapper parses its
-   `Key: value` lines in a subshell. It does not `source` the file. It
-   refuses the run if a value is shorter than 3 characters, because the
-   filter does not replace such short values.
+3. Each supplied access file must be a regular file owned by the current
+   user, have mode `600` or `400`, contain no symlink in its path, and resolve
+   outside the repository and bench code. The wrapper parses its `Key: value`
+   lines in a subshell. It does not `source` the files. It refuses duplicate
+   keys, keys in the wrong file, and values shorter than 3 characters because
+   the filter does not replace such short values.
 4. The integration and AP modes send output through `scripts/bench/redact.py`.
    The filter replaces every access-file value and IPv4 address. The switch
    mode emits fixed result fields only. The log and summary go to
    `SIXTYOPS_BENCH_SUMMARY_DIR`. The default is
    `sixtyops-bench` in `XDG_STATE_HOME`, or in `~/.local/state`.
 
-Access file keys: `Manager URL`, `Manager CA file`, `Manager username`, `Manager password`,
-`TNS-100 IP`, `AP IP`, `303L SM IP`, `303X SM IP`, `Shared device username`,
-and `Shared device password`.
+The Manager file accepts `Manager URL`, `Manager CA file`, `Manager username`,
+and `Manager password`. The AP file accepts `TNS-100 IP`, `AP IP`, `303L SM IP`,
+`303X SM IP`, `Shared device username`, and `Shared device password`.
+`integration` and `firmware-stop` require both files. AP modes require only the
+AP file. Existing one-file setups can keep using `SIXTYOPS_BENCH_ACCESS_FILE`;
+that file may contain keys from both groups. Do not set the legacy variable
+with either separate-file variable.
 
 Modes:
 
@@ -418,9 +424,9 @@ not satisfy the other device and recovery gates for
 [PR 558](https://github.com/sixtyops/manager/pull/558). A skipped or failed run
 is not hardware proof.
 
-`tests/test_bench_wrapper.py` checks the SHA refusal and that the allowlist
-has no write test. The local modes run the commit's driver code with the
-device login. Review the commit before you run them.
+`tests/test_bench_wrapper.py` checks the source-file guards, the SHA refusal,
+and that the allowlist has no write test. The local modes run the commit's
+driver code with the device login. Review the commit before you run them.
 
 ## Private access records
 
