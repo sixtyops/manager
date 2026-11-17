@@ -17,6 +17,9 @@ class _DeviceClient:
     fail_at = None
     connect_calls = {}
     management_after_update = None
+    management_before_update = None
+    management_new_address_serial = None
+    management_new_address_auth = True
 
     def __init__(self, ip, username, password):
         self.ip = ip
@@ -24,7 +27,7 @@ class _DeviceClient:
         self.calls.setdefault(ip, []).append("client")
 
     async def connect(self):
-        self.calls[self.ip].append("connect")
+        self.calls.setdefault(self.ip, []).append("connect")
         self.connect_calls[self.ip] = self.connect_calls.get(self.ip, 0) + 1
         if (
             self.ip == "192.0.2.1"
@@ -32,6 +35,8 @@ class _DeviceClient:
             and self.connect_calls[self.ip] == 2
         ):
             raise RuntimeError("reconnect failed")
+        if self.ip == "192.0.2.2" and not self.management_new_address_auth:
+            return False
         return True
 
     async def get_connected_cpes(self):
@@ -47,16 +52,21 @@ class _DeviceClient:
         return {"system": {"name": "test"}}
 
     async def get_device_info(self):
-        management = self.management_after_update if self.updated else None
+        management = (
+            self.management_after_update if self.updated
+            else self.management_before_update
+        )
         management = management or {
             "management_vlan_id": 12,
             "management_ip_mode": "static",
             "management_address": "192.0.2.1",
         }
         return SimpleNamespace(
-            model="TNA-301", serial="SYNTHETIC-SERIAL",
+            model="TNA-301",
+            serial=(self.management_new_address_serial or "SYNTHETIC-SERIAL")
+            if self.ip == "192.0.2.2" else "SYNTHETIC-SERIAL",
             current_version="2.0.0.1" if self.updated else "1.0.0.100",
-            ip="192.0.2.1", extra=management,
+            ip=management.get("ip", "192.0.2.1"), extra=management,
         )
 
     def get_hardware_id(self, model):
@@ -98,7 +108,10 @@ class _DeviceClient:
 
 class _ManagementDeviceClient(_DeviceClient):
     """Tachyon-like test client that enables management recovery checks."""
-    _client = object()
+
+    def __init__(self, ip, username, password):
+        super().__init__(ip, username, password)
+        self._client = SimpleNamespace(ip=ip, _base_url=f"https://{ip}", _token=None)
 
 
 def _install_snapshot_store(monkeypatch, *, failure=None):
@@ -1009,12 +1022,21 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("after", "expected_reason"), [
     ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.1"}, None),
+    ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.2"}, None),
     ({"management_vlan_id": 20, "management_ip_mode": "static", "management_address": "192.0.2.1"},
+     "management VLAN changed from 12 to 20 after update"),
+    ({"management_vlan_id": 20, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
      "management VLAN changed from 12 to 20 after update"),
     ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
      "management IP mode changed from static to dhcp after update"),
     ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.2"},
      "management address changed after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "unknown", "management_address": "192.0.2.1"},
+     "management IP mode is unavailable after update"),
+    ({"management_vlan_id": None, "management_ip_mode": "static", "management_address": "192.0.2.1"},
+     "management VLAN is unavailable after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": None, "ip": None},
+     "management address is unavailable after update"),
 ])
 async def test_changed_management_settings_stop_firmware_window(
     mock_db, monkeypatch, utc_window_clock, after, expected_reason,
@@ -1024,7 +1046,14 @@ async def test_changed_management_settings_stop_firmware_window(
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = None
+    _DeviceClient.management_new_address_serial = None
+    _DeviceClient.management_new_address_auth = True
     _DeviceClient.management_after_update = after
+    _DeviceClient.management_before_update = (
+        {"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"}
+        if after.get("management_ip_mode") == "dhcp" and expected_reason is None
+        else None
+    )
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
     monkeypatch.setattr(app_module, "_shutting_down", False)
@@ -1046,10 +1075,69 @@ async def test_changed_management_settings_stop_firmware_window(
     if expected_reason is None:
         assert job.devices["192.0.2.1"].status == "success"
         assert stop is None
+        if after["management_address"] == "192.0.2.2":
+            assert _DeviceClient.connect_calls["192.0.2.2"] == 1
     else:
         assert job.devices["192.0.2.1"].status == "failed"
         assert expected_reason in stop["reason"]
     _DeviceClient.management_after_update = None
+    _DeviceClient.management_before_update = None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("new_address_serial", "new_address_auth", "expected_reason"),
+    [
+        ("OTHER-SERIAL", True, "Expected serial did not match at the new management address"),
+        (None, False, "Authentication failed at the new management address"),
+    ],
+)
+async def test_changed_dhcp_address_requires_authenticated_serial_at_new_address(
+    mock_db, monkeypatch, utc_window_clock,
+    new_address_serial, new_address_auth, expected_reason,
+):
+    key = ("firmware", "2026-10-27")
+    db.set_setting("scheduled_rollout_safety_ready", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+    _DeviceClient.management_new_address_serial = new_address_serial
+    _DeviceClient.management_new_address_auth = new_address_auth
+    _DeviceClient.management_after_update = {
+        "management_vlan_id": 12,
+        "management_ip_mode": "dhcp",
+        "management_address": "192.0.2.2",
+    }
+    _DeviceClient.management_before_update = {
+        "management_vlan_id": 12,
+        "management_ip_mode": "dhcp",
+        "management_address": "192.0.2.1",
+    }
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
+    job = app_module.UpdateJob(
+        job_id="management-new-address-identity",
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={"192.0.2.1": ("u", "p")},
+        device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap")},
+        is_scheduled=True, start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key, pre_update_reboot=False,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1", pass_number=2)
+
+    stop = db.get_firmware_window_stop(key)
+    assert job.devices["192.0.2.1"].status == "failed"
+    assert expected_reason in stop["reason"]
+    assert _DeviceClient.connect_calls["192.0.2.2"] == 1
+    _DeviceClient.management_after_update = None
+    _DeviceClient.management_before_update = None
+    _DeviceClient.management_new_address_serial = None
+    _DeviceClient.management_new_address_auth = True
 
 
 @pytest.mark.asyncio
