@@ -185,7 +185,7 @@ async def test_ambiguous_serial_confirmed_candidates_are_rejected(monkeypatch):
     relocate.assert_not_called()
 
 
-@pytest.mark.parametrize("role", ["ap", "switch"])
+@pytest.mark.parametrize("role", ["switch"])
 @pytest.mark.asyncio
 async def test_ap_and_switch_retry_known_address_without_peer_discovery(monkeypatch, role):
     snapshot = {
