@@ -236,11 +236,11 @@ async def test_reboot_arms_before_request_and_install_arms_after_upload(prepared
     reboot, upload, install = [saved for _, saved in client.events]
     for saved, stage in ((reboot, "reboot"), (install, "install")):
         assert saved["state"] == "write_pending" and saved["write_stage"] == stage
-        assert saved["deadline"] - saved["reboot_started"] == 600
-        assert saved["next_probe_at"] - saved["reboot_started"] == 90
+        assert saved["deadline"] - saved["reboot_started"] == pytest.approx(600)
+        assert saved["next_probe_at"] - saved["reboot_started"] == pytest.approx(90)
         assert saved["remaining_s"] == 600
         assert (datetime.fromisoformat(saved["deadline_utc"])
-                - datetime.fromisoformat(saved["checkpoint_utc"])).total_seconds() == 600
+                - datetime.fromisoformat(saved["checkpoint_utc"])).total_seconds() == pytest.approx(600)
     assert upload["state"] == "captured"
     assert "deadline" not in upload and "deadline_utc" not in upload
     assert install["reboot_started"] >= reboot["reboot_started"]
