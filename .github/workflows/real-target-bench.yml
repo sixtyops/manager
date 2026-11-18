@@ -34,8 +34,16 @@ jobs:
             }
 
             const sha = pull.head.sha;
-            const escapedSha = sha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const benchLine = new RegExp(`^Bench:\\s*${escapedSha}\\s*\\|`, "m");
-            if (!benchLine.test(process.env.PR_BODY || "")) {
-              core.setFailed(`Changes to ${changed.join(", ")} require a Bench: line naming head SHA ${sha}.`);
+            const hasBenchEvidence = (process.env.PR_BODY || "").split(/\r?\n/).some((line) => {
+              if (!line.startsWith("Bench:")) return false;
+              const fields = line.slice("Bench:".length).split("|").map((field) => field.trim());
+              const [head, target, versions, scenario, result, link] = fields;
+              if (fields.length !== 6 || head !== sha || !target || !versions ||
+                  !scenario || result !== "PASS") return false;
+
+              const url = link.match(/^\[[^\]]+\]\((https?:\/\/[^\s)]+)\)$/)?.[1] ?? link;
+              return /^https?:\/\/[^\s]+$/.test(url) && URL.canParse(url);
+            });
+            if (!hasBenchEvidence) {
+              core.setFailed(`Add a complete bench evidence line for changes to ${changed.join(", ")}. Use Bench: ${sha} | <target> | <versions> | <path or scenario> | PASS | <log link>`);
             }
