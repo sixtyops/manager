@@ -4325,9 +4325,13 @@ async def _recover_ap(job, original_ip, client, driver_deadline):
     unavailable = ["management VLAN is unavailable after update",
                    "management IP mode is unavailable after update"]
     while deadline > monotonic():
+        read_timeout = asyncio.timeout_at(probe.read_deadline)
         try:
-            async with asyncio.timeout_at(probe.read_deadline):
+            async with read_timeout:
                 info = await probe.get_device_info(include_management=True)
+        except TimeoutError:
+            if read_timeout.expired():
+                raise RuntimeError("; ".join(unavailable)) from None
         except (OSError, RuntimeError):
             pass
         else:

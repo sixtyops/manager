@@ -1,5 +1,6 @@
 """Offline proof for live AP relocation and recovery boundaries."""
 
+import asyncio
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -151,6 +152,37 @@ async def test_callback_requires_management_reads(live, monkeypatch, moved, read
     assert len(set(request_deadlines)) == 1
     assert now - start == pytest.approx(elapsed)
     assert saved["deadline"] == deadline
+
+
+@pytest.mark.asyncio
+async def test_management_read_deadline_reports_unavailable(live, monkeypatch):
+    job, client, _ = live
+    await capture(job, client)
+    app._arm_ap_reboot_deadline(job, IP, client, "install")
+    saved = job.recovery_locators[IP]["ap_recovery"]
+    saved["deadline"] = app.monotonic() + 0.1
+    move = Mock()
+    read_started = False
+
+    class Probe(Client):
+        login = Client.connect
+
+        async def get_device_info(self, include_management=False):
+            nonlocal read_started
+            assert include_management
+            read_started = True
+            await asyncio.get_running_loop().create_future()
+
+    monkeypatch.setattr(app, "TachyonClient", Probe)
+    monkeypatch.setattr(db, "relocate_ap_address", move)
+
+    with pytest.raises(RuntimeError, match="management VLAN is unavailable after update"):
+        await callback(job, client)
+
+    assert read_started
+    move.assert_not_called()
+    assert client.ip == IP
+    assert db.get_device(NEW) is None
 
 
 @pytest.mark.asyncio
