@@ -146,7 +146,7 @@ Starts three services:
 | Service | Image | Purpose |
 |---------|-------|---------|
 | `sixtyops-mgmt` | Built from `Dockerfile` | The application (FastAPI on port 8000, built-in RADIUS on UDP 1812) |
-| `nginx` | `nginx:alpine` | Reverse proxy, HTTPS termination, WebSocket upgrade |
+| `nginx` | `nginx:1.31.9-alpine` | Reverse proxy, HTTPS termination, WebSocket upgrade |
 | `certbot` | `certbot/certbot` | Let's Encrypt certificate auto-renewal (every 12h) |
 
 `install.sh` and `deploy.sh` use standalone mode by default.

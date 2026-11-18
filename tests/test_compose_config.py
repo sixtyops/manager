@@ -27,6 +27,10 @@ def test_compose_yaml_parses(compose_doc):
     assert "sixtyops-mgmt" in compose_doc["services"]
 
 
+def test_nginx_image_is_pinned(compose_doc):
+    assert compose_doc["services"]["nginx"]["image"] == "nginx:1.31.9-alpine"
+
+
 def test_publish_ports_use_env_substitution(compose_doc):
     """Each `ports:` entry must use ${VAR:-default} syntax so deployments
     can override the host bind IP / port without editing the file in
