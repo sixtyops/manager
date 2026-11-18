@@ -1220,3 +1220,85 @@ async def test_post_flash_auth_failure_stop_records_pre_update_management_settin
     await test_unreachable_ap_stop_records_pre_update_management_settings(
         mock_db, monkeypatch, utc_window_clock,
     )
+
+
+@pytest.mark.asyncio
+async def test_auto_window_cache_resolution_and_expiry(monkeypatch):
+    from updater import services
+
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    lookup = AsyncMock(return_value={"timezone": "America/Chicago"})
+    monkeypatch.setattr(services, "get_location_from_ip", lookup)
+    settings = {"schedule_days": "wed", "schedule_start_hour": 16,
+                "schedule_end_hour": 17, "timezone": "auto"}
+    now = datetime.fromisoformat("2026-11-18T22:30:00+00:00")
+    assert rollout_gate.firmware_window_key(settings, now) is None
+    lookup.assert_not_awaited()
+    await services.get_timezone()
+    assert rollout_gate.firmware_window_key(settings, now) == ("firmware", "2026-11-18")
+    services._location_cache_times[services._RESOLVED_TIMEZONE_KEY] -= services._LOCATION_CACHE_TTL
+    assert rollout_gate.firmware_window_key(settings, now) is None
+    lookup.return_value = {"timezone": "Invalid/Zone"}
+    with pytest.raises(KeyError):
+        await services.get_timezone()
+    assert rollout_gate.firmware_window_key(settings, now) is None
+    lookup.return_value = None
+    await services.get_timezone()
+    assert rollout_gate.firmware_window_key(settings, now) == ("firmware", "2026-11-18")
+
+
+@pytest.mark.parametrize("zone,now,expected", [
+    ("America/Chicago", "2026-11-18T22:30:00+00:00", "2026-11-18"),
+    ("America/Chicago", "2026-11-18T16:30:00", "2026-11-18"),
+    ("auto", "2026-11-18T22:30:00", "2026-11-18"),
+    ("auto", "2026-11-18T16:30:00", None),
+    ("UTC", "2026-11-18T22:30:00+00:00", None),
+    ("Invalid/Zone", "2026-11-18T22:30:00+00:00", None),
+])
+def test_window_zone_precedence_and_naive_contract(monkeypatch, zone, now, expected):
+    import os
+    import time
+
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    previous = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    try:
+        settings = {"schedule_days": "wed", "schedule_start_hour": 16,
+                    "schedule_end_hour": 17, "timezone": "America/Chicago",
+                    "schedule_timezone": zone}
+        key = rollout_gate.firmware_window_key(settings, datetime.fromisoformat(now))
+        assert key == (("firmware", expected) if expected else None)
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+
+@pytest.mark.parametrize("instant", ["2026-11-01T06:30:00+00:00", "2026-11-01T07:30:00+00:00"])
+def test_auto_overnight_dst_keeps_start_day(monkeypatch, instant):
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    settings = {"schedule_days": "sat", "schedule_start_hour": 23,
+                "schedule_end_hour": 2, "timezone": "auto"}
+    assert rollout_gate.firmware_window_key(settings, datetime.fromisoformat(instant)) == (
+        "firmware", "2026-10-31"
+    )
+
+
+@pytest.mark.parametrize("zone", [None, "auto", "America/Chicago"])
+def test_window_current_clock_uses_resolved_zone(monkeypatch, zone):
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert str(tz) == "America/Chicago"
+            return datetime.fromisoformat("2026-11-18T22:30:00+00:00").astimezone(tz)
+
+    monkeypatch.setattr(rollout_gate, "datetime", Clock)
+    settings = {"schedule_days": "wed", "schedule_start_hour": 16,
+                "schedule_end_hour": 17, "timezone": zone}
+    assert rollout_gate.firmware_window_key(settings) == ("firmware", "2026-11-18")

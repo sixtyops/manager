@@ -19,6 +19,7 @@ _location_cache: dict = {}
 _location_cache_times: dict = {}
 _LOCATION_CACHE_TTL = 3600  # 1 hour
 _LOCATION_CACHE_MAX = 256  # Max entries before eviction
+_RESOLVED_TIMEZONE_KEY = "resolved_timezone"
 
 
 def _cache_get(key: str) -> Optional[any]:
@@ -229,12 +230,28 @@ async def resolve_temperature_unit(setting: str) -> str:
     return "f"
 
 
+def get_cached_timezone() -> Optional[str]:
+    """Read the validated resolved zone without external lookup."""
+    name = _cache_get(_RESOLVED_TIMEZONE_KEY)
+    if name is None:
+        return None
+    try:
+        ZoneInfo(name)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return name
+
+
 async def get_timezone() -> str:
-    """Get timezone string, defaulting to America/Chicago."""
+    """Resolve and cache the zone, defaulting to America/Chicago."""
+    cached = get_cached_timezone()
+    if cached is not None:
+        return cached
     location = await get_location_from_ip()
-    if location and location.get("timezone"):
-        return location["timezone"]
-    return "America/Chicago"
+    name = (location or {}).get("timezone") or "America/Chicago"
+    ZoneInfo(name)
+    _cache_set(_RESOLVED_TIMEZONE_KEY, name)
+    return name
 
 
 async def get_coordinates(zip_code: str = None) -> Optional[Tuple[float, float]]:

@@ -29,6 +29,7 @@ def current_scheduled_admission_decision() -> tuple[bool, Optional[str]]:
 from zoneinfo import ZoneInfo
 
 from .core.gates import MaintenanceSchedule, window_instance_key
+from . import services
 
 
 def firmware_window_key(settings: dict, now: datetime | None = None):
@@ -41,19 +42,19 @@ def firmware_window_key(settings: dict, now: datetime | None = None):
         start = int(settings["schedule_start_hour"])
         end = int(settings["schedule_end_hour"])
         timezone_name = settings.get("schedule_timezone") or settings.get("timezone")
-        if not timezone_name or timezone_name == "auto":
-            now = now or datetime.now().astimezone()
-            timezone_name = None
-        else:
-            schedule_tz = ZoneInfo(timezone_name)
-            now = now or datetime.now(schedule_tz)
-            if now.tzinfo is None or now.utcoffset() is None:
-                # A naive injected scheduler time is in the configured schedule
-                # zone. Letting astimezone() infer the host zone makes the
-                # window key depend on where the scheduler process runs.
-                now = now.replace(tzinfo=schedule_tz)
-        if now.tzinfo is None or now.utcoffset() is None:
-            now = now.astimezone()
+        auto_zone = not timezone_name or timezone_name == "auto"
+        if auto_zone:
+            timezone_name = services.get_cached_timezone()
+            if timezone_name is None:
+                return None
+        schedule_tz = ZoneInfo(timezone_name)
+        if now is None:
+            now = datetime.now(schedule_tz)
+        elif now.tzinfo is None or now.utcoffset() is None:
+            # Explicit naive times are schedule-local. Auto naive times come
+            # from the host clock in scheduler status and represent host time.
+            now = now.astimezone() if auto_zone else now.replace(tzinfo=schedule_tz)
+        now = now.astimezone(schedule_tz)
         schedule = MaintenanceSchedule(
             schedule_id="firmware",
             days=days,
