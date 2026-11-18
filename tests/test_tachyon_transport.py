@@ -311,3 +311,17 @@ async def test_trigger_rejection_never_logs_reflected_cookie(with_error, caplog)
     assert caplog.messages == ["Update trigger rejected by 192.0.2.1 (HTTP 200)"]
     assert SECRET not in caplog.text
     assert "Cookie:" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_locator_login_deadline_keeps_credentials_in_stdin(process):
+    client = transport.TachyonClient("192.0.2.1", SECRET, SECRET)
+    client.read_deadline = asyncio.get_running_loop().time() + 7
+    process.communicate.return_value = (b'{"error":"rejected"}', b'')
+    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=process)) as execute:
+        await client.login()
+    assert_private(execute)
+    config = config_values(process)
+    assert json.loads(config["data"][0]) == {"username": SECRET, "password": SECRET}
+    assert 0 < float(config["max-time"][0]) <= 7
+    assert all(SECRET not in argument for call in execute.call_args_list for argument in call.args)

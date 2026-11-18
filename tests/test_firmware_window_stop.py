@@ -1030,7 +1030,8 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("after", "expected_reason"), [
     ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.1"}, None),
-    ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.2"}, None),
+    ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.2"},
+     "Management address was not confirmed by AP recovery"),
     ({"management_vlan_id": 20, "management_ip_mode": "static", "management_address": "192.0.2.1"},
      "management VLAN changed from 12 to 20 after update"),
     ({"management_vlan_id": 20, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
@@ -1060,7 +1061,8 @@ async def test_changed_management_settings_stop_firmware_window(
     _DeviceClient.management_after_update = after
     _DeviceClient.management_before_update = (
         {"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"}
-        if after.get("management_ip_mode") == "dhcp" and expected_reason is None
+        if after.get("management_ip_mode") == "dhcp" and (
+            expected_reason is None or expected_reason == "Management address was not confirmed by AP recovery")
         else None
     )
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
@@ -1101,7 +1103,7 @@ async def test_changed_management_settings_stop_firmware_window(
         (None, False, "Authentication failed at the new management address"),
     ],
 )
-async def test_changed_dhcp_address_requires_authenticated_serial_at_new_address(
+async def test_changed_dhcp_address_without_recovery_callback_is_rejected(
     mock_db, monkeypatch, utc_window_clock,
     new_address_serial, new_address_auth, expected_reason,
 ):
@@ -1142,8 +1144,8 @@ async def test_changed_dhcp_address_requires_authenticated_serial_at_new_address
 
     stop = db.get_firmware_window_stop(key)
     assert job.devices["192.0.2.1"].status == "failed"
-    assert expected_reason in stop["reason"]
-    assert _DeviceClient.connect_calls["192.0.2.2"] == 1
+    assert "Management address was not confirmed by AP recovery" in stop["reason"]
+    assert "192.0.2.2" not in _DeviceClient.connect_calls
     _DeviceClient.management_after_update = None
     _DeviceClient.management_before_update = None
     _DeviceClient.management_new_address_serial = None
