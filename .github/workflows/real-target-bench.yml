@@ -1,0 +1,49 @@
+name: Real-target Bench Evidence
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  bench-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require exact-head bench evidence for target paths
+        uses: actions/github-script@v7
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull = context.payload.pull_request;
+            const paths = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner, repo, pull_number: pull.number, per_page: 100 }
+            );
+            const targetPath = (path) =>
+              path.startsWith("updater/vendors/") ||
+              ["updater/app.py", "updater/scheduler.py", "updater/rollout_gate.py"].includes(path);
+            const changed = paths.map((file) => file.filename).filter(targetPath);
+            if (changed.length === 0) {
+              core.info("No real-target paths changed.");
+              return;
+            }
+
+            const sha = pull.head.sha;
+            const hasBenchEvidence = (process.env.PR_BODY || "").split(/\r?\n/).some((line) => {
+              if (!line.startsWith("Bench:")) return false;
+              const fields = line.slice("Bench:".length).split("|").map((field) => field.trim());
+              const [head, target, versions, scenario, result, link] = fields;
+              if (fields.length !== 6 || head !== sha || !target || !versions ||
+                  !scenario || result !== "PASS") return false;
+
+              const url = link.match(/^\[[^\]]+\]\((https?:\/\/[^\s)]+)\)$/)?.[1] ?? link;
+              return /^https?:\/\/[^\s]+$/.test(url) && URL.canParse(url);
+            });
+            if (!hasBenchEvidence) {
+              core.setFailed(`Add a complete bench evidence line for changes to ${changed.join(", ")}. Use Bench: ${sha} | <target> | <versions> | <path or scenario> | PASS | <log link>`);
+            }
