@@ -250,3 +250,11 @@ Manual per-device updates intentionally bypass Firmware Hold. See
   test coverage and inputs; operator or explicitly approved owner only.
 - [Rollout model](docs/rollout-logic.md), [rearchitecture](docs/rearchitecture.md),
   and [repository hardening](docs/repo-hardening.md).
+
+Real-target lab:
+Target: authorized SixtyOps dev host and dedicated Tachyon lab devices
+Paths: updater/vendors/**, updater/app.py, updater/scheduler.py, updater/rollout_gate.py
+Test command: operator runs scripts/bench/run-readonly-bench.sh <full-commit-sha> --mode local-poll at the exact head SHA
+Evidence location: ~/.local/state/sixtyops-bench/*.summary.txt
+Link: https://github.com/isolson/personal-processes/blob/main/docs/real-target-labs.md
+PR line: Bench: <SHA> | <target> | <versions> | <path or scenario> | PASS | <log link>

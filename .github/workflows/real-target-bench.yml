@@ -1,0 +1,41 @@
+name: Real-target Bench Evidence
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  bench-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require exact-head bench evidence for target paths
+        uses: actions/github-script@v7
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull = context.payload.pull_request;
+            const paths = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner, repo, pull_number: pull.number, per_page: 100 }
+            );
+            const targetPath = (path) =>
+              path.startsWith("updater/vendors/") ||
+              ["updater/app.py", "updater/scheduler.py", "updater/rollout_gate.py"].includes(path);
+            const changed = paths.map((file) => file.filename).filter(targetPath);
+            if (changed.length === 0) {
+              core.info("No real-target paths changed.");
+              return;
+            }
+
+            const sha = pull.head.sha;
+            const escapedSha = sha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const benchLine = new RegExp(`^Bench:\\s*${escapedSha}\\s*\\|`, "m");
+            if (!benchLine.test(process.env.PR_BODY || "")) {
+              core.setFailed(`Changes to ${changed.join(", ")} require a Bench: line naming head SHA ${sha}.`);
+            }
