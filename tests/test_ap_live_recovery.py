@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from updater import app, database as db
+from updater.vendors.tachyon.client import TachyonClient
 from tests.test_ap_recovery_intent import prepared, capture, IP, RADIO, Client
 
 NEW = "192.0.2.11"
@@ -28,6 +29,9 @@ def live(prepared, monkeypatch):
 
     class Probe(Client):
         login = Client.connect
+
+        async def get_device_info(self, include_management=False):
+            return await super().get_device_info()
 
     monkeypatch.setattr(app, "TachyonClient", Probe)
     monkeypatch.setattr(app, "locate_ap", locate)
@@ -66,6 +70,90 @@ async def test_callback_moves_once_and_projects_current_address(live, monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("moved", "reads", "error", "elapsed"), [
+    (False, [12], None, 0),
+    (True, [12], None, 0),
+    (True, [None, 12], None, 1),
+    (True, ["transport error", 12], None, 1),
+    (True, [None, None, None], "management VLAN is unavailable after update", 2.5),
+    (True, [99], "management VLAN changed from 12 to 99", 0),
+])
+async def test_callback_requires_management_reads(live, monkeypatch, moved, reads, error, elapsed):
+    job, client, candidate = live
+    candidate["ip"] = NEW if moved else IP
+    await capture(job, client)
+    app._arm_ap_reboot_deadline(job, IP, client, "install")
+    saved = job.recovery_locators[IP]["ap_recovery"]
+    start = app.monotonic()
+    deadline = saved["deadline"] = start + 2.5
+    now = start
+    endpoints = []
+    request_deadlines = []
+    zones = "/cgi.lua/status?type=zones"
+    config = "/cgi.lua/config"
+    remaining_reads = iter(reads)
+
+    async def curl(probe, method, endpoint):
+        assert method == "GET"
+        assert now < deadline
+        assert probe.ip == candidate["ip"]
+        assert client.ip == IP
+        assert db.get_device(IP)["uid"] == "ap-serial"
+        endpoints.append(endpoint)
+        request_deadlines.append(probe.read_deadline)
+        if endpoint == "/cgi.lua/status?type=system":
+            return 200, json.dumps({"model": "TNA-301", "serial": "ap-serial"})
+        if endpoint == zones:
+            vlan = next(remaining_reads)
+            if vlan == "transport error":
+                raise RuntimeError("curl failed (exit code 7)")
+            return 200, json.dumps({"zones": {"wan": {
+                "management_interface": "eth0.12", "mgmt_vlan_id": vlan,
+                "management_ip_mode": "dhcp",
+            }}})
+        if endpoint == config:
+            # A confirmed VLAN change must stop recovery even if IP mode is missing.
+            if reads == [99]:
+                return 503, ""
+            return 200, json.dumps({"network": {"zones": {"wan": {
+                "mode": "dhcp", "management": {"use_zone_ip": True},
+            }}}})
+        assert endpoint in {"/cgi.lua/bootbank", "/cgi.lua/status?type=interfaces"}
+        return 200, "{}"
+
+    async def sleep(delay):
+        nonlocal now
+        assert 0 < delay <= 1
+        assert now + delay <= deadline
+        now += delay
+
+    monkeypatch.setattr(app, "TachyonClient", TachyonClient)
+    monkeypatch.setattr(TachyonClient, "login", AsyncMock(return_value=True))
+    monkeypatch.setattr(TachyonClient, "_curl", curl)
+    monkeypatch.setattr(app, "monotonic", lambda: now)
+    monkeypatch.setattr(app.asyncio, "sleep", sleep)
+
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            await callback(job, client)
+        assert client.ip == IP
+        assert db.get_device(IP)["uid"] == "ap-serial"
+        assert db.get_device(NEW) is None
+    else:
+        assert await callback(job, client)
+        assert client.ip == candidate["ip"]
+        assert db.get_device(candidate["ip"])["uid"] == "ap-serial"
+        assert (db.get_device(IP) is None) == moved
+    assert [endpoint for endpoint in endpoints if endpoint in {zones, config}] == [
+        endpoint for read in reads
+        for endpoint in ([zones] if read == "transport error" else [zones, config])
+    ]
+    assert len(set(request_deadlines)) == 1
+    assert now - start == pytest.approx(elapsed)
+    assert saved["deadline"] == deadline
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("conflict", ["ethernet_mac", "radio_mac", "serial", "unknown", "owner", "static", "rollback", "false", "auth", "wrong_serial", "wrong_model", "incomplete", "vlan", "missing_inventory", "inventory_serial"])
 async def test_failed_gate_never_retargets_driver(live, monkeypatch, conflict):
     job, client, _ = live
@@ -92,7 +180,7 @@ async def test_failed_gate_never_retargets_driver(live, monkeypatch, conflict):
             async def login(self):
                 return conflict != "auth"
 
-            async def get_device_info(self):
+            async def get_device_info(self, include_management=False):
                 info = await super().get_device_info()
                 if conflict == "wrong_serial":
                     info.serial = "OTHER-SERIAL"
@@ -261,7 +349,7 @@ async def test_shared_locator_finds_moved_ap_from_saved_cpe(live, monkeypatch):
             assert client.ip == IP
             return self.ip != IP
 
-        async def get_device_info(self):
+        async def get_device_info(self, include_management=False):
             if self.ip == cpe_ip:
                 return SimpleNamespace(serial="cpe-serial", model="TNA-302")
             return await super().get_device_info()

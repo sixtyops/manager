@@ -4320,44 +4320,75 @@ async def _recover_ap(job, original_ip, client, driver_deadline):
         probe.read_deadline = asyncio.get_running_loop().time() + remaining()
         if await probe.login() is not True:
             raise RuntimeError("AP authentication failed before relocation")
-        info = await probe.get_device_info()
-        if (info.serial != saved["serial"] or not info.model
-                or info.model.casefold() != saved["model"].casefold()):
-            raise RuntimeError("AP identity changed before relocation")
-        settings = _management_settings(info)
-        changes = _management_settings_changes(saved["management"], settings)
-        if changes or settings["address"] != candidate:
-            raise RuntimeError("; ".join(changes) or "AP management address is inconsistent")
-        if any(_has_open_recovery_identity_conflict(saved["serial"], saved[mac])
-               for mac in ("ethernet_mac", "radio_mac")):
-            raise RuntimeError("AP identity conflict is open or unavailable")
-        source = db.get_device(saved["ip"]) or {}
-        if (source.get("id") != saved["device_id"] or source.get("role") != "ap"
-                or source.get("uid_source") != "serial" or source.get("uid") != saved["serial"]):
-            raise RuntimeError("AP inventory identity is unavailable or changed")
-        owner = db.get_device(candidate)
-        legacy = db.get_access_point(candidate)
-        if ((owner and owner["id"] != saved["device_id"])
-                or (candidate != saved["ip"] and legacy)):
-            raise RuntimeError("AP address is owned by another device")
-        remaining()
-        saved["state"] = "verified"
-        if candidate != saved["ip"]:
-            if db.relocate_ap_address(saved["device_id"], saved["serial"],
-                                      saved["ip"], candidate) is not True:
-                raise RuntimeError("AP address move failed")
-            locator["address_changed"] = True
-        locator["ip"] = candidate
-        saved["ip"] = candidate
-        saved["state"] = "committed"
-        saved["deadline"] = deadline
-        _persist_recovery_locator(job, original_ip)
-        remaining()
-        _set_driver_locator(client, candidate)
-        inner = getattr(client, "_client", client)
-        inner.read_deadline = asyncio.get_running_loop().time() + remaining()
-        inner.last_reboot_deadline = deadline
-        return True
+
+    before = saved["management"]
+    unavailable = ["management VLAN is unavailable after update",
+                   "management IP mode is unavailable after update"]
+    while deadline > monotonic():
+        try:
+            async with asyncio.timeout_at(probe.read_deadline):
+                info = await probe.get_device_info(include_management=True)
+        except (OSError, RuntimeError):
+            pass
+        else:
+            if (info.serial != saved["serial"] or not info.model
+                    or info.model.casefold() != saved["model"].casefold()):
+                raise RuntimeError("AP identity changed before relocation")
+            settings = _management_settings(info)
+            # Check known values before waiting for any missing values.
+            comparable = settings.copy()
+            unavailable = []
+            for key, label, ready in (
+                ("vlan", "VLAN", settings["vlan"] is not None),
+                ("ip_mode", "IP mode", settings["ip_mode"] in {"static", "dhcp"}),
+                ("address", "address", bool(settings["address"])),
+            ):
+                if not ready:
+                    unavailable.append(f"management {label} is unavailable after update")
+                    comparable[key] = before[key]
+            changes = _management_settings_changes(before, comparable)
+            if changes:
+                raise RuntimeError("; ".join(changes))
+            if settings["address"] and settings["address"] != candidate:
+                raise RuntimeError("AP management address is inconsistent")
+            if not unavailable:
+                break
+        delay = deadline - monotonic()
+        if delay > 0:
+            await asyncio.sleep(min(1, delay))
+    else:
+        raise RuntimeError("; ".join(unavailable))
+
+    if any(_has_open_recovery_identity_conflict(saved["serial"], saved[mac])
+           for mac in ("ethernet_mac", "radio_mac")):
+        raise RuntimeError("AP identity conflict is open or unavailable")
+    source = db.get_device(saved["ip"]) or {}
+    if (source.get("id") != saved["device_id"] or source.get("role") != "ap"
+            or source.get("uid_source") != "serial" or source.get("uid") != saved["serial"]):
+        raise RuntimeError("AP inventory identity is unavailable or changed")
+    owner = db.get_device(candidate)
+    legacy = db.get_access_point(candidate)
+    if ((owner and owner["id"] != saved["device_id"])
+            or (candidate != saved["ip"] and legacy)):
+        raise RuntimeError("AP address is owned by another device")
+    remaining()
+    saved["state"] = "verified"
+    if candidate != saved["ip"]:
+        if db.relocate_ap_address(saved["device_id"], saved["serial"],
+                                  saved["ip"], candidate) is not True:
+            raise RuntimeError("AP address move failed")
+        locator["address_changed"] = True
+    locator["ip"] = candidate
+    saved["ip"] = candidate
+    saved["state"] = "committed"
+    saved["deadline"] = deadline
+    _persist_recovery_locator(job, original_ip)
+    remaining()
+    _set_driver_locator(client, candidate)
+    inner = getattr(client, "_client", client)
+    inner.read_deadline = asyncio.get_running_loop().time() + remaining()
+    inner.last_reboot_deadline = deadline
+    return True
 
 
 async def _ap_recovery_read(job, ip, client, operation):
