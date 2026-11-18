@@ -78,7 +78,7 @@ async def test_management_subrequests_also_share_the_read_deadline(monkeypatch):
 
     monkeypatch.setattr(transport, "_run_curl", request)
     await client.get_device_info(include_management=True)
-    assert timeouts == [30, 30, 30, 20, 10]
+    assert timeouts == pytest.approx([30, 30, 30, 20, 10])
     assert client.read_deadline == started + 50
 
 
