@@ -51,6 +51,7 @@ from .vendors import init_vendors, get_driver, list_vendors
 from . import __version__
 from . import config_write_guard
 from . import database as db
+from .ap_locator import FIRST_PROBE_DELAY_S
 from .poller import init_poller, get_poller, set_poller
 from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
 from . import rollout_gate
@@ -4139,30 +4140,121 @@ def _management_settings_changes(before: dict, after: dict) -> list[str]:
     return changes
 
 
+def _active_job_recovery_payload(job: "UpdateJob") -> dict:
+    """Serialize confirmed addresses while keeping runtime keys stable."""
+    addresses = {ip: saved.get("ip", ip) for ip, saved in job.recovery_locators.items()}
+    current = lambda ip: addresses.get(ip, ip)
+    if (len({current(ip) for ip in job.devices}) != len(job.devices)
+            or len(set(addresses.values())) != len(addresses)):
+        raise RuntimeError("Active job addresses are ambiguous")
+    return {
+        "devices": [current(ip) for ip in job.devices],
+        "order": [current(ip) for ip in job.device_order],
+        "recovery": {current(ip): saved for ip, saved in job.recovery_locators.items()},
+    }
+
+
 def _persist_recovery_locator(job: "UpdateJob", original_ip: str) -> None:
     """Persist identity and the current transport locator with the active job."""
-    payload = {
-        "devices": list(job.devices),
-        "order": job.device_order,
-        "recovery": job.recovery_locators,
-    }
-    db.save_active_job(
-        job.job_id, "running", json.dumps(payload),
-        Path(job.device_firmware_map.get(original_ip, "")).name, original_ip,
-    )
+    if db.save_active_job(
+        job.job_id, "running", json.dumps(_active_job_recovery_payload(job)),
+        Path(job.device_firmware_map.get(original_ip, "")).name,
+        job.recovery_locators.get(original_ip, {}).get("ip", original_ip),
+    ) is False:
+        raise RuntimeError("Recovery checkpoint failed")
 
 
 def _persist_device_result(job: "UpdateJob", ip: str) -> None:
     """Clear the in-flight marker only after the device result is durable."""
-    payload = {
-        "devices": list(job.devices),
-        "order": job.device_order,
-        "recovery": job.recovery_locators,
-    }
-    db.save_active_job(
-        job.job_id, "running", json.dumps(payload),
+    if db.save_active_job(
+        job.job_id, "running", json.dumps(_active_job_recovery_payload(job)),
         Path(job.device_firmware_map.get(ip, "")).name,
-    )
+    ) is False:
+        raise RuntimeError("Device result checkpoint failed")
+
+
+async def _capture_ap_recovery_intent(job, original_ip, client, info, baseline,
+                                      expected_version, stage):
+    """Save AP identity and selected CPE credential sources before a write."""
+    current_ip = client.ip
+    device = db.get_device(current_ip) or {}
+    serial, model = getattr(info, "serial", None), getattr(info, "model", None)
+    ethernet_mac = _normalize_recovery_mac(getattr(info, "mac", None))
+    radio_reader = getattr(client, "get_ap_radio_mac", None)
+    if not callable(radio_reader):
+        raise RuntimeError("AP radio MAC reader is unavailable")
+    radio_mac = _normalize_recovery_mac(await radio_reader())
+    settings = _management_settings(info)
+    if (not all(isinstance(value, str) and value.strip()
+                for value in (serial, model, expected_version))
+            or type(device.get("id")) is not int or device["id"] <= 0
+            or device.get("role") != "ap"):
+        raise RuntimeError("AP recovery identity is unavailable")
+    if not all(_usable_recovery_mac(mac) for mac in (ethernet_mac, radio_mac)):
+        raise RuntimeError("AP Ethernet or radio MAC is unavailable")
+    if (_management_settings_changes(settings, settings)
+            or settings["address"] != current_ip):
+        raise RuntimeError("AP management baseline is unavailable or inconsistent")
+    locators = []
+    for saved in baseline["peers"].values():
+        cpe_ip = saved["ip"]
+        key = cpe_ip if job.credentials.get(cpe_ip) else original_ip
+        source_ip = job.device_parent.get(key) if key == cpe_ip else original_ip
+        credentials = job.credentials.get(key)
+        if not credentials or not source_ip:
+            continue
+        source = db.get_access_point(source_ip) or {}
+        if (not source.get("id")
+                or credentials != (source.get("username"), source.get("password"))):
+            continue
+        inventory = db.get_cpe_by_ip(cpe_ip) or {}
+        known = db.get_device(cpe_ip) or {}
+        try:
+            cpe = get_driver("tachyon")(cpe_ip, *credentials)
+            if await cpe.connect() is not True:
+                continue
+            fresh = await cpe.get_device_info()
+            if (not all(isinstance(getattr(fresh, field, None), str)
+                        and getattr(fresh, field).strip() for field in ("serial", "model"))
+                    or (known.get("uid_source") == "serial" and fresh.serial != known.get("uid"))
+                    or (inventory.get("model") and fresh.model.casefold()
+                        != inventory["model"].casefold())):
+                continue
+        except Exception:
+            continue
+        locators.append({"ip": cpe_ip, "serial": fresh.serial, "model": fresh.model,
+                         "credential_ref": f"ap:{source['id']}"})
+    job.recovery_locators[original_ip].update({
+        "ip": current_ip, "serial": serial, "model": model,
+        "ap_recovery": {
+            "state": "captured", "write_stage": stage, "device_id": device["id"],
+            "serial": serial, "model": model, "ip": current_ip,
+            "ethernet_mac": ethernet_mac, "radio_mac": radio_mac,
+            "management": settings, "expected_version": expected_version,
+            "credential_ref": f"ap:{device['id']}",
+            "cpes": locators, "baseline": baseline,
+            "rounds": 0, "next_probe_at": 0, "addresses": [current_ip],
+        },
+    })
+    _persist_recovery_locator(job, original_ip)
+
+
+def _arm_ap_reboot_deadline(job, original_ip, client, stage):
+    """Persist the reboot budget immediately before its admitted write."""
+    saved = job.recovery_locators[original_ip].get("ap_recovery", {})
+    if saved.get("state") != "captured" or saved.get("write_stage") != stage:
+        raise RuntimeError("AP recovery intent is unavailable for this write")
+    budget = client.get_reboot_timeout("ap")
+    if type(budget) not in (int, float) or not math.isfinite(budget) or budget <= 0:
+        raise RuntimeError("AP reboot budget is invalid")
+    started, now = monotonic(), datetime.now(timezone.utc)
+    saved.update({
+        "state": "write_pending", "reboot_started": started,
+        "deadline": started + budget, "next_probe_at": started + FIRST_PROBE_DELAY_S,
+        "deadline_utc": (now + timedelta(seconds=budget)).isoformat(),
+        "checkpoint_utc": now.isoformat(), "remaining_s": budget,
+    })
+    _persist_recovery_locator(job, original_ip)
 
 
 def _set_driver_locator(client, ip: str) -> None:
@@ -6386,6 +6478,11 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     pre_reboot_ap_baseline = await _capture_ap_recovery_baseline(
                         job, ip, client
                     )
+                    if supports_tachyon_recovery:
+                        await _capture_ap_recovery_intent(
+                            job, ip, client, info, pre_reboot_ap_baseline,
+                            expected_version, "reboot",
+                        )
                 recovery_callback = (
                     _make_recovery_callback(
                         job, ip, client, expected_serial, getattr(info, "model", None),
@@ -6397,6 +6494,8 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                     reboot_options["recovery_callback"] = recovery_callback
                 if not _firmware_write_gate(job, ip)[0]:
                     return
+                if device_status.role == "ap" and supports_tachyon_recovery:
+                    _arm_ap_reboot_deadline(job, ip, client, "reboot")
                 device_status._firmware_sequence_started = True
                 if not await client.reboot(**reboot_options):
                     locator = job.recovery_locators.get(ip, {})
@@ -6479,6 +6578,9 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             if not admitted:
                 admission_denial["reason"] = reason
                 return False
+            if (stage == "install" and device_status.role == "ap"
+                    and supports_tachyon_recovery):
+                _arm_ap_reboot_deadline(job, ip, client, "install")
             return True
 
         update_options = {
@@ -6538,6 +6640,11 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
                 flash_ap_baseline = await _capture_ap_recovery_baseline(
                     job, ip, client
                 )
+                if supports_tachyon_recovery:
+                    await _capture_ap_recovery_intent(
+                        job, ip, client, info, flash_ap_baseline,
+                        _extract_version_from_filename(Path(fw_path).name), "install",
+                    )
             if not _firmware_write_gate(job, ip)[0]:
                 return
             result = await asyncio.wait_for(
