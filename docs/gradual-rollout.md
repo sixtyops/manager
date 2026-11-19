@@ -14,7 +14,7 @@ Firmware Hold remains in force for scheduled queue work. The scheduler checks re
 
 Manager stores the expected serial and current address before a write. After reboot, it checks the current address. If a CPE is missing, Manager uses fresh successful AP peer reports to find candidates by the saved radio MAC, then reads only reported unicast addresses. The authenticated serial confirms the candidate. Manager uses the credentials selected for the update. It does not scan networks or identify a device by name.
 
-Manager checks the expected serial before each write. It saves a moved address only after serial confirmation. Missing, conflicting, or ambiguous identity evidence, failed persistence, or timeout stops the job and requires operator resolution.
+Manager checks the expected serial before each write. It saves a moved address only after serial confirmation and a checked inventory move. For AP recovery, it keeps a verified saved address; if that address is unavailable, it checks the candidates and selects the first verified address in sorted order. Multiple addresses for one AP do not make its identity ambiguous. Conflicting identities, unresolved alternatives, failed persistence, or timeout stop the job and require operator resolution. Address changes pass only when both management snapshots show DHCP on the same VLAN.
 
 After an AP update, Manager checks saved CPE peers and their required link state through reads. This recovery path does not reboot CPEs. The standalone Tachyon reboot method uses `POST /cgi.lua/reboot` and requires HTTP 200. It confirms a reachability drop and API return, or a lower `system.uptime` than the value read immediately before the request. Missing reboot evidence fails at the existing deadline. AP recovery can re-find a changed address through its saved CPE peers.
 
@@ -29,3 +29,26 @@ by the operator. C4 release preparation is complete in
 [#732](https://github.com/sixtyops/manager/pull/732) for version 1.4.1-dev6;
 the tag awaits the operator's signature after the UI review. C5 step 1 passed;
 steps 2 and 3 await the operator.
+
+## Window identity and explicit updates
+
+**Key points:** Firmware window and manual-day stop keys use the scheduler
+timezone. An unavailable timezone blocks admission and stop resolution.
+
+**Detail:** Explicit timezone settings take precedence. With `timezone=auto`,
+Manager uses the successfully selected and validated scheduler timezone.
+Stop resolution uses schedule-local time and keeps the stopped window closed
+to firmware writes. Manual-day keys use that timezone across UTC midnight.
+See [#828](https://github.com/sixtyops/manager/pull/828),
+[#830](https://github.com/sixtyops/manager/pull/830), and
+[#841](https://github.com/sixtyops/manager/pull/841).
+
+The single-device endpoint uses the inventory role. A CPE update follows the
+CPE path and uses parent AP credentials. Before an explicit update reports
+already current, Manager reads live bank data with the resolved credentials.
+Only a complete read with no warning and a matching active version permits
+the no-op. Both-bank mode requires both versions to match. A failed or
+mismatched read follows normal job admission. See
+[#837](https://github.com/sixtyops/manager/pull/837),
+[#835](https://github.com/sixtyops/manager/pull/835), and
+[#840](https://github.com/sixtyops/manager/pull/840).
