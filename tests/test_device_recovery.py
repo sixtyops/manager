@@ -331,6 +331,7 @@ async def test_recovery_callback_exception_fails_even_when_target_version_is_rea
         ),
     ])
     client.upload_firmware = AsyncMock(return_value=True)
+    client._curl = AsyncMock(return_value=(503, ""))
     client.trigger_update = AsyncMock(return_value=True)
 
     async def wait_for_reboot(*, timeout, recovery_callback):

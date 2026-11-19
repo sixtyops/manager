@@ -981,6 +981,14 @@ class TachyonClient:
         logger.error("%s reboot was not confirmed before its deadline", self.ip)
         return False
 
+    async def _read_reboot_baseline(self) -> Optional[float]:
+        """Read system uptime before requesting a reboot."""
+        try:
+            status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+        except (RuntimeError, OSError, TimeoutError):
+            return None
+        return self._parse_uptime(body) if status == 200 else None
+
     async def reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
         """Request the UI reboot endpoint and prove the device restarted."""
         loop = asyncio.get_running_loop()
@@ -990,13 +998,7 @@ class TachyonClient:
         previous_read_deadline = self.read_deadline
         self.read_deadline = deadline
         try:
-            baseline = None
-            try:
-                status, body = await self._curl("GET", "/cgi.lua/status?type=system")
-                if status == 200:
-                    baseline = self._parse_uptime(body)
-            except (RuntimeError, OSError, TimeoutError):
-                pass
+            baseline = await self._read_reboot_baseline()
             try:
                 status, _ = await self._curl("POST", "/cgi.lua/reboot")
             except (RuntimeError, OSError, TimeoutError):
@@ -1146,14 +1148,33 @@ class TachyonClient:
                     return await reconcile_readback(reason)
             if serial_check and not await serial_check("install"):
                 return await reconcile_readback("Expected serial did not match before install")
-            if not await self.trigger_update():
-                return await reconcile_readback("Failed to trigger update", allow_target_success=True)
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            previous_read_deadline = self.read_deadline
+            deadline = min(started + reboot_timeout, previous_read_deadline or math.inf)
+            self.read_deadline = deadline
+            try:
+                baseline = await self._read_reboot_baseline()
+                admitted, reason = admission_check() if admission_check else (True, "")
+                install_expired = loop.time() >= deadline
+                triggered = admitted and not install_expired and await self.trigger_update()
+                if triggered:
+                    progress("Rebooting...")
+                    self._reboot_observation = (started, deadline, baseline)
+                    rebooted = await self.wait_for_reboot(
+                        timeout=reboot_timeout, recovery_callback=recovery_callback
+                    )
+            finally:
+                self.read_deadline = previous_read_deadline
+                self.__dict__.pop("_reboot_observation", None)
 
-            # Wait for reboot
-            progress("Rebooting...")
-            if not await self.wait_for_reboot(
-                timeout=reboot_timeout, recovery_callback=recovery_callback
-            ):
+            if not admitted:
+                return await reconcile_readback(reason)
+            if install_expired:
+                return await reconcile_readback("Install deadline expired")
+            if not triggered:
+                return await reconcile_readback("Failed to trigger update", allow_target_success=True)
+            if not rebooted:
                 readback = await reconcile_readback("Device did not come back online")
                 target_version = _extract_version_from_firmware(firmware_path)
                 if (
@@ -1163,10 +1184,7 @@ class TachyonClient:
                     return readback
                 if not recovery_callback:
                     return readback
-                loop = asyncio.get_running_loop()
-                deadline = self.last_reboot_deadline or loop.time()
-                reboot_started = deadline - reboot_timeout
-                if not await recovery_callback(deadline, reboot_started):
+                if not await recovery_callback(deadline, started):
                     return readback
 
             # Re-login and verify

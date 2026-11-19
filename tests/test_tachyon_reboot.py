@@ -159,6 +159,39 @@ def test_invalid_uptime_cannot_prove_reset(uptime):
 
 
 @pytest.mark.asyncio
+async def test_install_reboot_accepts_uptime_reset_without_transport_drop(clock):
+    client = TachyonClient("192.0.2.1", "synthetic", "synthetic")
+    started = clock[0]
+    client.login = AsyncMock(return_value=True)
+    client.upload_firmware = AsyncMock(return_value=True)
+    client.get_device_info = AsyncMock(side_effect=[
+        DeviceInfo(ip=client.ip, model="TNA-301", current_version="1.12.3.54970"),
+        DeviceInfo(ip=client.ip, model="TNA-301", current_version="1.15.0.55142"),
+    ])
+    responses = iter([system(1000), (200, ""), system(2)])
+    requests = []
+
+    async def request(method, endpoint, **kwargs):
+        requests.append((method, endpoint))
+        assert client.read_deadline == started + 7
+        clock[0] += 1
+        return next(responses)
+
+    client._curl = request
+    result = await client.update_firmware("/tmp/tna-30x-1.15.0-r55142.bin", reboot_timeout=7)
+
+    assert result.success, result.error
+    assert result.new_version == "1.15.0.55142"
+    assert requests == [
+        ("GET", "/cgi.lua/status?type=system"),
+        ("POST", "/cgi.lua/update"),
+        ("GET", "/cgi.lua/status?type=system"),
+    ]
+    assert client.read_deadline is None
+    assert not hasattr(client, "_reboot_observation")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["pre-update", "install"])
 async def test_reboot_recovery_finds_device_only_at_new_address(clock, stage):
     client = TachyonClient("192.0.2.1", "synthetic", "synthetic")
@@ -176,9 +209,11 @@ async def test_reboot_recovery_finds_device_only_at_new_address(clock, stage):
             return 200, ""
         if stage == "pre-update" and len(observations) == 1:
             return system(1000)
+        if stage == "install" and not installed:
+            raise RuntimeError("uptime baseline unavailable")
         if not dropped:
             # The old API can still answer before the actual reboot starts.
-            if len(observations) == (3 if stage == "pre-update" else 1):
+            if len(observations) == (3 if stage == "pre-update" else 2):
                 return system(1001)
             dropped = True
             raise RuntimeError("old address is unreachable")

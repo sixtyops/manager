@@ -92,6 +92,7 @@ class TestUploadFirmwareBandwidth:
         with patch.object(client, "login", new_callable=AsyncMock, return_value=True), \
              patch.object(client, "get_device_info", new_callable=AsyncMock) as mock_info, \
              patch.object(client, "upload_firmware", new_callable=AsyncMock, return_value=True) as mock_upload, \
+             patch.object(client, "_curl", new_callable=AsyncMock, return_value=(503, "")), \
              patch.object(client, "trigger_update", new_callable=AsyncMock, return_value=True), \
              patch.object(client, "wait_for_reboot", new_callable=AsyncMock, return_value=True), \
              patch.object(client, "get_device_info", new_callable=AsyncMock) as mock_info2:
