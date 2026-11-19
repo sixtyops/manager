@@ -191,13 +191,15 @@ def _sanitize(output: str) -> str:
     # Redact URLs first so a registered substring cannot break their recognition.
     output = _http_userinfo.sub(r"\1[REDACTED]@", output)
     output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
-    while True:
+    for _ in range(3):
         with _registry_lock:
             pattern = _pattern
         redacted = _redact_token_spans(output, pattern)
         with _registry_lock:
             if pattern is _pattern:
                 return redacted
+    with _registry_lock:
+        return _redact_token_spans(output, _pattern)
 
 
 def _handle_error(handler: logging.Handler, record: logging.LogRecord) -> None:
