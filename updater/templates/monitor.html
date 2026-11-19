@@ -1056,13 +1056,41 @@
         .table-card {
             background: var(--bg-card);
             border-radius: var(--radius-xl);
-            overflow: hidden;
+            min-width: 0;
         }
 
         .tree-table {
-            width: 100%;
+            width: max-content;
+            min-width: 100%;
             border-collapse: collapse;
             font-size: var(--text-md);
+        }
+
+        #deviceTable th,
+        #deviceTable td {
+            white-space: nowrap;
+        }
+
+        #deviceTable td:first-child {
+            max-width: 28rem;
+        }
+
+        #deviceTable .name-cell {
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+        }
+
+        #deviceTable .name-cell > span {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #deviceTableScroll {
+            min-width: 0;
+            overflow-x: auto;
         }
 
         .tree-table thead th {
@@ -2967,7 +2995,7 @@
                 <button class="btn btn-sm btn-secondary hidden" id="btnCheckCompliance" onclick="checkComplianceForSelected()" data-min-role="operator">Check Compliance</button>
                 <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
             </div>
-            <div class="u-overflow-x-auto">
+            <div class="u-overflow-x-auto" id="deviceTableScroll">
                 <table class="tree-table" id="deviceTable">
                     <thead>
                         <tr id="deviceTableHead">

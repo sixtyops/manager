@@ -45,6 +45,14 @@ def test_monitor_page_renders_with_seeded_data(authed_client, mock_db):
         assert f'id="{element_id}"' in html, f"missing element id {element_id}"
 
 
+def test_device_table_keeps_values_on_one_line_and_scrolls_horizontally():
+    html = (ROOT / "updater/templates/monitor.html").read_text(encoding="utf-8")
+    assert '<div class="u-overflow-x-auto" id="deviceTableScroll">' in html
+    assert "#deviceTable th,\n        #deviceTable td {\n            white-space: nowrap;" in html
+    assert "#deviceTableScroll {\n            min-width: 0;\n            overflow-x: auto;" in html
+    assert "#deviceTable .name-cell > span {\n            min-width: 0;\n            overflow: hidden;\n            text-overflow: ellipsis;" in html
+
+
 def test_monitor_weather_and_bank_labels_match_behavior(authed_client):
     html = authed_client.get("/").text
     assert "sampled ${sampleTime}" in html
