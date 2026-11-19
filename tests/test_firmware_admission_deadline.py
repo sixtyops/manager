@@ -14,11 +14,13 @@ WINDOW = (1, "2026-11-03")
 TARGET = "tna-30x-1.12.3-r55002.bin"
 
 
-def _timed_job(ip="192.0.2.1", firmware_path=TARGET, sha256=SHA):
+def _timed_job(
+    ip="192.0.2.1", firmware_path=TARGET, sha256=SHA, cutoff="2026-11-03T03:30:00+00:00"
+):
     db.register_firmware(TARGET, sha256=sha256)
     family = app_module._get_firmware_type_for_model("TNA-301")
     db.record_firmware_window_admission(
-        family, sha256, WINDOW, "2026-11-03T03:30:00+00:00"
+        family, sha256, WINDOW, cutoff
     )
     return app_module.UpdateJob(
         job_id="deadline",
@@ -43,8 +45,15 @@ def test_persisted_cutoff_denies_at_equality(mock_db):
     )
 
 
-def test_write_gate_records_expired_cutoff_reason_and_pending_status(mock_db, monkeypatch):
-    job = _timed_job()
+@pytest.mark.parametrize(
+    ("cutoff", "reason"),
+    [
+        ("2000-01-01T00:00:00+00:00", "cutoff_reached"),
+        ("invalid", "timing_unavailable"),
+    ],
+)
+def test_first_write_gate_records_cutoff_deferral(mock_db, monkeypatch, cutoff, reason):
+    job = _timed_job(cutoff=cutoff)
     ip = "192.0.2.1"
     monkeypatch.setattr(
         app_module.rollout_gate, "current_scheduled_admission_decision",
@@ -55,7 +64,7 @@ def test_write_gate_records_expired_cutoff_reason_and_pending_status(mock_db, mo
 
     assert not allowed
     assert job.devices[ip].status == "pending"
-    assert job.devices[ip].deferral_reason == "cutoff_reached"
+    assert job.devices[ip].deferral_reason == reason
     assert job.devices[ip].deferral_message == message
     assert job._deferred_admission_ips == {ip}
 
@@ -105,28 +114,34 @@ def test_write_gate_records_unavailable_timing(mock_db, monkeypatch, timing):
     assert job.devices[ip].deferral_reason == "timing_unavailable"
 
 
-def test_write_gate_records_closed_window(mock_db, monkeypatch):
+@pytest.mark.parametrize(
+    ("schedule_timezone", "schedule_days", "reason"),
+    [
+        ("UTC", ["tue"], "window_closed"),
+        ("", ["tue"], "timing_unavailable"),
+        ("Invalid/Timezone", ["tue"], "timing_unavailable"),
+        ("UTC", ["invalid"], "timing_unavailable"),
+    ],
+)
+def test_write_gate_records_window_deferral(
+    mock_db, monkeypatch, schedule_timezone, schedule_days, reason
+):
     ip = "192.0.2.1"
     job = app_module.UpdateJob(
         job_id="window-closed", device_order=[ip], devices={ip: app_module.DeviceStatus(ip=ip)},
         is_scheduled=True, enforce_window_cutoff=True, window_key=(1, "2026-11-03"),
-        start_hour=1, end_hour=5, schedule_timezone="UTC", schedule_days=["tue"],
+        start_hour=1, end_hour=5, schedule_timezone=schedule_timezone, schedule_days=schedule_days,
     )
     monkeypatch.setattr(
         app_module.rollout_gate, "current_scheduled_admission_decision",
         lambda: (True, ""),
     )
     monkeypatch.setattr(app_module, "_firmware_deadline_admits", lambda *_a: True)
-    monkeypatch.setattr(
-        app_module.rollout_gate, "firmware_window_key", lambda *_a: (1, "2026-11-04"),
-    )
-    monkeypatch.setattr(app_module, "_minutes_until_window_end", lambda *_a: 30)
-
     allowed, _ = app_module._firmware_write_gate(job, ip)
 
     assert not allowed
     assert job.devices[ip].status == "pending"
-    assert job.devices[ip].deferral_reason == "window_closed"
+    assert job.devices[ip].deferral_reason == reason
     assert job._deferred_admission_ips == {ip}
 
 

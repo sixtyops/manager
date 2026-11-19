@@ -6368,15 +6368,23 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
         minutes_until_end = _minutes_until_window_end(now, job.start_hour, job.end_hour)
         if current_key == job.window_key and minutes_until_end > SCHEDULE_END_BUFFER_MINUTES:
             return True, ""
+        if current_key is None:
+            days = {day.strip().lower()[:3] for day in ",".join(job.schedule_days).split(",") if day.strip()}
+            if not days or days - {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:
+                raise ValueError("Scheduled update has invalid maintenance window days")
+            if not (0 <= int(job.start_hour) <= 23 and 0 <= int(job.end_hour) <= 23):
+                raise ValueError("Scheduled update has invalid maintenance window hours")
+        reason_code = "window_closed"
         reason = "Deferred: the maintenance window has ended or is ending; device will retry next window."
     except Exception as exc:
+        reason_code = "timing_unavailable"
         reason = f"Deferred: maintenance window timing is unavailable ({exc}); device will retry next window."
 
     device_status = job.devices[ip]
     device_status.status = "pending"
     device_status.error = None
     device_status.progress_message = reason
-    device_status.deferral_reason = "window_closed"
+    device_status.deferral_reason = reason_code
     device_status.deferral_message = reason
     deferred_ips = getattr(job, "_deferred_admission_ips", set())
     deferred_ips.add(ip)
