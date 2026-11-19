@@ -1060,8 +1060,7 @@
         }
 
         .tree-table {
-            width: max-content;
-            min-width: 100%;
+            width: 100%;
             border-collapse: collapse;
             font-size: var(--text-md);
         }
@@ -1071,21 +1070,46 @@
             white-space: nowrap;
         }
 
-        #deviceTable td:first-child {
-            max-width: 28rem;
+        #deviceTable th:first-child {
+            width: 100%;
         }
 
         #deviceTable .name-cell {
-            min-width: 0;
-            max-width: 100%;
-            overflow: hidden;
+            min-width: 13rem;
         }
 
-        #deviceTable .name-cell > span {
-            min-width: 0;
+        .device-name-group {
+            flex: 1;
+            contain: inline-size;
+        }
+
+        .device-name {
+            display: block;
             overflow: hidden;
             text-overflow: ellipsis;
-            white-space: nowrap;
+        }
+
+        .device-name:focus {
+            overflow: visible;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        .device-notes {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: var(--text-2xs);
+            color: var(--state-neutral-text);
+            margin-top: 1px;
+        }
+
+        @media (max-width: 80rem) {
+            #deviceTable .device-notes { display: none; }
+        }
+
+        @media (max-width: 75rem) {
+            #deviceTable .device-date { display: none; }
         }
 
         #deviceTableScroll {
@@ -5714,10 +5738,10 @@
                         <input type="checkbox" data-check-ap="${ap.ip}" ${checkedDevices.has(ap.ip) ? 'checked' : ''} onclick="toggleCheckAP('${ap.ip}',event);event.stopPropagation();">
                         <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                         ${apHealthDot}<span class="device-icon ap">AP</span>
-                        <span>
-                        ${deviceNameHtml(ap.ip, apName)}
-                        ${ap.notes ? `<div style="font-size:10px;color:var(--state-neutral-text);margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
-                        </span>
+                        <div class="device-name-group">
+                            ${deviceNameHtml(ap.ip, apName)}
+                            ${ap.notes ? `<div class="device-notes" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
+                        </div>
                         ${portBadge}
                         ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
                     </div>
@@ -5728,11 +5752,11 @@
                 <td></td>
                 <td></td>
                 <td>${updateCell('ap', ap.ip)}</td>
-                <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
+                <td class="device-date">${lastUpdatedCell(ap.last_firmware_update)}</td>
                 <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
                 ` : `
                 <td>${configStatusCell(ap.ip)}</td>
-                <td>${configLastCheckedCell(ap.ip)}</td>
+                <td class="device-date">${configLastCheckedCell(ap.ip)}</td>
                 <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
                 `}
             </tr>`;
@@ -5766,7 +5790,7 @@
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
                             <span class="expand-toggle hidden">&#9654;</span>
                             <span class="device-icon cpe ${health}"></span>
-                            ${deviceNameHtml(cpeIp, cpeName)}
+                            <div class="device-name-group">${deviceNameHtml(cpeIp, cpeName)}</div>
                             ${(cpe.auth_status && cpe.auth_status !== 'ok' && cpe.auth_status !== 'unreachable') ? `<span class="cpe-auth-badge" title="Can't sign in — this client uses different credentials than its AP.">Can't sign in</span>` : ''}
                         </div>
                     </td>
@@ -5776,11 +5800,11 @@
                     <td class="${signalClass} cpe-sig-cell" data-cpe-ip="${cpe.ip}">${signalVal != null ? signalVal.toFixed(0) + ' dBm' : ''}${signalMarginHtml}</td>
                     <td>${formatDistance(cpe.link_distance)}</td>
                     <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
-                    <td></td>
+                    <td class="device-date"></td>
                     <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
                     ` : `
                     <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
-                    <td>${cpeIp ? configLastCheckedCell(cpeIp) : ''}</td>
+                    <td class="device-date">${cpeIp ? configLastCheckedCell(cpeIp) : ''}</td>
                     <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
                     `}
                 </tr>`;
@@ -5853,11 +5877,11 @@
         // data-ip is kept either way so right-click "copy IP" still works.
         function deviceNameHtml(ip, name) {
             const safe = escapeHtml(name);
-            if (!ip) return safe;
+            if (!ip) return `<span class="device-name" tabindex="0">${safe}</span>`;
             if (currentUserRole === 'viewer') {
-                return `<span class="name-static" data-ip="${ip}">${safe}</span>`;
+                return `<span class="name-static device-name" tabindex="0" data-ip="${ip}">${safe}</span>`;
             }
-            return `<a href="/api/device-portal/${ip}" target="_blank" class="name-link" data-ip="${ip}" onclick="event.stopPropagation();">${safe}</a>`;
+            return `<a href="/api/device-portal/${ip}" target="_blank" class="name-link device-name" data-ip="${ip}" onclick="event.stopPropagation();">${safe}</a>`;
         }
 
         function renderTableHeader() {
@@ -5871,14 +5895,14 @@
                     <th data-sort="signal" data-filterable="signal" onclick="handleHeaderClick('signal',this,event)">Signal <span class="sort-arrow"></span></th>
                     <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
                     <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
-                    <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
+                    <th class="device-date" data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
                     <th>Actions</th>`;
             } else {
                 thead.innerHTML = `
                     <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
                     <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
                     <th>Config Status</th>
-                    <th>Last Checked</th>
+                    <th class="device-date">Last Checked</th>
                     <th>Actions</th>`;
             }
         }
@@ -5960,8 +5984,8 @@
                 if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
                 const siteEmptyTds = activeColumnMode === 'firmware'
-                    ? `<td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td></td>`
-                    : `<td></td><td></td><td></td>`;
+                    ? `<td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td class="device-date"></td>`
+                    : `<td></td><td></td><td class="device-date"></td>`;
                 const siteActions = activeColumnMode === 'firmware'
                     ? `${actionsCell('site', site.id, site.name)}${site.id !== null && aps.length === 0 && switches.length === 0 ? deleteActionLink('site', site.id) : ''}`
                     : '';
@@ -5971,7 +5995,7 @@
                             <input type="checkbox" data-check-site="${site.id}" onclick="toggleCheckSite(${site.id !== null ? site.id : 'null'},event);event.stopPropagation();">
                             <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleExpand('${siteKey}',event)">&#9654;</span>
                             <span class="device-icon site">T</span>
-                            ${escapeHtml(site.name)}
+                            <div class="device-name-group">${deviceNameHtml('', site.name)}</div>
                             <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
                     </td>
@@ -6029,10 +6053,10 @@
                                 <input type="checkbox" ${checkedDevices.has(sw.ip) ? 'checked' : ''} onclick="toggleCheck('${sw.ip}',event);event.stopPropagation();">
                                 <span class="expand-toggle ${hasChildren ? (swExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${swKey}',event)">&#9654;</span>
                                 ${swHealthDot}<span class="device-icon ap">SW</span>
-                                <span>
-                                ${deviceNameHtml(sw.ip, swName)}
-                                ${sw.notes ? `<div style="font-size:10px;color:var(--state-neutral-text);margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
-                                </span>
+                                <div class="device-name-group">
+                                    ${deviceNameHtml(sw.ip, swName)}
+                                    ${sw.notes ? `<div class="device-notes" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
+                                </div>
                             </div>
                         </td>
                         <td>${sw.model || ''}</td>
@@ -6041,11 +6065,11 @@
                         <td></td>
                         <td></td>
                         <td>${updateCell('switch', sw.ip)}</td>
-                        <td>${lastUpdatedCell(sw.last_firmware_update)}</td>
+                        <td class="device-date">${lastUpdatedCell(sw.last_firmware_update)}</td>
                         <td><div class="actions-cell">${actionsCell('switch', sw.ip, swName)}</div></td>
                         ` : `
                         <td>${configStatusCell(sw.ip)}</td>
-                        <td>${configLastCheckedCell(sw.ip)}</td>
+                        <td class="device-date">${configLastCheckedCell(sw.ip)}</td>
                         <td><div class="actions-cell">${configActionsCell(sw.ip)}</div></td>
                         `}
                     </tr>`;

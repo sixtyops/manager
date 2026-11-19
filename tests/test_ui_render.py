@@ -50,7 +50,45 @@ def test_device_table_keeps_values_on_one_line_and_scrolls_horizontally():
     assert '<div class="u-overflow-x-auto" id="deviceTableScroll">' in html
     assert "#deviceTable th,\n        #deviceTable td {\n            white-space: nowrap;" in html
     assert "#deviceTableScroll {\n            min-width: 0;\n            overflow-x: auto;" in html
-    assert "#deviceTable .name-cell > span {\n            min-width: 0;\n            overflow: hidden;\n            text-overflow: ellipsis;" in html
+    assert re.search(r"\.tree-table\s*\{\s*width: 100%;", html)
+    assert re.search(r"#deviceTable th:first-child\s*\{\s*width: 100%;", html)
+    assert re.search(r"\.device-name-group\s*\{[^}]*contain: inline-size;", html)
+
+
+@pytest.mark.parametrize("name_call", [
+    "deviceNameHtml(ap.ip, apName)",
+    "deviceNameHtml(sw.ip, swName)",
+    "deviceNameHtml('', site.name)",
+    "deviceNameHtml(cpeIp, cpeName)",
+])
+def test_device_rows_put_names_in_shrinking_group(name_call):
+    html = (ROOT / "updater/templates/monitor.html").read_text(encoding="utf-8")
+    assert re.search(
+        r'<div class="device-name-group">\s*\$\{' + re.escape(name_call) + r"\}",
+        html,
+    )
+
+
+def test_device_name_shows_full_text_on_keyboard_focus():
+    html = (ROOT / "updater/templates/monitor.html").read_text(encoding="utf-8")
+    assert re.search(r"\.device-name\s*\{[^}]*text-overflow: ellipsis;", html)
+    focus = re.search(r"\.device-name:focus\s*\{([^}]*)\}", html).group(1)
+    assert "overflow: visible;" in focus
+    assert "white-space: normal;" in focus
+    assert "overflow-wrap: anywhere;" in focus
+    assert '<span class="device-name" tabindex="0">${safe}</span>' in html
+    assert '<span class="name-static device-name" tabindex="0" data-ip="${ip}">${safe}</span>' in html
+    assert '<a href="/api/device-portal/${ip}" target="_blank" class="name-link device-name"' in html
+
+
+@pytest.mark.parametrize(("width", "class_name"), [(80, "device-notes"), (75, "device-date")])
+def test_device_table_hides_secondary_values_at_narrow_widths(width, class_name):
+    html = (ROOT / "updater/templates/monitor.html").read_text(encoding="utf-8")
+    assert re.search(
+        rf"@media \(max-width: {width}rem\)\s*\{{\s*"
+        rf"#deviceTable \.{class_name}\s*\{{\s*display: none;",
+        html,
+    )
 
 
 def test_monitor_weather_and_bank_labels_match_behavior(authed_client):
