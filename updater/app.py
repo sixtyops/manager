@@ -3892,7 +3892,9 @@ async def resolve_firmware_window_stop_api(
         # Manual work outside a configured window uses one stop identity per
         # local day. Resolve it only after that day has ended.
         stopped_day = _firmware_window_key_start_date(stopped_key, "manual")
-        current_manual_day = _manual_firmware_window_key()
+        current_manual_day = _manual_firmware_window_key(
+            settings=await _resolved_firmware_window_settings()
+        )
         current_day = _firmware_window_key_start_date(current_manual_day, "manual")
         if stopped_day is None or current_day is None or current_day <= stopped_day:
             raise HTTPException(409, "This local-day window is stopped. Resolve it on a later day.")
@@ -4204,10 +4206,46 @@ def _check_firmware_window_admission(window_key):
         raise HTTPException(409, f"Firmware writes need a failure resolution before another window: {stop['device_ip']} ({stop['reason']})")
 
 
-def _manual_firmware_window_key(now: datetime | None = None):
-    """Give manual writes a shared durable identity for the local calendar day."""
-    now = now or datetime.now().astimezone()
-    return ("manual", now.date().isoformat())
+async def _resolved_firmware_window_settings() -> dict:
+    """Select the scheduler zone before manual admission or stop resolution."""
+    from zoneinfo import ZoneInfo
+
+    settings = db.get_all_settings()
+    zone = settings.get("schedule_timezone") or settings.get("timezone")
+    try:
+        if not zone or zone == "auto":
+            zone = await services.get_timezone()
+        ZoneInfo(zone)
+    except (KeyError, TypeError, ValueError, RuntimeError, OSError):
+        raise HTTPException(409, "Firmware writes need an available schedule timezone.")
+    return {**settings, "schedule_timezone": zone}
+
+
+async def _manual_update_window_key():
+    """Use one resolved zone for configured and manual window identities."""
+    settings = await _resolved_firmware_window_settings()
+    return (rollout_gate.firmware_window_key(settings)
+            or _manual_firmware_window_key(settings=settings))
+
+
+def _manual_firmware_window_key(now: datetime | None = None, *, settings: dict | None = None):
+    """Give manual writes a shared durable identity for the scheduler day."""
+    from zoneinfo import ZoneInfo
+
+    settings = db.get_all_settings() if settings is None else settings
+    zone = settings.get("schedule_timezone") or settings.get("timezone")
+    auto_zone = not zone or zone == "auto"
+    try:
+        if auto_zone:
+            zone = services.get_cached_timezone()
+        schedule_tz = ZoneInfo(zone)
+        if now is None:
+            now = datetime.now(schedule_tz)
+        elif now.tzinfo is None or now.utcoffset() is None:
+            now = now.astimezone() if auto_zone else now.replace(tzinfo=schedule_tz)
+        return ("manual", now.astimezone(schedule_tz).date().isoformat())
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(409, "Firmware writes need an available schedule timezone.")
 
 
 def _firmware_window_key_start_date(window_key, expected_schedule: str) -> date | None:
@@ -5826,7 +5864,7 @@ async def start_update(
     if concurrency < 1 or concurrency > 32:
         raise HTTPException(400, "concurrency must be between 1 and 32")
 
-    window_key = rollout_gate.firmware_window_key(db.get_all_settings()) or _manual_firmware_window_key()
+    window_key = await _manual_update_window_key()
     _check_firmware_window_admission(window_key)
 
     # Guard: prevent concurrent update jobs (check DB for active jobs, which is cleaned up properly)
@@ -6051,7 +6089,7 @@ async def update_single_device_endpoint(
     """Start a firmware update for a single device (AP, CPE, or switch)."""
     if bank_mode not in ("one", "both"):
         raise HTTPException(400, "bank_mode must be 'one' or 'both'")
-    window_key = rollout_gate.firmware_window_key(db.get_all_settings()) or _manual_firmware_window_key()
+    window_key = await _manual_update_window_key()
     # Validate and check firmware file exists
     safe_fw = validate_firmware_filename(firmware_file)
     firmware_path = FIRMWARE_DIR / safe_fw
