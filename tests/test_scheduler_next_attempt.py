@@ -8,6 +8,7 @@ import pytest
 from updater import database as db
 from updater.scheduler import (
     AutoUpdateScheduler,
+    next_window_start_after,
     upcoming_window_starts,
 )
 
@@ -43,6 +44,84 @@ class TestUpcomingWindowStarts:
         now = datetime(2026, 5, 22, 12, 0)  # Friday — next active day is Tuesday
         windows = upcoming_window_starts(now, SCHEDULE_DAYS, START_HOUR, END_HOUR, count=1)
         assert windows == [datetime(2026, 5, 26, 3, 0)]
+
+
+class TestNextWindowAfterExhaustedWindow:
+    def test_skips_later_window_on_same_start_date_and_inactive_days(self):
+        result = next_window_start_after(
+            ("firmware", "2026-05-19"), "tue,thu", 3, 4, "America/Chicago",
+        )
+        assert result.isoformat() == "2026-05-21T03:00:00-05:00"
+
+    def test_uses_schedule_timezone_and_overnight_start_date(self):
+        result = next_window_start_after(
+            ("firmware", "2026-06-01"), "mon", 23, 2, "America/Los_Angeles",
+        )
+        assert result.isoformat() == "2026-06-08T23:00:00-07:00"
+
+    def test_dst_uses_zone_rules_for_next_enabled_start(self):
+        result = next_window_start_after(
+            ("firmware", "2026-03-01"), "sun", 3, 4, "America/Chicago",
+        )
+        assert result.isoformat() == "2026-03-08T03:00:00-05:00"
+
+    def test_invalid_schedule_has_no_next_start(self):
+        assert next_window_start_after(("firmware", "2026-05-19"), "", 3, 4, "UTC") is None
+
+
+class TestDeferredCompletionReport:
+    def _complete(self, mock_db, *, success, failed=0, deferred, reasons, settings=None):
+        if settings:
+            db.set_settings(settings)
+        scheduler = _make_scheduler()
+        scheduler._queue_job_context["job-1"] = {
+            "window_key": ("firmware", "2026-05-19"), "entries": [],
+            "timezone": "America/Chicago",
+        }
+        def discard_task(coro):
+            coro.close()
+            return type("CompletedTask", (), {"add_done_callback": lambda self, callback: None})()
+
+        with patch("updater.scheduler.asyncio.create_task", side_effect=discard_task):
+            scheduler.on_job_completed(
+                "job-1", success, failed, deferred_count=deferred,
+                deferral_reasons=reasons,
+                device_statuses={"192.0.2.1": "failed"} if failed else {},
+            )
+        return scheduler
+
+    def test_all_deferred_report_is_visible_in_both_status_fields(self, mock_db):
+        scheduler = self._complete(
+            mock_db, success=0, deferred=2,
+            reasons={"192.0.2.1": "cutoff_reached", "192.0.2.2": "cutoff_reached"},
+            settings={"schedule_days": "tue", "schedule_start_hour": "3", "schedule_end_hour": "4"},
+        )
+        assert scheduler._block_reason == scheduler._last_run_result
+        assert scheduler._last_run_result.startswith("No devices updated. All 2 devices deferred:")
+        assert "Changing window hours does not reset it." in scheduler._last_run_result
+        assert "Next scheduled window: 26 May 2026, 03:00 America/Chicago." in scheduler._last_run_result
+
+    def test_mixed_and_timing_unavailable_reports(self, mock_db):
+        mixed = self._complete(
+            mock_db, success=1, deferred=2,
+            reasons={"192.0.2.1": "window_closed"},
+            settings={"schedule_days": "tue", "schedule_start_hour": "3", "schedule_end_hour": "4"},
+        )
+        assert mixed._last_run_result.startswith("1 device updated. 2 devices deferred:")
+        timing = self._complete(
+            mock_db, success=0, deferred=1,
+            reasons={"192.0.2.1": "timing_unavailable"},
+            settings={"schedule_days": "", "schedule_start_hour": "3", "schedule_end_hour": "4"},
+        )
+        assert "Firmware window timing is unavailable. Scheduled writes remain blocked." in timing._last_run_result
+        assert "Next scheduled window: unavailable." in timing._last_run_result
+
+    def test_failure_keeps_priority_over_deferral(self, mock_db):
+        scheduler = self._complete(
+            mock_db, success=0, failed=1, deferred=1,
+            reasons={"192.0.2.1": "cutoff_reached"},
+        )
+        assert scheduler._last_run_result.startswith("Firmware queue stopped:")
 
     def test_empty_when_no_schedule_days(self):
         now = datetime(2026, 5, 19, 12, 0)

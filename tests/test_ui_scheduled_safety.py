@@ -12,6 +12,14 @@ import pytest
 TEMPLATE = Path(__file__).resolve().parents[1] / "updater/templates/monitor.html"
 
 
+def test_job_history_renders_full_deferral_message_as_text():
+    html = TEMPLATE.read_text()
+    assert 'class="u-history-deferral"' in html
+    assert "savedDevice.deferral_message || d.deferral_message" in html
+    assert "escapeHtml(deferralMessage)" in html
+    assert "title=\"${escapeHtml(deferralMessage)}\"" not in html
+
+
 @pytest.mark.parametrize("state", ["disabled", "blocked_safety"])
 def test_schedule_stop_reason_is_visible_and_clears(state):
     node = shutil.which("node")
