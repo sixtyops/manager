@@ -1523,6 +1523,10 @@
             user-select: none;
             touch-action: pan-x;
         }
+        .drawer-handle:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: -2px;
+        }
         .drawer-handle-half {
             display: none;
             align-items: center;
@@ -2081,6 +2085,16 @@
             background: var(--info-bg-subtle);
             border-left-color: var(--info-strong);
         }
+        #drawerSaveStatus { white-space: normal; }
+        #firmwareStopDialog {
+            max-width: min(32rem, 90vw);
+            background: var(--bg-card);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: var(--space-6);
+        }
+        #firmwareStopResolution { display: block; width: 100%; }
         @media (max-width: 768px) {
             .bar-save-cluster { flex-basis: 100%; flex-wrap: wrap; order: 2; }
             .bar-save-cluster .btn { min-height: 44px; }
@@ -2203,7 +2217,8 @@
         .status-bar-queue-item {
             color: var(--text-muted);
             font-size: var(--text-sm);
-            white-space: nowrap;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
 
         /* Pause reason gets its own row so queue facts stay scannable. */
@@ -2938,6 +2953,18 @@
 
     </div>
 
+    <dialog id="firmwareStopDialog" aria-labelledby="firmwareStopTitle">
+        <form onsubmit="resolveFirmwareStop(event)">
+            <h2 id="firmwareStopTitle">Resolve firmware stop</h2>
+            <p id="firmwareStopDialogDetail"></p>
+            <label for="firmwareStopResolution">How did you resolve the device failure?</label>
+            <textarea id="firmwareStopResolution" name="resolution" required></textarea>
+            <p id="firmwareStopError" role="alert"></p>
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Record resolution</button>
+        </form>
+    </dialog>
+
     <!-- Bottom Drawer -->
     <div class="bottom-drawer" id="bottomDrawer">
         <!-- Mode tabs above the bar -->
@@ -2969,6 +2996,10 @@
                 </div>
                 <span id="drawerSavedIndicator" class="hidden u-saved-indicator u-transition-opacity" role="status">✓ Saved</span>
                 <div class="status-bar-notice hidden" id="barNotice" role="status"></div>
+                <div class="status-bar-notice hidden" id="barStopNotice">
+                    <span id="barStopDetail" role="status"></span>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="openFirmwareStopResolution()">Resolve stop</button>
+                </div>
             </div>
             <!-- Config bar (shown when config mode active) -->
             <div class="drawer-handle-half" id="drawerHandleRight">
@@ -8891,6 +8922,79 @@
 
         // ── Status Bar ──
 
+        let firmwareStopsLoading = null;
+        let firmwareStop = null;
+
+        function firmwareStopDetail(stop) {
+            let earliestDay = '';
+            try {
+                const [kind, day] = JSON.parse(stop.window_key);
+                const date = new Date(day + 'T00:00:00Z');
+                if (['manual', 'firmware'].includes(kind) && date.toISOString().slice(0, 10) === day) {
+                    date.setUTCDate(date.getUTCDate() + 1);
+                    earliestDay = date.toISOString().slice(0, 10);
+                }
+            } catch (e) {}
+            const when = earliestDay
+                ? `The earliest resolution day is ${earliestDay} in the schedule time zone. Resolve the stop after the stopped window ends.`
+                : 'Resolve the stop after the stopped window ends.';
+            return `Firmware updates stopped at ${stop.device_ip}. ${stop.reason} Device monitoring continues. ${when}`;
+        }
+
+        async function refreshFirmwareStop() {
+            if (firmwareStopsLoading) return firmwareStopsLoading;
+            firmwareStopsLoading = fetch('/api/firmware-window-stops')
+                .then(async resp => {
+                    if (resp.status === 403) firmwareStop = null;
+                    else if (resp.ok) firmwareStop = (await resp.json())[0] || null;
+                })
+                .catch(() => {});
+            await firmwareStopsLoading;
+            firmwareStopsLoading = null;
+            const notice = document.getElementById('barStopNotice');
+            const show = Boolean(firmwareStop);
+            document.getElementById('barStopDetail').textContent = show ? firmwareStopDetail(firmwareStop) : '';
+            setHidden(notice, !show);
+            syncDrawerPadding();
+        }
+
+        function openFirmwareStopResolution() {
+            if (!firmwareStop) return;
+            const dialog = document.getElementById('firmwareStopDialog');
+            dialog.dataset.stopId = firmwareStop.id;
+            document.getElementById('firmwareStopDialogDetail').textContent = firmwareStopDetail(firmwareStop);
+            document.getElementById('firmwareStopResolution').value = '';
+            document.getElementById('firmwareStopError').textContent = '';
+            dialog.showModal();
+        }
+
+        async function resolveFirmwareStop(event) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const dialog = form.closest('dialog');
+            const submit = form.querySelector('button[type="submit"]');
+            const error = document.getElementById('firmwareStopError');
+            submit.disabled = true;
+            error.textContent = '';
+            try {
+                const resp = await fetch(`/api/firmware-window-stops/${dialog.dataset.stopId}/resolve`, {
+                    method: 'POST',
+                    body: new FormData(form),
+                });
+                if (!resp.ok) {
+                    error.textContent = await readSaveError(resp, 'Could not record the stop resolution. Try again.');
+                    return;
+                }
+                dialog.close();
+                await firmwareStopsLoading;
+                await refreshFirmwareStop();
+            } catch (e) {
+                error.textContent = 'Could not record the stop resolution. Try again.';
+            } finally {
+                submit.disabled = false;
+            }
+        }
+
         function updateSchedulerUI(status) {
             lastSchedulerStatus = status;
             const state = status.state || 'disabled';
@@ -8900,6 +9004,7 @@
             const badge = document.getElementById('barStateBadge');
             const reason = document.getElementById('barNotice');
             if (!badge) return;
+            refreshFirmwareStop();
 
             // Re-render table if auto-update state changed (affects status/actions columns)
             if (wasEnabled !== autoUpdateEnabled && topology) renderTable();
@@ -8964,7 +9069,9 @@
                 frozen:              { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
-            const view = PUBLIC[state] || { label: state.replace(/_/g, ' '), cls: 'idle', icon: SCHEDULED_ICON };
+            const rawReason = status.safety_block_reason || status.block_reason || status.rollout?.pause_reason || '';
+            const cutoff = state !== 'running' && /admission cutoff|maintenance window ended or is ending|too close to maintenance window end/i.test(rawReason);
+            const view = (cutoff ? PUBLIC.blocked_time : PUBLIC[state]) || { label: state.replace(/_/g, ' '), cls: 'idle', icon: SCHEDULED_ICON };
 
             // Trust the device count: nothing behind == "Up to date" even when
             // the scheduler hasn't formally landed in blocked_all_current
@@ -8977,7 +9084,7 @@
             // unknown) and must NOT be silently flipped to "Up to date".
             const OVERRIDE_STATES = { idle: true, waiting: true };
             const effectiveAllCurrent =
-                OVERRIDE_STATES[state] === true &&
+                !cutoff && OVERRIDE_STATES[state] === true &&
                 lastFleetTotal > 0 &&
                 lastBehindCount === 0;
             if (effectiveAllCurrent) {
@@ -8990,22 +9097,42 @@
             badge.classList.add(view.cls);
 
             const paused = view.label === 'Paused' || view.label === 'Firmware hold';
-            const rawReason = status.safety_block_reason || status.block_reason || status.rollout?.pause_reason || '';
+            const nextWindow = status.rollout?.next_window || status.next_window_iso || status.next_window;
             let subtitle = '';
             if (paused) {
                 const states = {
                     blocked_safety: 'Scheduled updates are paused.',
                     blocked_weather: 'Scheduled updates are paused for weather.',
-                    blocked_time: 'Scheduled updates are paused outside the maintenance window.',
+                    blocked_time: 'Scheduled updates are paused because the clock check failed.',
                     blocked_firmware_hold: 'Firmware Hold delays scheduled updates.',
                     frozen: 'Scheduled updates are paused during a freeze.',
                     blocked_no_firmware: 'No firmware is selected for scheduled updates.',
                 };
-                subtitle = [states[state] || 'Scheduled updates are paused.', rawReason,
+                let action = '';
+                if (cutoff) {
+                    action = nextWindow
+                        ? `The next maintenance window starts ${formatWhen(nextWindow) || nextWindow}.`
+                        : 'Set the next maintenance window in the Updates drawer.';
+                } else if (state === 'blocked_weather') {
+                    action = 'The scheduler retries at the next check.';
+                } else if (state === 'blocked_firmware_hold') {
+                    const holds = Object.entries(status.firmware_hold?.families || {})
+                        .filter(([, hold]) => hold.held && hold.clears_at);
+                    const dates = holds.map(([family, hold]) =>
+                        `Firmware Hold for ${family} clears on ${hold.clears_at.slice(0, 10)}.`);
+                    action = [...dates, 'A confirmed device can clear Firmware Hold early.'].join(' ');
+                } else if (state === 'blocked_no_firmware') {
+                    action = 'Select firmware in the Updates drawer.';
+                }
+                subtitle = [
+                    cutoff ? 'Scheduled updates are paused at the window cutoff.' : states[state],
+                    rawReason,
                     weatherNotice && weatherNotice !== rawReason ? weatherNotice : '',
-                    'Manual updates still work.',
-                    state === 'blocked_no_firmware' ? 'Select firmware in the Updates drawer.' : '',
+                    'Device monitoring continues.',
+                    action,
                 ].filter(Boolean).join(' ');
+            } else if (weatherNotice) {
+                subtitle = `${weatherNotice} Device monitoring continues. The scheduler retries at the next check.`;
             }
             if (status.hold_clear_reason) subtitle = [subtitle, status.hold_clear_reason].filter(Boolean).join(' ');
             reason.textContent = subtitle ? (state === 'blocked_firmware_hold' || status.hold_clear_reason ? '◷ ' : 'Ⅱ ') + subtitle : '';
@@ -9027,12 +9154,12 @@
                 renderQueueStatus(null);
             } else if (status.rollout) {
                 setHidden(rolloutSection, false);
-                renderQueueStatus({...status.rollout, next_window: status.rollout.next_window || status.next_window_iso || status.next_window}, reason.textContent);
+                renderQueueStatus({...status.rollout, next_window: cutoff ? null : nextWindow}, reason.textContent);
             } else {
                 setHidden(rolloutSection, false);
                 renderQueueStatus({
                     remaining_devices: lastBehindCount,
-                    next_window: status.next_window_iso || status.next_window,
+                    next_window: cutoff ? null : nextWindow,
                     pause_reason: status.block_reason,
                 }, reason.textContent);
             }
@@ -9125,9 +9252,12 @@
         function handleTabClick(mode) {
             const drawer = document.getElementById('bottomDrawer');
             if (activeColumnMode === mode) {
-                // Same tab — toggle drawer open/close
-                drawer.classList.toggle('open');
-                if (drawer.classList.contains('open') && mode === 'firmware') loadDrawerSettings();
+                if (drawer.classList.contains('open')) {
+                    requestDrawerClose();
+                } else {
+                    drawer.classList.add('open');
+                    if (mode === 'firmware') loadDrawerSettings();
+                }
             } else {
                 // Different tab — switch mode, open drawer
                 switchColumnMode(mode);
@@ -9197,7 +9327,7 @@
                         // transition and the panel animates shut. Keep the saved
                         // height (don't persist the tiny drag height) so reopening
                         // restores the previous size.
-                        drawer.classList.remove('open');
+                        requestDrawerClose();
                         panel.classList.remove('dragging');
                         handleEl.classList.remove('dragging');
                         if (prevVar) drawer.style.setProperty('--drawer-panel-height', prevVar);
@@ -9597,41 +9727,54 @@
 
         // ── Drawer ──
 
-        function toggleDrawer(event) {
-            if (drawerDragJustEnded) { drawerDragJustEnded = false; return; }
-            // Don't toggle if clicking interactive controls
-            if (event.target.closest('.toggle, .btn, .status-bar-actions, .bar-save-cluster, input')) return;
+        function requestDrawerClose() {
+            if (drawerDirty) {
+                drawerCloseRequested = true;
+                if (activeColumnMode !== 'firmware') switchColumnMode('firmware');
+                document.getElementById('drawerSaveStatus').textContent = 'Save or discard your changes before closing.';
+                const save = document.getElementById('drawerSaveBtn');
+                (save.disabled ? document.getElementById('drawerHandle') : save).focus();
+                syncDrawerPadding();
+                return;
+            }
             const drawer = document.getElementById('bottomDrawer');
-            const opening = !drawer.classList.contains('open');
-            drawer.classList.toggle('open');
-            if (opening && activeColumnMode === 'firmware') loadDrawerSettings();
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-                }, 320);
-            });
+            drawer.classList.remove('open');
+            setTimeout(syncDrawerPadding, 320);
         }
 
-        // Collapse drawer when clicking outside it
+        function toggleDrawer(event) {
+            if (drawerDragJustEnded) { drawerDragJustEnded = false; return; }
+            if (event.target.closest('.toggle, .btn, .status-bar-actions, .bar-save-cluster, input, select, a')) return;
+            const drawer = document.getElementById('bottomDrawer');
+            if (drawer.classList.contains('open')) {
+                requestDrawerClose();
+                return;
+            }
+            drawer.classList.add('open');
+            if (activeColumnMode === 'firmware') loadDrawerSettings();
+            setTimeout(syncDrawerPadding, 320);
+        }
+
         document.addEventListener('click', function(e) {
             const drawer = document.getElementById('bottomDrawer');
             if (!drawer || !drawer.classList.contains('open')) return;
-            if (e.composedPath().includes(drawer) || drawerDirty) return;
-            drawer.classList.remove('open');
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-                }, 320);
-            });
+            if (e.composedPath().includes(drawer) || e.composedPath().includes(document.getElementById('firmwareStopDialog'))) return;
+            requestDrawerClose();
         });
 
         document.addEventListener('keydown', function(e) {
+            const handle = document.getElementById('drawerHandle');
+            if (e.target === handle && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault();
+                toggleDrawer(e);
+                return;
+            }
             const drawer = document.getElementById('bottomDrawer');
-            if (e.key !== 'Escape' || drawerDirty || !drawer.classList.contains('open')) return;
-            if (!e.composedPath().includes(drawer)) return;
-            drawer.classList.remove('open');
-            document.getElementById('drawerHandle').focus();
-            setTimeout(syncDrawerPadding, 320);
+            if (e.key !== 'Escape' || !drawer.classList.contains('open')) return;
+            if (document.getElementById('firmwareStopDialog').open) return;
+            if (!e.composedPath().includes(drawer) && !drawerDirty) return;
+            if (!drawerDirty) handle.focus();
+            requestDrawerClose();
         });
 
         let drawerSettingsLoaded = false;
@@ -9648,7 +9791,7 @@
 
 
         async function loadDrawerSettings() {
-            if (drawerSettingsLoaded) return;
+            if (drawerSettingsLoaded) return true;
             try {
                 await ensureDrawerTopologyLoaded();
                 const resp = await fetch('/api/settings');
@@ -9699,11 +9842,13 @@
 
                 drawerSettingsLoaded = true;
             } catch (e) {}
-            loadDrawerFirmware();
+            const firmwareLoaded = await loadDrawerFirmware();
+            return drawerSettingsLoaded && firmwareLoaded;
         }
 
         // ── Dirty state tracking ──
         let drawerDirty = false;
+        let drawerCloseRequested = false;
 
         function markDrawerDirty() {
             drawerDirty = true;
@@ -9711,7 +9856,7 @@
             setHidden(document.getElementById('barSaveCluster'), false);
             setHidden(document.getElementById('drawerSavedIndicator'), true);
             const status = document.getElementById('drawerSaveStatus');
-            status.textContent = '✎ Unsaved changes';
+            status.textContent = drawerCloseRequested ? 'Save or discard your changes before closing.' : '✎ Unsaved changes';
             status.className = 'status-bar-badge waiting';
             syncDrawerPadding();
         }
@@ -9720,13 +9865,30 @@
             drawerDirty = false;
             document.getElementById('drawerSaveBtn').disabled = true;
             setHidden(document.getElementById('barSaveCluster'), true);
+            if (drawerCloseRequested) {
+                drawerCloseRequested = false;
+                requestDrawerClose();
+                document.getElementById('drawerHandle').focus();
+            }
             syncDrawerPadding();
         }
 
         async function discardDrawerSettings() {
+            const save = document.getElementById('drawerSaveBtn');
+            const discard = document.getElementById('drawerDiscardBtn');
+            const panel = document.getElementById('drawerPanel');
+            save.disabled = discard.disabled = panel.inert = true;
             drawerSettingsLoaded = false;
-            await loadDrawerSettings();
-            if (drawerSettingsLoaded) clearDrawerDirty();
+            try {
+                if (await loadDrawerSettings()) {
+                    clearDrawerDirty();
+                } else {
+                    document.getElementById('drawerSaveStatus').textContent = 'Could not reload saved settings. Try Discard again.';
+                }
+            } finally {
+                save.disabled = !drawerDirty;
+                discard.disabled = panel.inert = false;
+            }
         }
 
         let savedIndicatorTimeout = null;
@@ -9795,6 +9957,8 @@
         async function saveDrawerSettings() {
             const btn = document.getElementById('drawerSaveBtn');
             const status = document.getElementById('drawerSaveStatus');
+            const panel = document.getElementById('drawerPanel');
+            panel.inert = true;
 
             if (btn) {
                 btn.disabled = true;
@@ -9845,11 +10009,12 @@
                 loadDrawerFirmware();
                 loadFleetStatus();
             } catch (e) {
-                if (status) { status.textContent = '✕ Not saved. Try again.'; status.className = 'status-bar-badge blocked'; }
+                if (status) { status.textContent = drawerCloseRequested ? 'Could not save changes. Try Save again or select Discard.' : '✕ Not saved. Try again.'; status.className = 'status-bar-badge blocked'; }
                 if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save changes'; }
             } finally {
                 if (btn) btn.removeAttribute('aria-busy');
                 document.getElementById('drawerDiscardBtn').disabled = false;
+                panel.inert = false;
             }
         }
 
@@ -9917,6 +10082,7 @@
                     fetch('/api/firmware-files'),
                     fetch('/api/settings'),
                 ]);
+                if (!fwResp.ok || !settResp.ok) return false;
                 const fwData = await fwResp.json();
                 const settData = await settResp.json();
                 drawerFwFiles = fwData.files || [];
@@ -9947,7 +10113,7 @@
                 // Leave drawerFwLoaded as-is so the panel stays on "Loading…" instead
                 // of a misleading empty state; existing triggers (drawer open, save,
                 // upload, Check Now) re-run this and self-heal.
-                return;
+                return false;
             }
             // Phase 2 — vendor firmware-type labels (cosmetic; renderDrawerFirmware
             // falls back to the built-in 30x/303L/TNS100 labels until these arrive).
@@ -9962,6 +10128,7 @@
                 }
                 renderDrawerFirmware();
             } catch (e) {}
+            return true;
         }
 
         function renderDrawerFirmware() {
@@ -10131,6 +10298,10 @@
         }
 
         async function triggerDrawerFwFetch() {
+            if (drawerCloseRequested) {
+                requestDrawerClose();
+                return;
+            }
             if (drawerDirty) await saveDrawerSettings();
             const el = document.getElementById('drawerFwLastCheck');
             if (el) el.textContent = 'Checking\u2026';

@@ -69,7 +69,7 @@ def test_monitor_uses_serial_queue_labels_without_wave_controls():
     assert 'id="barQueueNextWindow"' in template
     assert 'id="barQueueReason"' in template
     assert "renderQueueStatus({...status.rollout," in template
-    assert "status.rollout.next_window || status.next_window_iso || status.next_window" in template
+    assert "status.rollout?.next_window || status.next_window_iso || status.next_window" in template
     assert "barPhaseIndicator" not in template
     assert "barResumeBtn" not in template
     assert "barCancelBtn" not in template

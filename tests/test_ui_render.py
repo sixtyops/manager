@@ -93,6 +93,7 @@ def test_updates_bar_has_one_save_cluster_and_full_notice(authed_client):
     assert 'class="bar-save-cluster hidden"' in html
     assert 'aria-describedby="barNotice"' in html
     assert 'id="barNotice" role="status"' in html
+    assert 'onclick="openFirmwareStopResolution()">Resolve stop</button>' in html
     for removed in ('drawerSaveRow', 'drawerUnsavedDot', 'barBlockReason', 'barDeviceCountSection', 'barBehindCount'):
         assert f'id="{removed}"' not in html
     for element in ('barQueueRemaining', 'barQueueNextWindow'):
