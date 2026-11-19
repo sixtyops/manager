@@ -43,6 +43,93 @@ def test_persisted_cutoff_denies_at_equality(mock_db):
     )
 
 
+def test_write_gate_records_expired_cutoff_reason_and_pending_status(mock_db, monkeypatch):
+    job = _timed_job()
+    ip = "192.0.2.1"
+    monkeypatch.setattr(
+        app_module.rollout_gate, "current_scheduled_admission_decision",
+        lambda: (True, ""),
+    )
+
+    allowed, message = app_module._firmware_write_gate(job, ip)
+
+    assert not allowed
+    assert job.devices[ip].status == "pending"
+    assert job.devices[ip].deferral_reason == "cutoff_reached"
+    assert job.devices[ip].deferral_message == message
+    assert job._deferred_admission_ips == {ip}
+
+
+def test_later_same_day_window_defers_every_device_after_cutoff(mock_db, monkeypatch):
+    first, second = "192.0.2.1", "192.0.2.2"
+    job = _timed_job(first)
+    job.devices[second] = app_module.DeviceStatus(ip=second, model="TNA-301")
+    job.device_firmware_map[second] = TARGET
+    job.device_order.append(second)
+    job.device_roles[second] = "ap"
+    job.window_key = WINDOW
+    monkeypatch.setattr(
+        app_module.rollout_gate, "current_scheduled_admission_decision",
+        lambda: (True, ""),
+    )
+
+    for ip in job.device_order:
+        assert not app_module._firmware_write_gate(job, ip)[0]
+
+    assert job._deferred_admission_ips == {first, second}
+    assert all(job.devices[ip].status == "pending" for ip in job.device_order)
+    assert all(job.devices[ip].deferral_reason == "cutoff_reached" for ip in job.device_order)
+
+
+@pytest.mark.parametrize("timing", ["missing", "mismatched"])
+def test_write_gate_records_unavailable_timing(mock_db, monkeypatch, timing):
+    job = _timed_job()
+    ip = "192.0.2.1"
+    with db.get_db() as conn:
+        if timing == "mismatched":
+            conn.execute(
+                "UPDATE firmware_window_timing SET last_window_key = ?",
+                ('[1,"2026-11-04"]',),
+            )
+        else:
+            conn.execute("DELETE FROM firmware_window_timing")
+    monkeypatch.setattr(
+        app_module.rollout_gate, "current_scheduled_admission_decision",
+        lambda: (True, ""),
+    )
+
+    allowed, _ = app_module._firmware_write_gate(job, ip)
+
+    assert not allowed
+    assert job.devices[ip].status == "pending"
+    assert job.devices[ip].deferral_reason == "timing_unavailable"
+
+
+def test_write_gate_records_closed_window(mock_db, monkeypatch):
+    ip = "192.0.2.1"
+    job = app_module.UpdateJob(
+        job_id="window-closed", device_order=[ip], devices={ip: app_module.DeviceStatus(ip=ip)},
+        is_scheduled=True, enforce_window_cutoff=True, window_key=(1, "2026-11-03"),
+        start_hour=1, end_hour=5, schedule_timezone="UTC", schedule_days=["tue"],
+    )
+    monkeypatch.setattr(
+        app_module.rollout_gate, "current_scheduled_admission_decision",
+        lambda: (True, ""),
+    )
+    monkeypatch.setattr(app_module, "_firmware_deadline_admits", lambda *_a: True)
+    monkeypatch.setattr(
+        app_module.rollout_gate, "firmware_window_key", lambda *_a: (1, "2026-11-04"),
+    )
+    monkeypatch.setattr(app_module, "_minutes_until_window_end", lambda *_a: 30)
+
+    allowed, _ = app_module._firmware_write_gate(job, ip)
+
+    assert not allowed
+    assert job.devices[ip].status == "pending"
+    assert job.devices[ip].deferral_reason == "window_closed"
+    assert job._deferred_admission_ips == {ip}
+
+
 @pytest.mark.asyncio
 async def test_slow_preparation_rechecks_cutoff_before_first_action(mock_db, monkeypatch, tmp_path):
     firmware = tmp_path / TARGET

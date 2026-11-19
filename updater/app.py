@@ -4137,6 +4137,8 @@ class DeviceStatus:
     new_version: Optional[str] = None
     error: Optional[str] = None
     progress_message: str = ""
+    deferral_reason: Optional[str] = None
+    deferral_message: Optional[str] = None
     bank1_version: Optional[str] = None
     bank2_version: Optional[str] = None
     active_bank: Optional[int] = None
@@ -4880,6 +4882,8 @@ async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
             ip: {
                 "status": ds.status,
                 "message": ds.progress_message,
+                "deferral_reason": ds.deferral_reason,
+                "deferral_message": ds.deferral_message,
                 "old_version": ds.old_version,
                 "new_version": ds.new_version,
                 "error": ds.error,
@@ -6325,11 +6329,18 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
         return True, ""
 
     if not _firmware_deadline_admits(job, ip):
-        reason = "Deferred: firmware admission cutoff reached or unavailable; device will retry next window"
+        reason_code = getattr(job, "_firmware_deadline_reasons", {}).get(ip, "cutoff_reached")
+        messages = {
+            "cutoff_reached": "Deferred: the firmware admission cutoff for this target has passed.",
+            "timing_unavailable": "Deferred: firmware admission timing is missing or invalid.",
+        }
+        reason = messages[reason_code]
         device_status = job.devices[ip]
         device_status.status = "pending"
         device_status.error = None
         device_status.progress_message = reason
+        device_status.deferral_reason = reason_code
+        device_status.deferral_message = reason
         deferred_ips = getattr(job, "_deferred_admission_ips", set())
         deferred_ips.add(ip)
         job._deferred_admission_ips = deferred_ips
@@ -6357,12 +6368,19 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
         minutes_until_end = _minutes_until_window_end(now, job.start_hour, job.end_hour)
         if current_key == job.window_key and minutes_until_end > SCHEDULE_END_BUFFER_MINUTES:
             return True, ""
-        reason = "Deferred: maintenance window ended or is ending; queued device will retry next window"
+        reason = "Deferred: the maintenance window has ended or is ending; device will retry next window."
     except Exception as exc:
-        reason = f"Deferred: maintenance window check failed; queued device will retry next window ({exc})"
+        reason = f"Deferred: maintenance window timing is unavailable ({exc}); device will retry next window."
 
-    job.devices[ip].status = "pending"
-    job.devices[ip].progress_message = reason
+    device_status = job.devices[ip]
+    device_status.status = "pending"
+    device_status.error = None
+    device_status.progress_message = reason
+    device_status.deferral_reason = "window_closed"
+    device_status.deferral_message = reason
+    deferred_ips = getattr(job, "_deferred_admission_ips", set())
+    deferred_ips.add(ip)
+    job._deferred_admission_ips = deferred_ips
     return False, reason
 
 
@@ -6374,7 +6392,11 @@ def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
     """
     if not (job.is_scheduled and job.enforce_window_cutoff and job.device_order):
         return True
+    reasons = getattr(job, "_firmware_deadline_reasons", {})
+    reasons.pop(ip, None)
+    job._firmware_deadline_reasons = reasons
     if not job.window_key:
+        _record_firmware_timing_reason(job, ip, "timing_unavailable")
         return False
 
     try:
@@ -6384,6 +6406,7 @@ def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
         family = _get_firmware_type_for_model(model, job.device_vendor_map.get(ip, "tachyon"))
         target_sha256 = db.get_firmware_sha256(Path(fw_path).name) if fw_path else None
         if not family or not target_sha256:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
         with db.get_db() as conn:
             row = conn.execute(
@@ -6393,16 +6416,29 @@ def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
             ).fetchone()
         expected_key = json.dumps(list(job.window_key), separators=(",", ":"))
         if not row or row["last_window_key"] != expected_key:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
         cutoff = datetime.fromisoformat(row["cutoff_utc"].replace("Z", "+00:00"))
         if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None or now.utcoffset() is None:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
-        return now.astimezone(timezone.utc) < cutoff.astimezone(timezone.utc)
+        admitted = now.astimezone(timezone.utc) < cutoff.astimezone(timezone.utc)
+        if not admitted:
+            _record_firmware_timing_reason(job, ip, "cutoff_reached")
+        return admitted
     except Exception:
+        _record_firmware_timing_reason(job, ip, "timing_unavailable")
         return False
+
+
+def _record_firmware_timing_reason(job: "UpdateJob", ip: str, reason: str) -> None:
+    reasons = getattr(job, "_firmware_deadline_reasons", {})
+    reasons[ip] = reason
+    job._firmware_deadline_reasons = reasons
 
 
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
@@ -7434,6 +7470,11 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         "failed_count": failed_count,
         "skipped_count": skipped_count,
         "cancelled_count": cancelled_count,
+        "deferred_count": len(getattr(job, "_deferred_admission_ips", set())),
+        "deferral_reasons": {
+            ip: ds.deferral_reason for ip, ds in job.devices.items()
+            if ds.deferral_reason
+        },
         "duration": (job.completed_at - job.started_at).total_seconds(),
         "timezone": resolved_tz,
         "devices": {
@@ -7450,6 +7491,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 "parent_ap": ds.parent_ap,
                 "model": ds.model,
                 "smoke_warnings": ds.smoke_warnings,
+                "deferral_reason": ds.deferral_reason,
+                "deferral_message": ds.deferral_message,
             }
             for ip, ds in job.devices.items()
         },
@@ -7467,6 +7510,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             "role": ds.role,
             "parent_ap": ds.parent_ap,
             "model": ds.model,
+            "deferral_reason": ds.deferral_reason,
+            "deferral_message": ds.deferral_message,
         }
         for ip, ds in job.devices.items()
     }
@@ -7501,10 +7546,25 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         learned_versions[fw_type] = ds.new_version
             # Pass device statuses so rollout devices get marked correctly
             device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
-            scheduler.on_job_completed(job.job_id, success_count, failed_count,
-                                       learned_versions=learned_versions,
-                                       device_statuses=device_statuses,
-                                       cancel_reason=job.cancel_reason)
+            completion_data = {
+                "learned_versions": learned_versions,
+                "device_statuses": device_statuses,
+                "cancel_reason": job.cancel_reason,
+                "deferred_count": len(getattr(job, "_deferred_admission_ips", set())),
+                "deferral_reasons": {
+                    ip: ds.deferral_reason for ip, ds in job.devices.items()
+                    if ds.deferral_reason
+                },
+            }
+            import inspect
+            callback = scheduler.on_job_completed
+            if not any(p.kind == inspect.Parameter.VAR_KEYWORD
+                       for p in inspect.signature(callback).parameters.values()):
+                completion_data = {
+                    key: value for key, value in completion_data.items()
+                    if key in inspect.signature(callback).parameters
+                }
+            callback(job.job_id, success_count, failed_count, **completion_data)
 
     firmware_name = (
         job.firmware_names.get("tna-30x", "")
