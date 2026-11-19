@@ -16,6 +16,7 @@ from updater import app as app_module
 # Clean vendor filenames (no "beta" token — the channel is decided elsewhere).
 FW_30X = "tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin"
 FW_303L_BETA2 = "tna-303l-1.5.0-r54980-20260521-sysupgrade.bin"  # -> 1.5.0.54980
+FW_303L_CPE_TARGET = "tna-303l-1.15.1-r55177-20260521-sysupgrade.bin"
 
 AP_IP = "10.0.0.50"
 MODEL_303L = "TNA-303L-65"
@@ -26,6 +27,7 @@ def fw_dir(tmp_path):
     """Point the app at a temp firmware dir holding our test .bin files."""
     (tmp_path / FW_30X).write_bytes(b"x")
     (tmp_path / FW_303L_BETA2).write_bytes(b"x")
+    (tmp_path / FW_303L_CPE_TARGET).write_bytes(b"x")
     with patch("updater.app.FIRMWARE_DIR", tmp_path):
         yield tmp_path
 
@@ -268,6 +270,67 @@ class TestUpdateDevice:
         assert body["status"] == "already_current"
         assert body["version"] == "1.5.0.54980"
         spawn.assert_not_called()
+
+    def test_cpe_uses_unified_active_bank_for_exact_build(self, authed_client, mock_db, fw_dir):
+        cpe_ip = "10.0.0.60"
+        _seed_303l_ap("1.5.0.54980")
+        db.upsert_cpe(AP_IP, {
+            "ip": cpe_ip, "model": MODEL_303L,
+            "firmware_version": "1.15.1.55177", "auth_status": "ok",
+        })
+        db.upsert_device(
+            cpe_ip, "cpe", "root", "pass", model=MODEL_303L,
+            firmware_version="1.15.1.55177", active_bank=1,
+            bank1_version="1.15.0.55151", bank2_version="1.15.1.55177",
+        )
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = self._update_device(authed_client, ip=cpe_ip,
+                                       firmware_file=FW_303L_CPE_TARGET, bank_mode="one")
+        assert resp.status_code == 200, resp.text
+        assert resp.json().get("job_id")
+        spawn.assert_called_once()
+
+    def test_cpe_active_bank_exact_build_reports_already_current(
+        self, authed_client, mock_db, fw_dir,
+    ):
+        cpe_ip = "10.0.0.60"
+        _seed_303l_ap("1.5.0.54980")
+        db.upsert_cpe(AP_IP, {
+            "ip": cpe_ip, "model": MODEL_303L,
+            "firmware_version": "1.15.0.55151", "auth_status": "ok",
+        })
+        db.upsert_device(
+            cpe_ip, "cpe", "root", "pass", model=MODEL_303L,
+            firmware_version="1.15.0.55151",
+        )
+        db.update_device_status(
+            cpe_ip, active_bank=2,
+            bank1_version="1.15.0.55151", bank2_version="1.15.1.55177",
+        )
+
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = self._update_device(
+                authed_client, ip=cpe_ip,
+                firmware_file_303l=FW_303L_CPE_TARGET, bank_mode="one",
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "already_current", "version": "1.15.1.55177"}
+        spawn.assert_not_called()
+
+    def test_cpe_cache_only_firmware_does_not_prove_exact_build(self, authed_client, mock_db, fw_dir):
+        cpe_ip = "10.0.0.60"
+        _seed_303l_ap("1.5.0.54980")
+        db.upsert_cpe(AP_IP, {
+            "ip": cpe_ip, "model": MODEL_303L,
+            "firmware_version": "1.15.1.55177", "auth_status": "ok",
+        })
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = self._update_device(authed_client, ip=cpe_ip,
+                                       firmware_file=FW_303L_CPE_TARGET, bank_mode="one")
+        assert resp.status_code == 200, resp.text
+        assert resp.json().get("job_id")
+        spawn.assert_called_once()
 
     def test_exact_build_reports_already_current_during_window_stop(
         self, authed_client, mock_db, fw_dir,

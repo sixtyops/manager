@@ -6150,7 +6150,20 @@ async def update_single_device_endpoint(
     fw_path = device_firmware_map.get(ip, "")
     if fw_path:
         target_version = _extract_version_from_filename(Path(fw_path).name)
-        if _device_on_exact_build(device_record, target_version, bank_mode):
+        exact_build_record = device_record
+        if device_roles.get(ip) == "cpe":
+            # CPE firmware banks are tracked in the unified device table. The
+            # CPE cache can contain a stale/ambiguous firmware_version only.
+            unified_cpe = db.get_device(ip)
+            if unified_cpe and any(unified_cpe.get(key) for key in (
+                "bank1_version", "bank2_version", "active_bank",
+            )):
+                exact_build_record = unified_cpe
+            else:
+                # Cache-only firmware data cannot prove the requested build is
+                # installed in the active bank.
+                exact_build_record = None
+        if exact_build_record and _device_on_exact_build(exact_build_record, target_version, bank_mode):
             return {"status": "already_current", "version": target_version}
 
     _check_firmware_window_admission(window_key)
