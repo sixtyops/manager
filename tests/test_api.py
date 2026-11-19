@@ -1094,6 +1094,18 @@ class TestDevicePortalAPI:
         # Should contain parent AP's username in the form
         assert "root" in resp.text
 
+    def test_portal_cpe_ip_is_not_treated_as_ap(self, authed_client, monkeypatch):
+        """A CPE row returned by the broad AP lookup must not supply CPE credentials."""
+        monkeypatch.setattr(db, "get_access_point", lambda ip: {
+            "ip": ip, "role": "cpe", "username": "cpe-user", "password": "cpe-pass",
+        })
+        monkeypatch.setattr(db, "get_switch", lambda ip: None)
+        monkeypatch.setattr(db, "get_cpe_by_ip", lambda ip: None)
+
+        resp = authed_client.get("/api/device-portal/10.0.0.10")
+
+        assert resp.status_code == 404
+
     def test_portal_unknown_device(self, authed_client, mock_db):
         """Returns 404 for unknown IP."""
         resp = authed_client.get("/api/device-portal/10.99.99.99")

@@ -2303,12 +2303,12 @@ async def device_portal(ip: str, session: dict = Depends(require_role("admin", "
 
     # Check APs first
     ap = db.get_access_point(ip)
-    if ap:
+    if ap and ap.get("role") == "ap":
         username, password = ap["username"], ap["password"]
     else:
         # Check switches
         sw = db.get_switch(ip)
-        if sw:
+        if sw and sw.get("role") == "switch":
             username, password = sw["username"], sw["password"]
         else:
             # Check CPEs (inherit parent AP credentials)
