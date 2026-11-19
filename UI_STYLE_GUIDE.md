@@ -46,6 +46,15 @@ the product does today.
 | `--warning*` | `#f59e0b` | Caution, canary, paused (`-hover`, `-light`, `-text`, `-bg`) |
 | `--danger*` | `#dc2626` | Destructive, errors, offline (`-hover`, `-bright`, `-text`, `-bg`) |
 
+Status surfaces use five color-blind-safe tones. Neutral uses `--state-neutral-bg`
+(`#F3F4F6`) and `--state-neutral-text` (`#374151`). Info uses `--info-bg`
+(`#DBEAFE`) and `--info-text` (`#1D4ED8`). Caution uses `--warning-bg`
+(`#FEF3C7`), `--warning-text` (`#92400E`), and `--warning-border`
+(`#B45309`). Critical uses solid `--danger-fill` (`#B91C1C`) with
+`--danger-fill-text` (`#FFFFFF`). Selected controls use solid `--primary-fill`
+(`#0F766E`) with white text. Use an icon and a text label for every state.
+Keep `--success*` for the brand mark. Do not use green for state.
+
 ### Neutrals
 
 `--bg`, `--bg-card`, `--bg-subtle`, `--text`, `--text-muted`, `--text-dim`,

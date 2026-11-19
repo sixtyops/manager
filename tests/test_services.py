@@ -263,3 +263,45 @@ class TestCheckWeatherOk:
             ok, data = await check_weather_ok()
             assert ok is True
             assert data is None
+
+
+@pytest.mark.asyncio
+async def test_resolved_timezone_cache_states(monkeypatch):
+    from updater import services
+
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    lookup = AsyncMock(return_value={"timezone": "America/Chicago"})
+    monkeypatch.setattr(services, "get_location_from_ip", lookup)
+    assert services.get_cached_timezone() is None
+    lookup.assert_not_awaited()
+    assert await services.get_timezone() == "America/Chicago"
+    assert services.get_cached_timezone() == "America/Chicago"
+    assert await services.get_timezone() == "America/Chicago"
+    lookup.assert_awaited_once()
+
+    key = services._RESOLVED_TIMEZONE_KEY
+    services._location_cache_times[key] -= services._LOCATION_CACHE_TTL
+    assert services.get_cached_timezone() is None
+    lookup.side_effect = RuntimeError("lookup failed")
+    with pytest.raises(RuntimeError):
+        await services.get_timezone()
+    assert services.get_cached_timezone() is None
+
+    services._cache_set(key, "Invalid/Zone")
+    assert services.get_cached_timezone() is None
+    lookup.side_effect = None
+    lookup.return_value = {"timezone": "Invalid/Zone"}
+    timestamp = services._location_cache_times[key]
+    with pytest.raises(KeyError):
+        await services.get_timezone()
+    assert services._location_cache_times[key] == timestamp
+    assert services.get_cached_timezone() is None
+
+    lookup.return_value = None
+    assert await services.get_timezone() == "America/Chicago"
+    assert services.get_cached_timezone() == "America/Chicago"
+    lookup.assert_awaited()
+    monkeypatch.setattr(services, "_LOCATION_CACHE_MAX", 1)
+    services._cache_set("other_location", {})
+    assert services.get_cached_timezone() is None

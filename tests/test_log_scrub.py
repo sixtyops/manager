@@ -4,6 +4,8 @@ import io
 import logging
 import logging.handlers
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import MagicMock
 
 import httpx
@@ -40,6 +42,78 @@ def application_output(monkeypatch):
     finally:
         root.handlers[0].close()
         root.setLevel(old_level)
+
+
+@pytest.mark.parametrize("device_token", [False, True], ids=["secret", "device-token"])
+def test_registration_during_log_sanitization(monkeypatch, device_token):
+    class Client:
+        pass
+
+    client = Client()
+    secret = "synthetic-concurrent-value"
+    captured = Event()
+    resume = Event()
+    redact = scrub._redact_token_spans
+
+    def pause_first_search(output, pattern):
+        if not captured.is_set():
+            captured.set()
+            assert resume.wait(timeout=5)
+        return redact(output, pattern)
+
+    monkeypatch.setattr(scrub, "_redact_token_spans", pause_first_search)
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    scrub.install_sanitizer(handler)
+    logger = logging.Logger("concurrent-redaction")
+    logger.addHandler(handler)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(logger.warning, "During registration: %s", secret)
+        try:
+            assert captured.wait(timeout=5)
+            if device_token:
+                scrub.register_device_token(client, secret)
+            else:
+                scrub.register_secret(secret)
+            subsequent = executor.submit(logger.warning, "After registration: %s", secret)
+        finally:
+            resume.set()
+        pending.result(timeout=5)
+        subsequent.result(timeout=5)
+
+    assert stream.getvalue().splitlines() == [
+        "During registration: [REDACTED]",
+        "After registration: [REDACTED]",
+    ]
+
+
+def test_sanitization_finishes_when_registration_continues(monkeypatch):
+    secrets = [f"synthetic-retry-secret-{index}" for index in range(4)]
+    scrub.register_secret(secrets[0])
+    redact = scrub._redact_token_spans
+    registrations = []
+
+    def try_register(secret):
+        if not scrub._registry_lock.acquire(blocking=False):
+            return False
+        try:
+            scrub.register_secret(secret)
+            return True
+        finally:
+            scrub._registry_lock.release()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        def register_during_search(output, pattern):
+            assert len(registrations) < 4, "Sanitization exceeded four searches"
+            secret = f"synthetic-retry-secret-{len(registrations) + 1}"
+            registrations.append(executor.submit(try_register, secret).result(timeout=5))
+            return redact(output, pattern)
+
+        monkeypatch.setattr(scrub, "_redact_token_spans", register_during_search)
+        assert scrub._sanitize(" ".join(secrets)) == " ".join(["[REDACTED]"] * 4)
+
+    assert registrations == [True, True, True, False]
 
 
 def test_application_output_and_repeated_initialization(application_output):

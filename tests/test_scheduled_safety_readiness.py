@@ -1,4 +1,4 @@
-"""Keep scheduled admission closed until the operator records readiness."""
+"""Auto-Update controls admission; old readiness values have no effect."""
 
 from unittest.mock import patch
 
@@ -6,42 +6,51 @@ import pytest
 
 from updater import database as db
 from updater import rollout_gate
-from tests.test_rollout_invariants import _Harness, _make_scheduler, _seed_aps, _settings, FW
+from tests.test_rollout_invariants import _Harness, _make_scheduler, _seed_aps, _settings
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("readiness", [None, "false", "", "TRUE", "1", "invalid"])
-@pytest.mark.parametrize("status", [None, "active", "paused"])
-async def test_unready_tick_preserves_rollout_and_admits_no_job(
-    mock_db, monkeypatch, readiness, status
-):
+@pytest.mark.parametrize("legacy", [None, "false", "true", "invalid"])
+async def test_auto_update_admits_without_readiness(mock_db, monkeypatch, legacy):
     _seed_aps(10)
-    settings = _settings()
-    settings.pop("scheduled_rollout_safety_ready")
-    db.set_settings(settings)
-    if readiness is not None:
-        db.set_setting("scheduled_rollout_safety_ready", readiness)
-    if status:
-        rollout_id = db.create_rollout(FW)
-        if status == "paused":
-            db.pause_rollout(rollout_id, "Review recovery proof")
-    before = db.get_current_rollout()
+    db.set_settings(_settings())
+    if legacy is not None:
+        db.set_setting("scheduled_rollout_safety_ready", legacy)
     scheduler, start = _make_scheduler()
     harness = _Harness(scheduler, monkeypatch)
-
-    with patch.object(db, "create_rollout", wraps=db.create_rollout) as create:
-        await harness.tick()
-        await harness.tick(day=3)
-    create.assert_not_called()
-    start.assert_not_awaited()
-    assert db.get_current_rollout() == before
-    assert scheduler._state == "blocked_safety"
-    assert scheduler.get_status()["safety_block_reason"] == rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON
-    assert scheduler.compute_next_attempt("192.0.2.1", "ap")["next_attempt_iso"] is None
+    await harness.tick()
+    start.assert_awaited_once()
+    assert "safety_block_reason" not in scheduler.get_status()
 
 
 @pytest.mark.asyncio
-async def test_recorded_readiness_can_be_revoked_before_a_later_window(mock_db, monkeypatch):
+@pytest.mark.parametrize("enabled", ["false", "", "TRUE", "1", "invalid"])
+async def test_auto_update_off_admits_no_job(mock_db, monkeypatch, enabled):
+    _seed_aps(10)
+    db.set_settings(_settings())
+    db.set_setting("schedule_enabled", enabled)
+    scheduler, start = _make_scheduler()
+    await _Harness(scheduler, monkeypatch).tick()
+    start.assert_not_awaited()
+    assert scheduler._state == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_stop_still_blocks_without_readiness(mock_db, monkeypatch):
+    _seed_aps(10)
+    db.set_settings(_settings())
+    db.stop_firmware_window(
+        ("firmware", "2026-06-01"), "failed-job", "192.0.2.1", "flash", "Failed",
+    )
+    scheduler, start = _make_scheduler()
+    await _Harness(scheduler, monkeypatch).tick()
+    start.assert_not_awaited()
+    assert scheduler._state == "blocked_safety"
+    assert "resolve the failure" in scheduler._block_reason
+
+
+@pytest.mark.asyncio
+async def test_recorded_auto_update_can_be_revoked_before_a_later_window(mock_db, monkeypatch):
     _seed_aps(10)
     db.set_settings(_settings())
     scheduler, start = _make_scheduler()
@@ -49,40 +58,34 @@ async def test_recorded_readiness_can_be_revoked_before_a_later_window(mock_db, 
     await harness.tick()
     harness.complete_job()
     before = db.get_active_rollout()
-    db.set_setting("scheduled_rollout_safety_ready", "false")
+    db.set_setting("schedule_enabled", "false")
 
     await harness.tick(day=3)
 
     assert start.call_count == 1
     assert db.get_active_rollout() == before
-    assert scheduler._state == "blocked_safety"
+    assert scheduler._state == "disabled"
 
 
-def test_readiness_defaults_closed_on_install_and_upgrade(tmp_path, monkeypatch):
+def test_readiness_is_not_created_and_old_value_survives(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "data" / "manager.db")
     db.init_db()
-    assert db.get_setting("scheduled_rollout_safety_ready") == "false"
-    with db.get_db() as conn:
-        conn.execute("DELETE FROM settings WHERE key = 'scheduled_rollout_safety_ready'")
+    assert "scheduled_rollout_safety_ready" not in db.get_all_settings()
+    db.set_setting("scheduled_rollout_safety_ready", "invalid")
+    db.init_db()
+    assert db.get_setting("scheduled_rollout_safety_ready") == "invalid"
     db.set_setting("schedule_enabled", "true")
-    db.init_db()
+    assert rollout_gate.current_scheduled_admission_decision() == (True, None)
+
+
+def test_deleted_setting_is_not_writable_or_validated(authed_client, mock_db):
+    db.set_setting("scheduled_rollout_safety_ready", "false")
+    response = authed_client.post("/api/settings/save", json={
+        "scheduled_rollout_safety_ready": "invalid", "schedule_enabled": "true",
+    })
+    assert response.status_code == 200
     assert db.get_setting("scheduled_rollout_safety_ready") == "false"
-    assert db.get_setting("schedule_enabled") == "true"
-    db.set_setting("scheduled_rollout_safety_ready", "true")
-    db.init_db()
-    assert db.get_setting("scheduled_rollout_safety_ready") == "true"
-
-
-def test_admin_records_readiness_and_schedule_toggle_preserves_it(authed_client, mock_db):
-    response = authed_client.post("/api/settings/save", json={"scheduled_rollout_safety_ready": "true"})
-    assert response.status_code == 200
-    response = authed_client.post("/api/settings/save", json={"schedule_enabled": "true"})
-    assert response.status_code == 200
-    assert db.get_setting("scheduled_rollout_safety_ready") == "true"
-    assert rollout_gate.scheduled_admission_decision(db.get_all_settings()) == (True, None)
-    response = authed_client.post("/api/settings/save", json={"scheduled_rollout_safety_ready": "invalid"})
-    assert response.status_code == 400
-    assert db.get_setting("scheduled_rollout_safety_ready") == "true"
+    assert rollout_gate.current_scheduled_admission_decision() == (True, None)
 
 
 @pytest.mark.asyncio
@@ -96,31 +99,31 @@ async def test_revocation_during_tick_holds_new_admission(
     harness = _Harness(scheduler, monkeypatch)
     if boundary == "time":
         async def revoke_time(*args):
-            db.set_setting("scheduled_rollout_safety_ready", "false")
+            db.set_setting("schedule_enabled", "false")
             return True, harness.now
         monkeypatch.setattr("updater.scheduler.services.validate_time_sources", revoke_time)
     elif boundary == "weather":
         db.set_setting("weather_check_enabled", "true")
         async def revoke_weather(*args):
-            db.set_setting("scheduled_rollout_safety_ready", "false")
+            db.set_setting("schedule_enabled", "false")
             return True, {}
         monkeypatch.setattr("updater.scheduler.services.check_weather_ok", revoke_weather)
     else:
         async def revoke_broadcast(*args):
-            db.set_setting("scheduled_rollout_safety_ready", "false")
+            db.set_setting("schedule_enabled", "false")
         monkeypatch.setattr(scheduler, "_broadcast_status", revoke_broadcast)
 
     await harness.tick()
     start.assert_not_awaited()
-    assert scheduler._state == "blocked_safety"
+    assert scheduler._state == "disabled"
     if boundary in {"time", "weather"}:
         assert db.get_current_rollout() is None
 
 
-def test_unreadable_current_readiness_holds_admission():
+def test_unreadable_current_auto_update_holds_admission():
     with patch.object(db, "get_setting", side_effect=RuntimeError("Read failed")):
         assert rollout_gate.current_scheduled_admission_decision() == (
-            False, rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON,
+            False, rollout_gate.SCHEDULE_DISABLED_REASON,
         )
 
 
@@ -131,10 +134,10 @@ async def test_revocation_during_job_keeps_current_wave(mock_db, monkeypatch):
     scheduler, start = _make_scheduler()
     harness = _Harness(scheduler, monkeypatch)
     await harness.tick()
-    db.set_setting("scheduled_rollout_safety_ready", "false")
+    db.set_setting("schedule_enabled", "false")
     harness.complete_job()
     assert db.get_active_rollout() is None
     assert scheduler._state == "waiting"
     await harness.tick(day=3)
     assert start.call_count == 1
-    assert scheduler._state == "blocked_safety"
+    assert scheduler._state == "disabled"

@@ -32,6 +32,7 @@ def prepared_client(readback):
     ])
     client.validate_firmware_for_model = MagicMock(return_value=(True, ""))
     client.upload_firmware = AsyncMock(return_value=True)
+    client._curl = AsyncMock(return_value=(503, ""))
     client.trigger_update = AsyncMock(return_value=True)
     client.wait_for_reboot = AsyncMock(return_value=False)
     return client

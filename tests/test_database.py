@@ -1,5 +1,6 @@
 """Tests for updater.database."""
 
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -430,10 +431,116 @@ class TestCPECache:
 
     def test_upsert_updates(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
+        original_id = db.get_cpes_for_ap("10.0.0.1")[0]["id"]
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "red"})
         cpes = db.get_cpes_for_ap("10.0.0.1")
         assert len(cpes) == 1
         assert cpes[0]["signal_health"] == "red"
+        assert cpes[0]["id"] == original_id
+
+    @pytest.mark.parametrize("missing_mac", [None, "", "invalid"])
+    def test_upsert_fills_missing_mac(self, mock_db, missing_mac):
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": missing_mac})
+        original_id = db.get_cpes_for_ap("10.0.0.1")[0]["id"]
+
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "updated",
+        })
+
+        rows = db.get_cpes_for_ap("10.0.0.1")
+        assert len(rows) == 1
+        assert rows[0]["id"] == original_id
+        assert rows[0]["mac"] == "00:11:22:33:44:55"
+        assert rows[0]["system_name"] == "updated"
+
+    @pytest.mark.parametrize("missing_mac", [None, "", "invalid"])
+    def test_upsert_keeps_known_mac_through_missing_observation(self, mock_db, missing_mac):
+        mac = "00:11:22:33:44:55"
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": mac})
+        original_id = db.get_cpes_for_ap("10.0.0.1")[0]["id"]
+
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": missing_mac, "system_name": "intermediate",
+        })
+        intermediate = db.get_cpes_for_ap("10.0.0.1")[0]
+        assert intermediate["mac"] == mac
+        assert intermediate["system_name"] == "intermediate"
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": mac, "system_name": "latest",
+        })
+
+        rows = db.get_cpes_for_ap("10.0.0.1")
+        assert len(rows) == 1
+        assert rows[0]["id"] == original_id
+        assert rows[0]["mac"] == mac
+        assert rows[0]["system_name"] == "latest"
+
+    def test_upsert_holds_conflicting_mac_and_continues_poll_writes(self, mock_db, caplog):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "original",
+        })
+        before = db.get_cpes_for_ap("10.0.0.1")[0]
+        peers = [
+            {"ip": "192.0.2.50", "mac": "00:11:22:33:44:66", "system_name": "conflict"},
+            {"ip": "192.0.2.51", "mac": "00:11:22:33:44:77", "system_name": "next peer"},
+        ]
+
+        with caplog.at_level("WARNING", logger=db.__name__):
+            for peer in peers:
+                db.upsert_cpe("10.0.0.1", peer)
+
+        rows = db.get_cpes_for_ap("10.0.0.1")
+        assert len(rows) == 2
+        assert rows[0] == before
+        assert rows[1]["system_name"] == "next peer"
+        assert f"Held CPE cache row {before['id']}: conflicting radio MAC" in caplog.text
+
+    def test_upsert_preserves_observations_when_parent_changes(self, mock_db):
+        mac = "00:11:22:33:44:55"
+        db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.50", "mac": mac, "system_name": "old"})
+        db.upsert_cpe("10.0.0.2", {"ip": "192.0.2.50", "mac": mac, "system_name": "new"})
+
+        rows = mock_db.execute("SELECT ap_ip,ip,system_name FROM cpe_cache").fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "old"),
+            ("10.0.0.2", "192.0.2.50", "new"),
+        ]
+
+    def test_upsert_preserves_distinct_hardware_that_reuses_an_ip(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "first",
+        })
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:66", "system_name": "second",
+        })
+
+        rows = mock_db.execute(
+            "SELECT ap_ip,ip,mac,system_name FROM cpe_cache ORDER BY ap_ip"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "00:11:22:33:44:55", "first"),
+            ("10.0.0.2", "192.0.2.50", "00:11:22:33:44:66", "second"),
+        ]
+
+    def test_upsert_updates_only_its_key_with_matching_mac_elsewhere(self, mock_db):
+        db.upsert_cpe("10.0.0.1", {
+            "ip": "192.0.2.50", "mac": "00:11:22:33:44:55", "system_name": "old",
+        })
+        mock_db.execute(
+            "INSERT INTO cpe_cache(ap_ip,ip,mac,system_name) VALUES (?,?,?,?)",
+            ("10.0.0.2", "192.0.2.50", "00-11-22-33-44-55", "duplicate"),
+        )
+        mock_db.commit()
+
+        db.upsert_cpe("10.0.0.2", {
+            "ip": "192.0.2.50", "mac": "001122334455", "system_name": "latest",
+        })
+
+        rows = mock_db.execute("SELECT ap_ip,ip,mac,system_name FROM cpe_cache").fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("10.0.0.1", "192.0.2.50", "00:11:22:33:44:55", "old"),
+            ("10.0.0.2", "192.0.2.50", "001122334455", "latest"),
+        ]
 
     def test_clear(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "1.1.1.1", "signal_health": "green"})
@@ -580,7 +687,12 @@ class TestCPECache:
 
     def test_relocation_rejects_ambiguous_source_ownership(self, mock_db):
         db.upsert_cpe("10.0.0.1", {"ip": "192.0.2.10", "mac": "00:11:22:33:44:55"})
-        db.upsert_cpe("10.0.0.9", {"ip": "192.0.2.10", "mac": "00:11:22:33:44:55"})
+        # Separate observations of one MAC do not prove device identity.
+        mock_db.execute(
+            "INSERT INTO cpe_cache(ap_ip,ip,mac) VALUES (?,?,?)",
+            ("10.0.0.9", "192.0.2.10", "00:11:22:33:44:55"),
+        )
+        mock_db.commit()
 
         with pytest.raises(ValueError, match="source ownership"):
             db.relocate_cpe_cache(
@@ -643,6 +755,129 @@ class TestCPECache:
         configs = mock_db.execute("SELECT ip, config_hash FROM device_configs").fetchall()
         assert [row["ip"] for row in history] == [old_ip]
         assert [tuple(row) for row in configs] == [(old_ip, "hash-old")]
+
+
+class TestApAddressRelocation:
+    old_ip = "192.0.2.70"
+    new_ip = "192.0.2.71"
+    serial = "AP-SERIAL-70"
+
+    def _seed_ap(self, mock_db):
+        device_id = db.upsert_access_point(self.old_ip, "admin", "encrypted")
+        mock_db.execute(
+            "UPDATE devices SET uid = ?, uid_source = 'serial' WHERE id = ?",
+            (self.serial, device_id),
+        )
+        mock_db.commit()
+        return device_id
+
+    def test_relocation_moves_ap_and_current_references_in_one_transaction(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        db.upsert_cpe(self.old_ip, {"ip": "192.0.2.80", "mac": "00:11:22:33:44:55"})
+        db.save_active_job("job-1", "running", "[]", "firmware.bin", self.old_ip)
+        mock_db.execute(
+            "INSERT INTO device_update_history(ip, role, status) VALUES (?, 'ap', 'success')",
+            (self.old_ip,),
+        )
+        mock_db.commit()
+
+        assert db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+
+        device = mock_db.execute(
+            "SELECT id, ip, address_generation FROM devices WHERE id = ?", (device_id,)
+        ).fetchone()
+        assert tuple(device) == (device_id, self.new_ip, 1)
+        assert mock_db.execute(
+            "SELECT ip FROM access_points WHERE ip = ?", (self.new_ip,)
+        ).fetchone()
+        assert mock_db.execute(
+            "SELECT ap_ip FROM cpe_cache"
+        ).fetchone()["ap_ip"] == self.new_ip
+        assert mock_db.execute(
+            "SELECT in_flight_device_ip FROM active_jobs WHERE job_id = 'job-1'"
+        ).fetchone()[0] == self.new_ip
+        assert mock_db.execute(
+            "SELECT ip FROM device_update_history"
+        ).fetchone()[0] == self.old_ip
+
+    def test_relocation_keeps_persisted_crash_recovery_locator_with_new_marker(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        payload = {
+            "devices": [self.old_ip],
+            "order": [self.old_ip],
+            "recovery": {
+                self.old_ip: {
+                    "original_ip": self.old_ip,
+                    "ip": self.old_ip,
+                    "serial": self.serial,
+                },
+            },
+        }
+        db.save_active_job(
+            "job-recovery", "running", json.dumps(payload), "firmware.bin", self.old_ip,
+        )
+
+        assert db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+
+        active = mock_db.execute(
+            "SELECT device_ips_json, in_flight_device_ip FROM active_jobs "
+            "WHERE job_id = 'job-recovery'"
+        ).fetchone()
+        saved_payload = json.loads(active["device_ips_json"])
+        locator = saved_payload["recovery"].get(active["in_flight_device_ip"])
+        assert active["in_flight_device_ip"] == self.new_ip
+        assert saved_payload["devices"] == [self.new_ip]
+        assert saved_payload["order"] == [self.new_ip]
+        assert locator["original_ip"] == self.new_ip
+        assert locator["ip"] == self.new_ip
+        assert locator["serial"] == self.serial
+
+    def test_relocation_rejects_taken_ip(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        db.upsert_switch(self.new_ip, "admin", "encrypted")
+
+        with pytest.raises(ValueError, match="owned by another device"):
+            db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+        assert mock_db.execute("SELECT ip FROM devices WHERE id = ?", (device_id,)).fetchone()[0] == self.old_ip
+
+    def test_relocation_rejects_wrong_serial(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+
+        with pytest.raises(ValueError, match="source identity"):
+            db.relocate_ap_address(device_id, "OTHER-SERIAL", self.old_ip, self.new_ip)
+        assert mock_db.execute("SELECT ip FROM devices WHERE id = ?", (device_id,)).fetchone()[0] == self.old_ip
+
+    def test_relocation_rejects_open_serial_conflict(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        mock_db.execute(
+            "INSERT INTO identity_conflicts(kind, value, device_ids, state, created_at, updated_at) "
+            "VALUES ('serial', ?, ?, 'open', 'now', 'now')",
+            (self.serial, f"[{device_id},999]"),
+        )
+        mock_db.commit()
+
+        with pytest.raises(ValueError, match="open identity conflict"):
+            db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+        assert mock_db.execute("SELECT ip FROM devices WHERE id = ?", (device_id,)).fetchone()[0] == self.old_ip
+
+    def test_relocation_rolls_back_on_child_reference_write_failure(self, mock_db):
+        device_id = self._seed_ap(mock_db)
+        db.upsert_cpe(self.old_ip, {"ip": "192.0.2.80", "mac": "00:11:22:33:44:55"})
+        mock_db.execute("""
+            CREATE TRIGGER reject_ap_relocation
+            BEFORE UPDATE OF ap_ip ON cpe_cache
+            BEGIN SELECT RAISE(ABORT, 'blocked AP cache update'); END
+        """)
+        mock_db.commit()
+
+        with pytest.raises(Exception, match="blocked AP cache update"):
+            db.relocate_ap_address(device_id, self.serial, self.old_ip, self.new_ip)
+
+        assert tuple(mock_db.execute(
+            "SELECT ip, address_generation FROM devices WHERE id = ?", (device_id,)
+        ).fetchone()) == (self.old_ip, 0)
+        assert mock_db.execute("SELECT ip FROM access_points").fetchone()[0] == self.old_ip
+        assert mock_db.execute("SELECT ap_ip FROM cpe_cache").fetchone()[0] == self.old_ip
 
 
 class TestSettings:

@@ -106,7 +106,7 @@ and reported CPE `eth0` link-up when that link was up before reboot. It does
 not treat bridge learning or byte deltas as proof of customer traffic. Missing
 required recovery evidence stops the queue.
 
-Remaining target work includes the specified readiness and recovery gates that are not yet complete. Keep scheduled admission closed until required proof passes. See [gradual-rollout.md](gradual-rollout.md) for shipped behavior and [rollout-logic.md](rollout-logic.md) for queue rules.
+Remaining target work includes the specified readiness and recovery gates that are not yet complete. Auto-Update controls scheduled admission; all other admission gates still apply. See [gradual-rollout.md](gradual-rollout.md) for shipped behavior and [rollout-logic.md](rollout-logic.md) for queue rules.
 
 ## Shipped layout
 

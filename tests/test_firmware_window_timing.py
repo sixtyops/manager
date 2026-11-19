@@ -83,7 +83,7 @@ def test_active_job_stores_the_in_flight_device(mock_db):
     assert job["in_flight_device_ip"] == "192.0.2.2"
 
 
-def test_legacy_upgrade_closes_readiness_once_and_keeps_pause_history(mock_db):
+def test_legacy_upgrade_preserves_ignored_readiness_and_pause_history(mock_db):
     mock_db.execute(
         "INSERT OR REPLACE INTO settings (key, value) "
         "VALUES ('scheduled_rollout_safety_ready', 'true')"
@@ -107,7 +107,7 @@ def test_legacy_upgrade_closes_readiness_once_and_keeps_pause_history(mock_db):
 
     assert mock_db.execute(
         "SELECT value FROM settings WHERE key = 'scheduled_rollout_safety_ready'"
-    ).fetchone()[0] == "false"
+    ).fetchone()[0] == "true"
     assert mock_db.execute("SELECT status FROM rollouts").fetchone()[0] == "paused"
     assert mock_db.execute("SELECT COUNT(*) FROM firmware_window_stops").fetchone()[0] == 1
     assert mock_db.execute("SELECT COUNT(*) FROM job_history").fetchone()[0] == 1
@@ -123,7 +123,7 @@ def test_legacy_upgrade_closes_readiness_once_and_keeps_pause_history(mock_db):
     ).fetchone()[0] == "true"
 
 
-def test_failed_upgrade_after_column_add_keeps_readiness_closed(mock_db):
+def test_failed_upgrade_after_column_add_preserves_ignored_setting(mock_db):
     mock_db.execute("ALTER TABLE active_jobs DROP COLUMN in_flight_device_ip")
     mock_db.execute(
         "INSERT OR REPLACE INTO settings (key, value) "
@@ -142,10 +142,9 @@ def test_failed_upgrade_after_column_add_keeps_readiness_closed(mock_db):
     with pytest.raises(RuntimeError, match="simulated stop"):
         db._migrate(FailAfterColumnCommit())
 
-    # A new startup sees the column, skips the reset branch, and must still
-    # find readiness closed from the migration that added it.
+    # A new startup keeps the old setting without using it for admission.
     db._migrate(mock_db)
 
     assert mock_db.execute(
         "SELECT value FROM settings WHERE key = 'scheduled_rollout_safety_ready'"
-    ).fetchone()[0] == "false"
+    ).fetchone()[0] == "true"

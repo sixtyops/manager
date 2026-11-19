@@ -37,6 +37,11 @@
             --success-light: #34d399;
             --success-text: #065f46;
             --success-bg: #d1fae5;
+            --state-neutral-bg: #F3F4F6;
+            --state-neutral-text: #374151;
+            --warning-border: #B45309;
+            --danger-fill: #B91C1C;
+            --danger-fill-text: #FFFFFF;
             --warning: #f59e0b;
             --warning-hover: #d97706;
             --warning-text: #92400e;
@@ -55,7 +60,7 @@
             --info-bg: #dbeafe;
             --info-bg-subtle: #eff6ff;
             --info-border: #bfdbfe;
-            --toggle-off: #d1d5db;
+            --toggle-off: #FFFFFF;
             --bg-subtle: #f9fafb;
             --overlay: rgba(17, 24, 39, 0.5);
             --shadow-pop: 0 8px 24px rgba(0,0,0,.10);
@@ -184,11 +189,11 @@
             padding: 2px 8px;
             border-radius: var(--radius-full);
             background: var(--border);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
-        .role-badge[data-role="admin"] { background: var(--primary-bg); color: var(--primary-text); }
-        .role-badge[data-role="operator"] { background: #d1fae5; color: #047857; }
-        .role-badge[data-role="viewer"] { background: var(--border); color: var(--text-muted); }
+        .role-badge[data-role="admin"] { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .role-badge[data-role="operator"] { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .role-badge[data-role="viewer"] { background: var(--border); color: var(--state-neutral-text); }
 
         .viewer-locked {
             cursor: not-allowed;
@@ -360,9 +365,10 @@
             transition: background var(--tr-base);
             flex-shrink: 0;
             border: none;
+            box-shadow: inset 0 0 0 1.5px #6B7280;
             padding: 0;
         }
-        .toggle.active { background: var(--primary); }
+        .toggle.active { background: var(--primary-fill); border-color: var(--primary-fill); box-shadow: inset 0 0 0 1.5px var(--primary-fill); }
         .toggle::after {
             content: '';
             position: absolute;
@@ -370,11 +376,11 @@
             left: 2px;
             width: 16px;
             height: 16px;
-            background: white;
+            background: #6B7280;
             border-radius: 50%;
             transition: transform var(--tr-base);
         }
-        .toggle.active::after { transform: translateX(16px); }
+        .toggle.active::after { transform: translateX(16px); background: #FFFFFF; }
 
         /* Toggle switch — compact (28x16) */
         .toggle-sm {
@@ -387,9 +393,10 @@
             transition: background var(--tr-base);
             flex-shrink: 0;
             border: none;
+            box-shadow: inset 0 0 0 1.5px #6B7280;
             padding: 0;
         }
-        .toggle-sm.active { background: var(--primary); }
+        .toggle-sm.active { background: var(--primary-fill); border-color: var(--primary-fill); box-shadow: inset 0 0 0 1.5px var(--primary-fill); }
         .toggle-sm::after {
             content: '';
             position: absolute;
@@ -397,11 +404,11 @@
             left: 2px;
             width: 12px;
             height: 12px;
-            background: white;
+            background: #6B7280;
             border-radius: 50%;
             transition: transform var(--tr-base);
         }
-        .toggle-sm.active::after { transform: translateX(12px); }
+        .toggle-sm.active::after { transform: translateX(12px); background: #FFFFFF; }
 
         /* Settings tabs */
         .app-settings-modal {
@@ -480,7 +487,7 @@
 
         .auth-status-badge {
             font-size: var(--text-xs); font-weight:600; padding:1px 7px; border-radius: var(--radius-full);
-            background:#e5e7eb; color:#6b7280;
+            background:#e5e7eb; color: var(--state-neutral-text);
         }
         .auth-stats-grid {
             display: grid; grid-template-columns: repeat(4,1fr); gap:6px; margin-top:10px;
@@ -528,7 +535,7 @@
         .history-table tr:last-child td { border-bottom:none; }
         .history-table .cell-time { font-size:var(--text-sm); color:var(--text-dim); white-space:nowrap; }
         .history-table .cell-mono { font-family:var(--font-mono); font-size:var(--text-sm); }
-        .history-table .cell-error { color:#dc2626; }
+        .history-table .cell-error { color:var(--danger-fill); }
 
         /* History table styles */
         .history-status-badge {
@@ -539,10 +546,15 @@
             font-weight: 600;
             text-transform: uppercase;
         }
-        .history-status-badge.success { background: #dcfce7; color: #16a34a; }
-        .history-status-badge.failed { background: #fef2f2; color: #dc2626; }
-        .history-status-badge.skipped { background: #f3f4f6; color: #6b7280; }
-        .history-status-badge.cancelled { background: #fef3c7; color: #d97706; }
+        .history-status-badge.success::before { content: "✓ "; }
+        .history-status-badge.success { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .history-status-badge.failed::before { content: "✕ "; }
+        .history-status-badge.failed { background: var(--danger-fill); color: var(--danger-fill-text); }
+        .history-status-badge.skipped::before { content: "○ "; }
+        .history-status-badge.skipped { background: #f3f4f6; color: var(--state-neutral-text); }
+        .history-status-badge.cancelled::before { content: "Ⅱ "; }
+        .history-status-badge.cancelled { background: #fef3c7; color: var(--warning-text); }
+        .history-status-badge.deferred::before { content: "◷ "; }
         .history-status-badge.deferred { background: var(--info-bg); color: var(--info-text); }
 
         .history-stage-pill {
@@ -552,8 +564,10 @@
             border-radius: var(--radius-sm);
             margin-right: 3px;
         }
-        .history-stage-pill.ok { background: #dcfce7; color: #16a34a; }
-        .history-stage-pill.fail { background: #fef2f2; color: #dc2626; }
+        .history-stage-pill.ok::before { content: "✓ "; }
+        .history-stage-pill.ok { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .history-stage-pill.fail::before { content: "✕ "; }
+        .history-stage-pill.fail { background: var(--danger-fill); color: var(--danger-fill-text); }
 
         .history-detail-row td {
             padding: 8px 12px;
@@ -565,8 +579,8 @@
         .u-history-row:hover td { background: var(--bg-subtle); }
         .u-history-cell-mono { font-family: var(--font-mono); font-size: var(--text-base); }
         .u-history-cell-time { font-size: var(--text-sm); color: var(--text-dim); white-space: nowrap; }
-        .u-history-cell-failed.error { color: #dc2626; }
-        .u-history-error { color: #dc2626; font-size: var(--text-base); margin-top: 4px; word-break: break-word; }
+        .u-history-cell-failed.error { color: var(--danger-fill); }
+        .u-history-error { color: var(--danger-fill); font-size: var(--text-base); margin-top: 4px; word-break: break-word; }
         .u-history-pass { font-size: var(--text-sm); color: var(--text-dim); margin-left: 8px; }
 
         .settings-panel {
@@ -620,8 +634,10 @@
         .users-table .user-btn:hover { background:#e5e7eb; color:var(--text,#111827); }
         .users-table .user-btn-danger { color:#fff; background:#ef4444; }
         .users-table .user-btn-danger:hover { background:#dc2626; color:#fff; }
-        .user-status-active { color:#16a34a; font-weight:500; }
-        .user-status-disabled { color:#dc2626; font-weight:500; }
+        .user-status-active::before { content: "✓ "; }
+        .user-status-active { color: var(--state-neutral-text); font-weight:500; }
+        .user-status-disabled::before { content: "○ "; }
+        .user-status-disabled { color:var(--danger-fill); font-weight:500; }
         .users-table .user-btn[disabled],
         .users-table .user-btn[disabled]:hover { opacity:0.45; cursor:not-allowed; background:var(--bg,#f3f4f6); color:var(--text-muted,#6b7280); }
         .users-table .user-btn-danger[disabled],
@@ -639,12 +655,12 @@
         .updates-banner { margin-top:12px; padding:12px 14px; background:var(--info-bg); border-radius: var(--radius-lg); }
         .updates-banner-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
         .updates-banner-title { font-weight:600; font-size:var(--text-md); color:var(--info-text); }
-        .updates-banner-link { font-size:var(--text-sm); color:var(--info-strong); text-decoration:none; }
+        .updates-banner-link { font-size:var(--text-sm); color: var(--info-text); text-decoration:none; }
         .updates-banner-link:hover { text-decoration:underline; }
-        .updates-banner-meta { margin-top: 8px; font-size: var(--text-xs); color: var(--info-strong); }
+        .updates-banner-meta { margin-top: 8px; font-size: var(--text-xs); color: var(--info-text); }
         .updates-banner-feedback { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid transparent; background: rgba(255,255,255,0.72); }
         .updates-banner-feedback.info { border-color: rgba(14,116,144,0.16); color: #0f172a; }
-        .updates-banner-feedback.success { border-color: rgba(5,150,105,0.2); color: #065f46; }
+        .updates-banner-feedback.success { border-color: var(--state-neutral-text); color: var(--state-neutral-text); }
         .updates-banner-feedback.error { border-color: rgba(185,28,28,0.18); color: #991b1b; background: rgba(255,255,255,0.88); }
         .updates-banner-feedback-message { font-size: var(--text-sm); line-height: 1.5; }
         .updates-banner-code {
@@ -702,7 +718,7 @@
         .updates-banner-btn {
             margin-top: 10px;
             padding: 8px 16px;
-            background: var(--success);
+            background: var(--state-neutral-text);
             color: #fff;
             border: none;
             border-radius: var(--radius-md);
@@ -713,8 +729,8 @@
             -webkit-appearance: none;
             appearance: none;
         }
-        .updates-banner-btn:hover { background: var(--success-hover); }
-        .updates-banner-btn:active { background: #047857; }
+        .updates-banner-btn:hover { background: var(--state-neutral-text); }
+        .updates-banner-btn:active { background: var(--state-neutral-text); }
         .updates-banner-btn:disabled { background: #9ca3af; color: #f3f4f6; cursor: not-allowed; }
 
         /* About panel */
@@ -918,11 +934,11 @@
             border-color: var(--danger-hover);
         }
         .btn-success {
-            background: var(--success);
+            background: var(--state-neutral-text);
             color: white;
-            border-color: var(--success);
+            border-color: var(--state-neutral-text);
         }
-        .btn-success:hover { background: var(--success-hover); border-color: var(--success-hover); }
+        .btn-success:hover { background: var(--state-neutral-text); border-color: var(--state-neutral-text); }
         .btn-secondary {
             background: var(--border-light);
             color: var(--text-muted);
@@ -965,10 +981,10 @@
             border-radius: 50%;
         }
 
-        .dot.success { background: var(--success); }
+        .dot.success { background: var(--state-neutral-text); }
         .dot.warning { background: var(--warning); }
         .dot.danger { background: var(--danger-bright); }
-        .dot.primary { background: var(--primary); }
+        .dot.primary { background: var(--primary-fill); }
 
         /* Chart */
         .chart-card {
@@ -1040,13 +1056,65 @@
         .table-card {
             background: var(--bg-card);
             border-radius: var(--radius-xl);
-            overflow: hidden;
+            min-width: 0;
         }
 
         .tree-table {
             width: 100%;
             border-collapse: collapse;
             font-size: var(--text-md);
+        }
+
+        #deviceTable th,
+        #deviceTable td {
+            white-space: nowrap;
+        }
+
+        #deviceTable th:first-child {
+            width: 100%;
+        }
+
+        #deviceTable .name-cell {
+            min-width: 13rem;
+        }
+
+        .device-name-group {
+            flex: 1;
+            contain: inline-size;
+        }
+
+        .device-name {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .device-name:focus {
+            overflow: visible;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        .device-notes {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: var(--text-2xs);
+            color: var(--state-neutral-text);
+            margin-top: 1px;
+        }
+
+        @media (max-width: 80rem) {
+            #deviceTable .device-notes { display: none; }
+        }
+
+        @media (max-width: 75rem) {
+            #deviceTable .device-date { display: none; }
+        }
+
+        #deviceTableScroll {
+            min-width: 0;
+            overflow-x: auto;
         }
 
         .tree-table thead th {
@@ -1134,6 +1202,7 @@
         }
 
         .device-icon {
+            background: var(--state-neutral-text);
             width: 18px;
             height: 18px;
             border-radius: var(--radius-sm);
@@ -1147,22 +1216,22 @@
         }
 
         .device-icon.site { background: var(--text-muted); }
-        .device-icon.ap { background: var(--primary); }
+        .device-icon.ap { background: var(--primary-fill); }
         .device-icon.cpe {
             border-radius: 50%;
             width: 14px;
             height: 14px;
         }
-        .device-icon.cpe.green { background: var(--success); }
-        .device-icon.cpe.yellow { background: var(--warning); }
-        .device-icon.cpe.red { background: var(--danger-bright); }
+        .device-icon.cpe.green { background: var(--state-neutral-text); }
+        .device-icon.cpe.yellow { background: var(--warning-bg); color: var(--warning-text); }
+        .device-icon.cpe.red { background: var(--danger-fill); color: var(--danger-fill-text); }
 
         .tree-badge {
             font-size: var(--text-sm);
             padding: 1px 6px;
             background: var(--border);
             border-radius: var(--radius-full);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             margin-left: 4px;
         }
 
@@ -1178,22 +1247,22 @@
         .name-static { color: var(--text); }
 
         .no-location-tag {
-            color: var(--warning);
+            color: var(--warning-text);
             font-size: var(--text-sm);
             font-weight: normal;
         }
 
         /* Signal colors */
-        .signal-good { color: var(--success); }
-        .signal-low { color: var(--warning); }
-        .signal-critical { color: var(--danger-bright); }
+        .signal-good { color: var(--state-neutral-text); }
+        .signal-low { color: var(--warning-text); }
+        .signal-critical { color: var(--danger-fill); }
         .sh-sig-margin {
             font-size: var(--text-2xs); margin-left: var(--space-3);
             font-variant-numeric: tabular-nums; font-weight: 600;
         }
-        .sh-sig-margin.up { color: var(--success); }
-        .sh-sig-margin.down { color: var(--danger-bright); }
-        .sh-sig-margin.flat { color: var(--text-dim); }
+        .sh-sig-margin.up { color: var(--state-neutral-text); }
+        .sh-sig-margin.down { color: var(--danger-fill); }
+        .sh-sig-margin.flat { color: var(--state-neutral-text); }
         .row-cpe { cursor: pointer; }
         .cpe-sig-cell { cursor: help; }
         /* Amber "Can't sign in" pill — a client we reach but can't log into
@@ -1213,7 +1282,7 @@
             display: inline-block; width: 9px; height: 9px; border-radius: 50%;
             margin-right: 6px; vertical-align: middle; flex: 0 0 auto;
         }
-        .row-status-dot.green   { background: var(--success); }
+        .row-status-dot.green   { background: var(--state-neutral-text); }
         .row-status-dot.yellow  { background: var(--warning); }
         .row-status-dot.red     { background: var(--danger-bright); }
         .row-status-dot.offline { background: var(--text-dim); }
@@ -1231,7 +1300,7 @@
         .col-filter-dropdown label .opt-dot {
             width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
         }
-        .col-filter-dropdown label .opt-dot.green   { background: var(--success); }
+        .col-filter-dropdown label .opt-dot.green   { background: var(--state-neutral-text); }
         .col-filter-dropdown label .opt-dot.yellow  { background: var(--warning); }
         .col-filter-dropdown label .opt-dot.red     { background: var(--danger-bright); }
         .col-filter-dropdown label .opt-dot.signal  { background: var(--text-dim); }
@@ -1257,15 +1326,15 @@
         }
 
         /* Status column */
-        .status-online { color: var(--success); }
-        .status-offline { color: var(--danger-bright); font-weight: 500; }
-        .status-current { color: var(--success); font-weight: 500; }
-        .status-behind { color: var(--warning); font-weight: 500; }
-        .status-scheduled { color: var(--info); font-weight: 600; font-size: var(--text-md); }
+        .status-online { color: var(--state-neutral-text); }
+        .status-offline { color: var(--danger-fill); font-weight: 500; }
+        .status-current { color: var(--state-neutral-text); font-weight: 500; }
+        .status-behind { color: var(--warning-text); font-weight: 500; }
+        .status-scheduled { color: var(--info-text); font-weight: 600; font-size: var(--text-md); }
         .update-clickable { cursor: pointer; text-decoration: none; }
         .update-clickable:hover { opacity: 0.7; }
         .status-label { font-size: var(--text-base); }
-        .status-sep { color: var(--toggle-off); margin: 0 4px; }
+        .status-sep { color: var(--state-neutral-text); margin: 0 4px; }
 
         /* Status icon cells */
         .status-icon-cell {
@@ -1275,7 +1344,7 @@
             border-radius: 50%;
             cursor: default;
         }
-        .status-icon-cell.online { background: var(--success); }
+        .status-icon-cell.online { background: var(--state-neutral-text); }
         .status-icon-cell.offline { background: var(--danger-bright); }
         .status-icon-cell.warning { background: var(--warning); }
         .status-icon-cell.critical { background: var(--danger-bright); }
@@ -1288,7 +1357,7 @@
 
         /* Updating indicator */
         .updating-text {
-            color: var(--info);
+            color: var(--info-text);
             font-size: var(--text-sm);
             font-weight: 500;
         }
@@ -1323,7 +1392,7 @@
         }
         .update-stage {
             font-size: var(--text-sm);
-            color: var(--info);
+            color: var(--info-text);
             font-variant-numeric: tabular-nums;
         }
 
@@ -1412,10 +1481,10 @@
         .update-action {
             background: none; border: none; cursor: pointer;
             font-size: var(--text-xl); padding: 2px 6px; border-radius: var(--radius-sm);
-            color: var(--warning); transition: background var(--tr-fast); line-height: 1;
+            color: var(--warning-text); transition: background var(--tr-fast); line-height: 1;
         }
         .update-action:hover { background: var(--warning-bg); }
-        .update-action.scheduled { color: var(--info); }
+        .update-action.scheduled { color: var(--info-text); }
         .update-action.scheduled:hover { background: var(--info-bg); }
 
         /* Connection status */
@@ -1427,15 +1496,12 @@
             padding: 8px 16px;
             border-radius: var(--radius-full);
             font-size: var(--text-sm);
-            background: var(--success);
+            background: var(--state-neutral-text);
             color: white;
             z-index: 100;
         }
 
-        .connection-status.disconnected {
-            display: block;
-            background: var(--danger-bright);
-        }
+        .connection-status.disconnected { display: block; background: var(--danger-fill); color: var(--danger-fill-text); }
 
         /* System update overlay */
         .system-update-overlay {
@@ -1522,6 +1588,10 @@
             cursor: pointer;
             user-select: none;
             touch-action: pan-x;
+        }
+        .drawer-handle:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: -2px;
         }
         .drawer-handle-half {
             display: none;
@@ -1679,7 +1749,7 @@
             border-top: 1px solid var(--border);
         }
 
-        .diff-line-add { background: #dcfce7; color: #166534; }
+        .diff-line-add { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
         .diff-line-del { background: #fee2e2; color: #991b1b; }
         .diff-line-hunk { color: #6b7280; font-style: italic; }
         .diff-line-meta { color: #6b7280; font-weight: 600; }
@@ -1723,8 +1793,8 @@
             color: var(--text-muted);
             cursor: pointer;
         }
-        .cfg-save-btn:hover:not(.saved) { background: var(--primary); color: #fff; border-color: var(--primary); }
-        .cfg-save-btn.saved { opacity: 0.5; cursor: default; }
+        .cfg-save-btn:hover:not(.saved) { background: var(--primary-fill); color: #fff; border-color: var(--primary); }
+        .cfg-save-btn.saved { color: var(--state-neutral-text); background: var(--state-neutral-bg); cursor: default; }
         .config-section-body {
             padding: 6px 0 8px;
             font-size: var(--text-sm);
@@ -1746,9 +1816,9 @@
             padding: 1px 6px;
             border-radius: var(--radius-lg);
             background: var(--border-light);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
-        .config-section-status.saved { background: var(--primary-bg); color: var(--primary-text); }
+        .config-section-status.saved { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
         .config-section-status.enforced { background: var(--info-bg); color: var(--info-text); }
         .config-section.enforced {
             border: 2px solid var(--primary) !important;
@@ -1763,9 +1833,17 @@
             align-items: end;
             margin-bottom: 6px;
         }
-        .config-compliance-ok { color: #10b981; }
-        .config-compliance-warn { color: #f59e0b; }
-        .config-compliance-unknown { color: #9ca3af; }
+        .config-compliance-ok { color: var(--state-neutral-text); }
+        .msg-info { color: var(--info-text) !important; }
+        .msg-info::before { content: "◷ "; }
+        .msg-warn { color: var(--warning-text) !important; font-weight: 600; }
+        .msg-warn::before { content: "⚠ "; }
+        .msg-ok { color: var(--state-neutral-text) !important; font-weight: 600; }
+        .msg-ok::before { content: "✓ "; }
+        .msg-err { color: var(--danger-fill) !important; font-weight: 600; }
+        .msg-err::before { content: "✕ "; }
+        .config-compliance-warn { color: var(--warning-text); }
+        .config-compliance-unknown { color: var(--state-neutral-text); }
 
         .drawer-settings-grid {
             display: flex;
@@ -1832,9 +1910,11 @@
         }
 
         .drawer-day-btn.active {
-            background: var(--primary-bg);
-            color: var(--primary-text);
-            border-color: var(--primary);
+            background: var(--primary-fill);
+            color: #FFFFFF;
+            border-color: var(--primary-fill);
+            font-size: var(--text-sm);
+            padding: 4px 8px;
         }
 
         .toggle-sm-row {
@@ -1931,7 +2011,7 @@
             font-family: var(--font-sans);
             font-weight: 700;
             line-height: 1;
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             opacity: 0;
             transition: opacity var(--tr-fast), color var(--tr-fast);
         }
@@ -1954,12 +2034,14 @@
         }
 
         .drawer-fw-chip.active:hover {
-            background: var(--primary-bg-hover);
+            background: var(--primary-fill-hover);
         }
 
+        .drawer-fw-chip.active::before { content: "✓"; font-family: var(--font-sans); }
         .drawer-fw-chip.active {
-            background: var(--primary-bg);
-            color: var(--primary-text);
+            background: var(--primary-fill);
+            color: #FFFFFF;
+            border: 1px solid var(--primary-fill);
             font-weight: 600;
         }
 
@@ -2050,40 +2132,59 @@
 
         .drawer-upload-status {
             font-size: var(--text-xs);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
 
-        .drawer-save-row {
+        .bar-save-cluster {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px 0 0;
-            border-top: 1px solid var(--border);
-            margin-top: 12px;
+            gap: var(--space-4);
+            margin-left: auto;
+            flex-shrink: 0;
         }
-        .drawer-save-btn {
-            padding: 6px 20px;
-            background: var(--primary);
-            color: white;
-            border: none;
+        #drawerHandleLeft { flex-wrap: wrap; }
+        #drawerHandleLeft #barRolloutSection { order: 0; }
+        #drawerSavedIndicator { margin-left: auto; }
+        .status-bar-notice {
+            flex-basis: 100%;
+            order: 1;
+            padding: var(--space-4) var(--space-5);
+            margin-top: var(--space-3);
             border-radius: var(--radius-md);
             font-size: var(--text-base);
-            font-family: inherit;
-            cursor: pointer;
-            transition: background var(--tr-base), opacity var(--tr-base);
+            line-height: 1.45;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            background: var(--warning-bg);
+            color: var(--warning-text);
+            border-left: 4px solid var(--warning-border);
         }
-        .drawer-save-btn:hover { background: var(--primary-hover); }
-        .drawer-save-btn:disabled { background: var(--toggle-off); cursor: not-allowed; opacity: 0.7; }
-        .drawer-save-btn.saving { opacity: 0.7; cursor: wait; }
-        .drawer-unsaved-dot {
-            width: 6px; height: 6px; border-radius: 50%;
-            background: #f59e0b; display: none; flex-shrink: 0;
+        .status-bar-notice.msg-info {
+            background: var(--info-bg);
+            color: var(--info-text);
+            border-left-color: var(--info-text);
         }
-        .drawer-unsaved-dot.visible { display: inline-block; }
-        .drawer-save-status {
-            font-size: var(--text-sm);
-            color: var(--text-dim, #6b7280);
-            transition: opacity var(--tr-slow);
+        #drawerSaveStatus { white-space: normal; }
+        #drawerSaveStatus.msg-err {
+            background: var(--danger-fill);
+            color: var(--danger-fill-text) !important;
+        }
+        #drawerSaveStatus::before, .status-bar-notice.msg-info::before { content: none; }
+        #firmwareStopDialog {
+            max-width: min(32rem, 90vw);
+            background: var(--bg-card);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: var(--space-6);
+        }
+        #firmwareStopResolution { display: block; width: 100%; }
+        @media (max-width: 768px) {
+            .bar-save-cluster { flex-basis: 100%; flex-wrap: wrap; order: 2; }
+            .bar-save-cluster .btn { min-height: 44px; }
+            #drawerSaveStatus { margin-right: auto; }
+            #drawerHandleLeft > .status-bar-section { flex-wrap: wrap; min-width: 0; }
+            #barQueueStatus { flex-wrap: wrap; }
         }
 
         /* Status bar sections (inside drawer handle) */
@@ -2117,13 +2218,12 @@
             font-weight: 600;
             text-transform: none;
             background: var(--border-light);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
-        .status-bar-badge.idle { background: var(--border-light); color: var(--text-muted); }
+        .status-bar-badge.idle { background: var(--border-light); color: var(--state-neutral-text); }
         .status-bar-badge.waiting { background: var(--warning-bg); color: var(--warning-text); }
         .status-bar-badge.running { background: var(--info-bg); color: var(--info-text); }
-        .status-bar-badge.blocked { background: var(--danger-bg); color: var(--danger-text); }
-        .status-bar-badge.current { background: var(--success-bg); color: var(--success-text); }
+        .status-bar-badge.current { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
 
         .status-icon {
             width: 12px;
@@ -2149,7 +2249,7 @@
         }
 
         .status-bar-reason {
-            color: var(--text-dim);
+            color: var(--state-neutral-text);
             font-size: var(--text-sm);
             max-width: 320px;
             overflow: hidden;
@@ -2174,14 +2274,14 @@
         }
 
         .status-bar-muted {
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             white-space: nowrap;
         }
 
         .status-bar-count {
             font-variant-numeric: tabular-nums;
-            color: var(--warning-light);
-            font-weight: 500;
+            color: var(--state-neutral-text);
+            font-weight: 600;
             white-space: nowrap;
         }
 
@@ -2198,9 +2298,10 @@
         }
 
         .status-bar-queue-item {
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             font-size: var(--text-sm);
-            white-space: nowrap;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
 
         /* Pause reason gets its own row so queue facts stay scannable. */
@@ -2234,7 +2335,7 @@
             align-items: center;
             font-size: var(--text-2xs);
             font-weight: 700;
-            color: #d97706;
+            color: var(--warning-text);
             background: #fffbeb;
             padding: 1px 5px;
             border-radius: var(--radius-sm);
@@ -2253,7 +2354,7 @@
         .u-ml-auto { margin-left: auto; }
         .u-overflow-x-auto { overflow-x: auto; }
         .u-dot-neutral { background: var(--text-dim); }
-        .u-saved-indicator { font-size: var(--text-sm); color: var(--success); opacity: 0; }
+        .u-saved-indicator { font-size: var(--text-sm); color: var(--state-neutral-text); opacity: 0; }
         .u-transition-opacity { transition: opacity var(--tr-slow); }
         .u-status-note { font-size: var(--text-sm); }
 
@@ -2350,18 +2451,18 @@
             display: inline-flex; align-items: center; gap: 5px;
             padding: 3px 9px; border-radius: var(--radius-md); border: 1px solid transparent;
             background: transparent; cursor: pointer; font-family: inherit;
-            font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); line-height: 1;
+            font-size: var(--text-sm); font-weight: 600; color: var(--state-neutral-text); line-height: 1;
             transition: background var(--tr-fast), border-color var(--tr-fast);
         }
         .fleet-chip .gl { font-size: var(--text-md); line-height: 1; }
         .fleet-chip .n { font-weight: 800; color: var(--text-subtle); }
-        .fleet-chip.s-cur .gl { color: var(--success); }
-        .fleet-chip.s-beh .gl { color: var(--warning); }
-        .fleet-chip.s-off .gl { color: var(--danger-bright); }
+        .fleet-chip.s-cur .gl { color: var(--state-neutral-text); }
+        .fleet-chip.s-beh .gl { color: var(--warning-text); }
+        .fleet-chip.s-off .gl { color: var(--danger-fill); }
         .fleet-chip:hover:not(.disabled) { background: var(--border-light); }
-        .fleet-chip.active.s-cur { background: var(--success-bg); border-color: var(--success-light); color: var(--success-text); }
-        .fleet-chip.active.s-beh { background: var(--warning-bg); border-color: var(--warning-light); color: var(--warning-text); }
-        .fleet-chip.active.s-off { background: var(--danger-bg); border-color: var(--danger-bright); color: var(--danger-text); }
+        .fleet-chip.active.s-cur { background: var(--state-neutral-bg); border-color: transparent; color: var(--state-neutral-text); }
+        .fleet-chip.active.s-beh { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); }
+        .fleet-chip.active.s-off { background: var(--danger-fill); border-color: transparent; color: var(--danger-fill-text); }
         .fleet-chip.active .n { color: inherit; }
         .fleet-chip.disabled { opacity: 0.4; cursor: default; }
 
@@ -2393,7 +2494,7 @@
             border-radius: var(--radius-full);
             background: var(--border-light);
             border: 1px solid var(--border);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             font-size: var(--text-2xs);
             font-weight: 600;
             letter-spacing: 0.02em;
@@ -2428,11 +2529,11 @@
             word-wrap: break-word;
         }
         .toast.info    { border-left-color: var(--info-strong); }
-        .toast.success { border-left-color: var(--success-hover); }
-        .toast.warn    { border-left-color: #d97706; }
-        .toast.error   { border-left-color: #dc2626; }
+        .toast.success { border-left-color: var(--state-neutral-text); }
+        .toast.warn    { border-left-color: var(--warning-text); }
+        .toast.error   { border-left-color: var(--danger-fill); }
         @keyframes toastSlideIn {
-            from { opacity: 0; transform: translateX(12px); }
+            from { opacity: 0; transform: translateX(12px); background: #FFFFFF; }
             to   { opacity: 1; transform: translateX(0); }
         }
 
@@ -2516,7 +2617,7 @@
 
         /* Edit login dialog */
         .device-login-fields { display: grid; gap: var(--space-5); margin-top: var(--space-6); }
-        .device-login-status { font-size: var(--text-base); line-height: 1.5; margin-top: var(--space-5); color: var(--text-muted); }
+        .device-login-status { font-size: var(--text-base); line-height: 1.5; margin-top: var(--space-5); color: var(--state-neutral-text); }
         .device-login-status:empty { display: none; }
         .device-login-status.error { color: var(--danger-text); }
 
@@ -2613,7 +2714,7 @@
         .opt-badge {
             display: inline-flex; align-items: center; gap: 4px;
             font-size: var(--text-2xs); font-weight: 700; color: #fff;
-            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+            background: var(--primary-fill);
             padding: 2px 7px 2px 5px; border-radius: var(--radius-full);
             letter-spacing: .06em; white-space: nowrap;
             box-shadow: 0 1px 2px rgba(13,148,136,.35); line-height: 1.3;
@@ -2712,22 +2813,23 @@
             transition: opacity var(--tr-fast) ease; display: none;
         }
         .cpop.show { display: block; opacity: 1; }
-        .cpop.h-green  { border-color: var(--success); }
+        .cpop.h-green  { border-color: var(--state-neutral-text); }
         .cpop.h-yellow { border-color: var(--warning); }
-        .cpop.h-red    { border-color: var(--danger-bright); }
+        .cpop.h-red    { border-color: var(--danger-fill); }
         .cpop-badge {
+            background: var(--state-neutral-bg);
             position: absolute; top: -9px; right: 10px;
             padding: 2px 8px; border-radius: var(--radius-full);
-            font-size: var(--text-2xs); font-weight: 600; color: #fff;
+            font-size: var(--text-2xs); font-weight: 600; color: var(--state-neutral-text);
             letter-spacing: .02em; line-height: 1.4;
             text-transform: uppercase; box-shadow: 0 1px 2px rgba(0,0,0,.08);
         }
-        .cpop.h-green  .cpop-badge { background: var(--success); }
-        .cpop.h-yellow .cpop-badge { background: var(--warning); }
-        .cpop.h-red    .cpop-badge { background: var(--danger-bright); }
+        .cpop.h-green  .cpop-badge { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .cpop.h-yellow .cpop-badge { background: var(--warning-bg); color: var(--warning-text); }
+        .cpop.h-red    .cpop-badge { background: var(--danger-fill); color: var(--danger-fill-text); }
         .cpop-head { margin-bottom: 10px; }
         .cpop-name { font-size: var(--text-base); font-weight: 600; color: var(--text); line-height: 1.2; }
-        .cpop-meta { color: var(--text-muted); margin-top: 1px; font-size: var(--text-2xs); }
+        .cpop-meta { color: var(--state-neutral-text); margin-top: 1px; font-size: var(--text-2xs); }
         .cpop-gauge { margin-top: 8px; }
         .cpop-gauge:first-of-type { margin-top: 0; }
         .cpop-gauge-label {
@@ -2735,7 +2837,7 @@
             margin-bottom: 3px;
         }
         .cpop-gauge-label .lbl {
-            font-size: var(--text-2xs); color: var(--text-muted);
+            font-size: var(--text-2xs); color: var(--state-neutral-text);
             text-transform: uppercase; letter-spacing: .06em; font-weight: 500;
         }
         .cpop-gauge-label .val {
@@ -2746,9 +2848,9 @@
             font-variant-numeric: tabular-nums; font-weight: 600;
             font-size: var(--text-2xs); margin-left: 6px;
         }
-        .cpop-gauge-label .delta.up   { color: var(--success); }
-        .cpop-gauge-label .delta.down { color: var(--danger-bright); }
-        .cpop-gauge-label .delta.flat { color: var(--text-dim); }
+        .cpop-gauge-label .delta.up   { color: var(--state-neutral-text); }
+        .cpop-gauge-label .delta.down { color: var(--danger-fill); }
+        .cpop-gauge-label .delta.flat { color: var(--state-neutral-text); }
         .cpop-bar {
             position: relative; height: 5px;
             background: #eef0f3; border-radius: var(--radius-sm);
@@ -2757,7 +2859,7 @@
             position: absolute; left: 0; top: 0; bottom: 0;
             border-radius: var(--radius-sm); transition: width var(--tr-fast);
         }
-        .cpop-bar-fill.green  { background: var(--success); }
+        .cpop-bar-fill.green  { background: var(--state-neutral-text); }
         .cpop-bar-fill.yellow { background: var(--warning); }
         .cpop-bar-fill.red    { background: var(--danger-bright); }
         .cpop-bar-tick {
@@ -2793,14 +2895,14 @@
             <div class="update-spinner-large"></div>
             <h3>System Updating</h3>
             <p id="systemUpdateMessage">Applying update and restarting...</p>
-            <p id="systemUpdateElapsed" style="font-size:0.75rem;color:var(--text-dim);margin-top:8px;"></p>
+            <p id="systemUpdateElapsed" style="font-size:0.75rem;color:var(--state-neutral-text);margin-top:8px;"></p>
         </div>
     </div>
 
     <div class="header">
-        <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:var(--primary);border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:var(--primary);">Ops</span></h1>
+        <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:var(--primary-fill);border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:var(--primary-text);">Ops</span></h1>
         <div class="header-right">
-            <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
+            <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--state-neutral-text);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
             <button class="header-icon-btn" onclick="openHistoryModal()" title="Job History">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -2833,7 +2935,7 @@
         <div class="top-section">
             <div class="card" data-min-role="operator">
                 <h2>Add APs &amp; Switches</h2>
-                <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
+                <p style="font-size:0.75rem;color:var(--state-neutral-text);margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
                     <textarea id="deviceIps" name="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2&#10;https://192.168.1.23/" aria-label="Device IPs"></textarea>
                     <div class="cred-row">
@@ -2917,7 +3019,7 @@
                 <button class="btn btn-sm btn-secondary hidden" id="btnCheckCompliance" onclick="checkComplianceForSelected()" data-min-role="operator">Check Compliance</button>
                 <button class="btn btn-sm btn-ghost" onclick="clearChecked()">Clear</button>
             </div>
-            <div class="u-overflow-x-auto">
+            <div class="u-overflow-x-auto" id="deviceTableScroll">
                 <table class="tree-table" id="deviceTable">
                     <thead>
                         <tr id="deviceTableHead">
@@ -2935,6 +3037,18 @@
 
     </div>
 
+    <dialog id="firmwareStopDialog" aria-labelledby="firmwareStopTitle">
+        <form onsubmit="resolveFirmwareStop(event)">
+            <h2 id="firmwareStopTitle">Resolve firmware stop</h2>
+            <p id="firmwareStopDialogDetail"></p>
+            <label for="firmwareStopResolution">How did you resolve the device failure?</label>
+            <textarea id="firmwareStopResolution" name="resolution" required></textarea>
+            <p id="firmwareStopError" role="alert"></p>
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Record resolution</button>
+        </form>
+    </dialog>
+
     <!-- Bottom Drawer -->
     <div class="bottom-drawer" id="bottomDrawer">
         <!-- Mode tabs above the bar -->
@@ -2942,17 +3056,13 @@
             <button class="mode-tab-btn active" id="modeTabFw" onclick="handleTabClick('firmware')">Updates<span class="mode-tab-badge" id="modeTabFwBadge"></span></button>
             <button class="mode-tab-btn" id="modeTabCfg" onclick="handleTabClick('config')">Config<span class="mode-tab-badge" id="modeTabCfgBadge"></span></button>
         </div>
-        <div class="drawer-handle" id="drawerHandle" onclick="toggleDrawer(event)">
+        <div class="drawer-handle" id="drawerHandle" tabindex="0" onclick="toggleDrawer(event)">
             <!-- Firmware/Updates bar (shown when firmware mode active) -->
             <div class="drawer-handle-half active" id="drawerHandleLeft">
                 <div class="status-bar-section">
-                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-describedby="barBlockReason" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
+                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-describedby="barNotice" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
                     <span class="status-bar-label">Auto-Update</span>
                     <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
-                    <span class="status-bar-reason" id="barBlockReason" role="status"></span>
-                </div>
-                <div class="status-bar-section hidden" id="barDeviceCountSection">
-                    <span class="status-bar-count" id="barBehindCount"></span>
                 </div>
                 <div class="status-bar-section status-bar-rollout u-ml-auto" id="barRolloutSection">
                     <div class="status-bar-queue" id="barQueueStatus" role="status" aria-live="polite">
@@ -2963,8 +3073,17 @@
                         <span class="status-bar-reason" id="barQueueReason"></span>
                     </div>
                 </div>
-                <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
-                <span id="drawerSavedIndicator" class="u-saved-indicator u-transition-opacity">Saved</span>
+                <div class="bar-save-cluster hidden" id="barSaveCluster" data-min-role="operator">
+                    <span class="status-bar-badge waiting" id="drawerSaveStatus" role="status">✎ Unsaved changes</span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="drawerDiscardBtn" onclick="discardDrawerSettings()">Discard</button>
+                    <button type="button" class="btn btn-primary btn-sm" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save changes</button>
+                </div>
+                <span id="drawerSavedIndicator" class="hidden u-saved-indicator u-transition-opacity" role="status">✓ Saved</span>
+                <div class="status-bar-notice hidden" id="barNotice" role="status"></div>
+                <div class="status-bar-notice hidden" id="barStopNotice">
+                    <span id="barStopDetail" role="status"></span>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="openFirmwareStopResolution()">Resolve stop</button>
+                </div>
             </div>
             <!-- Config bar (shown when config mode active) -->
             <div class="drawer-handle-half" id="drawerHandleRight">
@@ -3038,22 +3157,18 @@
 
                     <div class="drawer-col">
                         <div class="drawer-section-title">Settings</div>
-                        <label for="drawerBankMode">Update Mode</label>
+                        <label for="drawerBankMode">Manual Update Bank Mode</label>
                         <select id="drawerBankMode" name="drawerBankMode" data-min-role-disable="operator">
                             <option value="one">Single bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
-                        <div style="margin-top:8px;">
-                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10" data-min-role-disable="operator">
-                        </div>
+                        <div class="u-text-xs-muted">Scheduled updates use one bank.</div>
+                        <div class="u-text-xs-muted">Updates run one device at a time.</div>
                     </div>
 
                     <div class="drawer-col-wide">
                         <div class="drawer-section-title">Options</div>
-                        <div class="toggle-sm-row">
-                            <button class="toggle-sm active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()" data-min-role-disable="operator"></button>
-                            <span class="toggle-sm-label">Pre-update Reboot</span>
-                        </div>
+                        <div class="toggle-sm-row u-text-sm-muted">Each device reboots before its firmware update.</div>
                         <div class="toggle-sm-row">
                             <button class="toggle-sm" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Allow Downgrade</span>
@@ -3065,6 +3180,7 @@
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
                             <span id="drawerWeatherTemp" class="u-text-sm-muted" style="margin-left:auto;"></span>
                         </div>
+                        <div id="drawerWeatherStatus" class="u-text-xs-muted" role="status" aria-live="polite"></div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerZipCode">Postal / Zip</label>
                             <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56" data-min-role-disable="operator">
@@ -3097,11 +3213,6 @@
                             <span class="drawer-upload-status" id="drawerUploadStatus"></span>
                         </div>
                     </div>
-                </div>
-
-                <div class="drawer-save-row" id="drawerSaveRow" data-min-role="operator">
-                    <button class="drawer-save-btn" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save</button>
-                    <span class="drawer-save-status" id="drawerSaveStatus"></span>
                 </div>
             </div>
             </div><!-- /drawerContent-updates -->
@@ -3211,7 +3322,7 @@
                                     <div><label for="cfgRadiusPort">Port</label><input type="number" id="cfgRadiusPort" name="cfgRadiusPort" value="1812" style="width:100%;"></div>
                                     <div><label for="cfgRadiusSecret">Secret</label><input type="password" id="cfgRadiusSecret" name="cfgRadiusSecret" placeholder="shared secret" autocomplete="off" data-1p-ignore style="width:100%;"></div>
                                 </div>
-                                <div style="margin-top:6px;font-size:var(--text-xs);color:var(--text-dim);">
+                                <div style="margin-top:6px;font-size:var(--text-xs);color:var(--state-neutral-text);">
                                     <a class="action-link" onclick="prefillBuiltinRadiusConfig();event.stopPropagation();">Use this appliance's RADIUS</a>
                                 </div>
                             </div>
@@ -3272,7 +3383,7 @@
         <div class="backup-modal app-settings-modal" id="appSettingsDialog" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle" tabindex="-1">
             <div class="app-settings-header">
                 <span id="appSettingsTitle" style="font-size:0.9rem;font-weight:600;">App Settings</span>
-                <button id="appSettingsClose" type="button" aria-label="Close App Settings" onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:var(--text-xl);line-height:1;padding:var(--space-2);min-width:var(--space-8);min-height:var(--space-8);">&times;</button>
+                <button id="appSettingsClose" type="button" aria-label="Close App Settings" onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:var(--text-xl);line-height:1;padding:var(--space-2);min-width:var(--space-8);min-height:var(--space-8);">&times;</button>
             </div>
 
             <!-- Tabs -->
@@ -3354,7 +3465,7 @@
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;">
-                        <button class="backup-btn" style="background:var(--primary);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
+                        <button class="backup-btn" style="background:var(--primary-fill);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
                         <span id="sslStatus" class="u-text-xs-muted"></span>
                     </div>
                     <p class="u-note-inline" style="margin-top:10px;">
@@ -3410,7 +3521,7 @@
 
                 <!-- Slack sub-panel -->
                 <div class="notif-subpanel active" id="notifSub-slack" data-min-role-disable-tree="operator">
-                    <label for="notifSlackWebhook">Slack Webhook <a href="https://api.slack.com/messaging/webhooks" target="_blank" title="How to create an Incoming Webhook in Slack" style="color:var(--primary);font-size:0.7rem;text-decoration:none;font-weight:400;">?</a></label>
+                    <label for="notifSlackWebhook">Slack Webhook <a href="https://api.slack.com/messaging/webhooks" target="_blank" title="How to create an Incoming Webhook in Slack" style="color:var(--primary-text);font-size:0.7rem;text-decoration:none;font-weight:400;">?</a></label>
                     <div class="u-flex-col-gap8">
                         <input type="text" id="notifSlackWebhook" name="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." class="u-input-compact">
                         <div class="u-flex-center-gap6">
@@ -3515,26 +3626,26 @@
                         </label>
                         <div id="webhookFields" style="display:grid;grid-template-columns:1fr 100px;gap:8px;">
                             <div style="grid-column:1/-1;">
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookUrl">Webhook URL</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookUrl">Webhook URL</label>
                                 <input type="text" id="webhookUrl" name="webhookUrl" placeholder="https://example.com/webhook" class="u-input-compact">
                             </div>
                             <div>
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookMethod">Method</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookMethod">Method</label>
                                 <select id="webhookMethod" name="webhookMethod" class="u-input-compact">
                                     <option value="POST">POST</option>
                                     <option value="PUT">PUT</option>
                                 </select>
                             </div>
                             <div>
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookSecret">Secret (HMAC)</label>
-                                <input type="password" id="webhookSecret" name="webhookSecret" placeholder="Optional" class="u-input-compact">
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookSecret">Secret (HMAC)</label>
+                                <input type="password" id="webhookSecret" name="webhookSecret" placeholder="Set / unchanged" class="u-input-compact">
                             </div>
                             <div style="grid-column:1/-1;">
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookHeaders">Custom Headers (JSON)</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookHeaders">Custom Headers (JSON)</label>
                                 <input type="text" id="webhookHeaders" name="webhookHeaders" placeholder='{"Authorization": "Bearer ..."}' class="u-input-compact">
                             </div>
                             <div style="grid-column:1/-1;">
-                                <label style="font-size:0.7rem;color:#9ca3af;">Events</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);">Events</label>
                                 <div style="display:flex;gap:12px;flex-wrap:wrap;">
                                     <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
                                         <input type="checkbox" id="webhookEvtJobCompleted" name="webhookEvtJobCompleted" checked> job_completed
@@ -3735,7 +3846,7 @@
                                 <label class="u-label-xs" for="authRadiusSecret">Shared Secret</label>
                                 <div style="position:relative;">
                                     <input type="password" id="authRadiusSecret" name="authRadiusSecret" placeholder="Enter secret" class="u-input-compact" style="padding-right:28px;">
-                                    <button type="button" onclick="const i=document.getElementById('authRadiusSecret');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'\u{1F441}':'\u{1F648}';" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.7rem;padding:2px;line-height:1;color:var(--text-dim);">&#x1F441;</button>
+                                    <button type="button" onclick="const i=document.getElementById('authRadiusSecret');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'\u{1F441}':'\u{1F648}';" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.7rem;padding:2px;line-height:1;color:var(--state-neutral-text);">&#x1F441;</button>
                                 </div>
                             </div>
                             <div>
@@ -3795,7 +3906,7 @@
                     </div>
 
                     <div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;">
-                        <button class="backup-btn" style="background:var(--primary);color:#fff;font-weight:500;" onclick="saveRadiusConfig()">Save</button>
+                        <button class="backup-btn" style="background:var(--primary-fill);color:#fff;font-weight:500;" onclick="saveRadiusConfig()">Save</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="testRadiusConfig()">Test</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="pushRadiusToDevices()">Push to Devices</button>
                         <span style="flex:1;"></span>
@@ -4517,10 +4628,10 @@
                     if (el) {
                         if (message.failed > 0) {
                             el.textContent = `Push complete: ${message.succeeded} succeeded, ${message.failed} failed out of ${message.total}`;
-                            el.style.color = '#f59e0b';
+                            setStatusTone(el, 'msg-warn');
                         } else {
                             el.textContent = `Push complete: ${message.succeeded}/${message.total} devices updated`;
-                            el.style.color = '#10b981';
+                            setStatusTone(el, 'var(--state-neutral-text)');
                         }
                     }
                     refreshRadiusData();
@@ -4528,6 +4639,18 @@
                     handleDeviceUpdate(message);
                 }
             };
+        }
+
+        function setStatusTone(element, tone) {
+            element.classList.remove('msg-ok', 'msg-warn', 'msg-err', 'msg-info');
+            element.style.color = '';
+            const tones = {
+                'var(--state-neutral-text)': 'msg-ok',
+                'var(--warning-text)': 'msg-warn',
+                'var(--danger-fill)': 'msg-err',
+                'var(--info-text)': 'msg-info',
+            };
+            if (tone) element.classList.add(tones[tone] || tone);
         }
 
         function inlineFormat(text) {
@@ -5537,7 +5660,7 @@
             const vs = versionStatus(ip);
             const addressHold = holdInfo(ip);
             if (addressHold?.code === 'address_change_hold') {
-                return `<span class="status-icon-cell" tabindex="0" aria-label="${escapeHtml(addressHold.reason)}" title="${escapeHtml(addressHold.reason)}" style="color:var(--warning);">&#9201;</span>`;
+                return `<span class="status-icon-cell" tabindex="0" aria-label="${escapeHtml(addressHold.reason)}" title="${escapeHtml(addressHold.reason)}" style="color: var(--warning-text);">&#9201;</span>`;
             }
             if (vs === 'current') {
                 return '<span class="status-current" title="Current">&#10003;</span>';
@@ -5615,10 +5738,10 @@
                         <input type="checkbox" data-check-ap="${ap.ip}" ${checkedDevices.has(ap.ip) ? 'checked' : ''} onclick="toggleCheckAP('${ap.ip}',event);event.stopPropagation();">
                         <span class="expand-toggle ${cpes.length > 0 ? (apExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${apKey}',event)">&#9654;</span>
                         ${apHealthDot}<span class="device-icon ap">AP</span>
-                        <span>
-                        ${deviceNameHtml(ap.ip, apName)}
-                        ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
-                        </span>
+                        <div class="device-name-group">
+                            ${deviceNameHtml(ap.ip, apName)}
+                            ${ap.notes ? `<div class="device-notes" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
+                        </div>
                         ${portBadge}
                         ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
                     </div>
@@ -5629,11 +5752,11 @@
                 <td></td>
                 <td></td>
                 <td>${updateCell('ap', ap.ip)}</td>
-                <td>${lastUpdatedCell(ap.last_firmware_update)}</td>
+                <td class="device-date">${lastUpdatedCell(ap.last_firmware_update)}</td>
                 <td><div class="actions-cell">${actionsCell('ap', ap.ip, apName)}</div></td>
                 ` : `
                 <td>${configStatusCell(ap.ip)}</td>
-                <td>${configLastCheckedCell(ap.ip)}</td>
+                <td class="device-date">${configLastCheckedCell(ap.ip)}</td>
                 <td><div class="actions-cell">${configActionsCell(ap.ip)}</div></td>
                 `}
             </tr>`;
@@ -5667,7 +5790,7 @@
                             <input type="checkbox" ${checkedDevices.has(cpe.ip) ? 'checked' : ''} onclick="toggleCheck('${cpe.ip}',event);event.stopPropagation();">
                             <span class="expand-toggle hidden">&#9654;</span>
                             <span class="device-icon cpe ${health}"></span>
-                            ${deviceNameHtml(cpeIp, cpeName)}
+                            <div class="device-name-group">${deviceNameHtml(cpeIp, cpeName)}</div>
                             ${(cpe.auth_status && cpe.auth_status !== 'ok' && cpe.auth_status !== 'unreachable') ? `<span class="cpe-auth-badge" title="Can't sign in — this client uses different credentials than its AP.">Can't sign in</span>` : ''}
                         </div>
                     </td>
@@ -5677,11 +5800,11 @@
                     <td class="${signalClass} cpe-sig-cell" data-cpe-ip="${cpe.ip}">${signalVal != null ? signalVal.toFixed(0) + ' dBm' : ''}${signalMarginHtml}</td>
                     <td>${formatDistance(cpe.link_distance)}</td>
                     <td>${updateCell('cpe', cpe.ip, ap.ip)}</td>
-                    <td></td>
+                    <td class="device-date"></td>
                     <td><div class="actions-cell">${actionsCell('cpe', cpe.ip, cpeName)}</div></td>
                     ` : `
                     <td>${cpeIp ? configStatusCell(cpeIp) : ''}</td>
-                    <td>${cpeIp ? configLastCheckedCell(cpeIp) : ''}</td>
+                    <td class="device-date">${cpeIp ? configLastCheckedCell(cpeIp) : ''}</td>
                     <td><div class="actions-cell">${cpeIp ? configActionsCell(cpeIp) : ''}</div></td>
                     `}
                 </tr>`;
@@ -5754,11 +5877,11 @@
         // data-ip is kept either way so right-click "copy IP" still works.
         function deviceNameHtml(ip, name) {
             const safe = escapeHtml(name);
-            if (!ip) return safe;
+            if (!ip) return `<span class="device-name" tabindex="0">${safe}</span>`;
             if (currentUserRole === 'viewer') {
-                return `<span class="name-static" data-ip="${ip}">${safe}</span>`;
+                return `<span class="name-static device-name" tabindex="0" data-ip="${ip}">${safe}</span>`;
             }
-            return `<a href="/api/device-portal/${ip}" target="_blank" class="name-link" data-ip="${ip}" onclick="event.stopPropagation();">${safe}</a>`;
+            return `<a href="/api/device-portal/${ip}" target="_blank" class="name-link device-name" data-ip="${ip}" onclick="event.stopPropagation();">${safe}</a>`;
         }
 
         function renderTableHeader() {
@@ -5772,14 +5895,14 @@
                     <th data-sort="signal" data-filterable="signal" onclick="handleHeaderClick('signal',this,event)">Signal <span class="sort-arrow"></span></th>
                     <th data-sort="distance" onclick="sortTable('distance')">Distance <span class="sort-arrow"></span></th>
                     <th data-sort="update" onclick="sortTable('update')">Update <span class="sort-arrow"></span></th>
-                    <th data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
+                    <th class="device-date" data-sort="lastseen" onclick="sortTable('lastseen')">Last Updated <span class="sort-arrow"></span></th>
                     <th>Actions</th>`;
             } else {
                 thead.innerHTML = `
                     <th data-sort="name" onclick="sortTable('name')"><input type="checkbox" id="checkAllBox" onclick="toggleCheckAll(event);event.stopPropagation();" style="margin-right:6px;vertical-align:middle;"> Name / IP <span class="sort-arrow"></span></th>
                     <th data-sort="model" data-filterable="model" onclick="handleHeaderClick('model',this,event)">Model <span class="sort-arrow"></span></th>
                     <th>Config Status</th>
-                    <th>Last Checked</th>
+                    <th class="device-date">Last Checked</th>
                     <th>Actions</th>`;
             }
         }
@@ -5861,8 +5984,8 @@
                 if (switches.length > 0) badgeParts.push(`${switches.length} SW`);
 
                 const siteEmptyTds = activeColumnMode === 'firmware'
-                    ? `<td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td></td>`
-                    : `<td></td><td></td><td></td>`;
+                    ? `<td></td><td></td><td></td><td></td><td>${siteUpdateCell(site.id, aps)}</td><td class="device-date"></td>`
+                    : `<td></td><td></td><td class="device-date"></td>`;
                 const siteActions = activeColumnMode === 'firmware'
                     ? `${actionsCell('site', site.id, site.name)}${site.id !== null && aps.length === 0 && switches.length === 0 ? deleteActionLink('site', site.id) : ''}`
                     : '';
@@ -5872,7 +5995,7 @@
                             <input type="checkbox" data-check-site="${site.id}" onclick="toggleCheckSite(${site.id !== null ? site.id : 'null'},event);event.stopPropagation();">
                             <span class="expand-toggle ${siteExpanded ? 'expanded' : ''}" onclick="toggleExpand('${siteKey}',event)">&#9654;</span>
                             <span class="device-icon site">T</span>
-                            ${escapeHtml(site.name)}
+                            <div class="device-name-group">${deviceNameHtml('', site.name)}</div>
                             <span class="tree-badge">${badgeParts.join(', ')}</span>
                         </div>
                     </td>
@@ -5930,10 +6053,10 @@
                                 <input type="checkbox" ${checkedDevices.has(sw.ip) ? 'checked' : ''} onclick="toggleCheck('${sw.ip}',event);event.stopPropagation();">
                                 <span class="expand-toggle ${hasChildren ? (swExpanded ? 'expanded' : '') : 'hidden'}" onclick="toggleExpand('${swKey}',event)">&#9654;</span>
                                 ${swHealthDot}<span class="device-icon ap">SW</span>
-                                <span>
-                                ${deviceNameHtml(sw.ip, swName)}
-                                ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
-                                </span>
+                                <div class="device-name-group">
+                                    ${deviceNameHtml(sw.ip, swName)}
+                                    ${sw.notes ? `<div class="device-notes" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
+                                </div>
                             </div>
                         </td>
                         <td>${sw.model || ''}</td>
@@ -5942,11 +6065,11 @@
                         <td></td>
                         <td></td>
                         <td>${updateCell('switch', sw.ip)}</td>
-                        <td>${lastUpdatedCell(sw.last_firmware_update)}</td>
+                        <td class="device-date">${lastUpdatedCell(sw.last_firmware_update)}</td>
                         <td><div class="actions-cell">${actionsCell('switch', sw.ip, swName)}</div></td>
                         ` : `
                         <td>${configStatusCell(sw.ip)}</td>
-                        <td>${configLastCheckedCell(sw.ip)}</td>
+                        <td class="device-date">${configLastCheckedCell(sw.ip)}</td>
                         <td><div class="actions-cell">${configActionsCell(sw.ip)}</div></td>
                         `}
                     </tr>`;
@@ -6148,7 +6271,7 @@
         // Fixed y-axis box width so the rain and distance charts share the same
         // plot-area left edge — the graph doesn't shift when toggling views.
         const SH_Y_AXIS_W = 72;
-        const shColorFor  = h => h === 'green' ? '#10b981' : h === 'yellow' ? '#f59e0b' : '#ef4444';
+        const shColorFor  = h => h === 'green' ? '#374151' : h === 'yellow' ? '#92400e' : '#b91c1c';
         const shBorderFor = h => h === 'green' ? '#34d399' : h === 'yellow' ? '#fbbf24' : '#f87171';
         const shClamp01 = v => Math.max(0, Math.min(1, v));
         const shActiveClimate = () => SH_CLIMATES[shSelectedZone] || SH_CLIMATES[SH_DEFAULT_ZONE];
@@ -6408,7 +6531,7 @@
                 mark9999: {
                     type: 'line', yMin: z.r9999, yMax: z.r9999,
                     borderColor: 'rgba(16,185,129,0.7)', borderWidth: 1.5, borderDash: [3,3],
-                    label: { display: true, content: '99.99% storm: ' + z.r9999 + ' mm/hr', color: '#047857',
+                    label: { display: true, content: '99.99% storm: ' + z.r9999 + ' mm/hr', color: 'var(--state-neutral-text)',
                              position: 'end', backgroundColor: 'rgba(255,255,255,.92)', font: { size: 10 }, padding: 4, yAdjust: 8 },
                 },
             };
@@ -6441,12 +6564,12 @@
                     },
                     scales: {
                         x: { type: 'linear', min: 0,
-                             title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
-                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
+                             title: { display: true, text: 'Distance (m)', color: 'var(--state-neutral-text)', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                         y: { type: 'linear', min: 0, max: SH_Y_MAX_RAIN,
                              afterFit: s => { s.width = SH_Y_AXIS_W; },
-                             title: { display: true, text: 'Survives rain up to (mm/hr)', color: '#6b7280', font: { size: 11 } },
-                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 50 } },
+                             title: { display: true, text: 'Survives rain up to (mm/hr)', color: 'var(--state-neutral-text)', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                     },
                     plugins: {
                         legend: { display: false },
@@ -6503,11 +6626,11 @@
                     },
                     scales: {
                         x: { type: 'linear', min: 0,
-                             title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
-                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
+                             title: { display: true, text: 'Distance (m)', color: 'var(--state-neutral-text)', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                         y: { min: SH_SIG_MIN, max: SH_SIG_MAX,
                              afterFit: s => { s.width = SH_Y_AXIS_W; },
-                             title: { display: true, text: 'Signal (dBm)', color: '#6b7280', font: { size: 11 } },
+                             title: { display: true, text: 'Signal (dBm)', color: 'var(--state-neutral-text)', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                     },
                     plugins: {
@@ -6517,7 +6640,7 @@
                                 floor: {
                                     type: 'line', yMin: SH_MCS1_FLOOR, yMax: SH_MCS1_FLOOR,
                                     borderColor: '#9ca3af', borderWidth: 1.5, borderDash: [4,4],
-                                    label: { display: true, content: 'MCS1 floor', color: '#6b7280', position: 'start',
+                                    label: { display: true, content: 'MCS1 floor', color: 'var(--state-neutral-text)', position: 'start',
                                              backgroundColor: 'rgba(255,255,255,.9)', font: { size: 10 }, padding: 4 },
                                 },
                             },
@@ -6557,7 +6680,7 @@
             const stat = (color, n, label) =>
                 '<span class="item"><span class="dot" style="background:' + color + '"></span><strong>' + n + '</strong> ' + label + '</span>';
             el.innerHTML =
-                stat('var(--success)', cnt.green, HEALTH_LABEL.green)
+                stat('var(--state-neutral-text)', cnt.green, HEALTH_LABEL.green)
               + stat('var(--warning)', cnt.yellow, HEALTH_LABEL.yellow)
               + stat('var(--danger-bright)', cnt.red, HEALTH_LABEL.red)
               + (cnt.signal ? stat('var(--text-dim)', cnt.signal, HEALTH_LABEL.signal) : '')
@@ -7341,7 +7464,8 @@
                 document.getElementById('webhookEnabled').checked = data.settings.webhook_enabled === 'true';
                 document.getElementById('webhookUrl').value = data.settings.webhook_url || '';
                 document.getElementById('webhookMethod').value = data.settings.webhook_method || 'POST';
-                document.getElementById('webhookSecret').value = data.settings.webhook_secret || '';
+                document.getElementById('webhookSecret').value = '';
+                document.getElementById('webhookSecret').placeholder = data.settings.webhook_secret ? 'Set / unchanged' : 'Optional';
                 document.getElementById('webhookHeaders').value = data.settings.webhook_headers || '';
                 const events = (data.settings.webhook_events || 'job_completed,job_failed,device_offline,device_recovered').split(',');
                 document.getElementById('webhookEvtJobCompleted').checked = events.includes('job_completed');
@@ -7431,30 +7555,33 @@
                 refreshRadiusData();
             } catch (e) {
                 document.getElementById('oidcStatus').textContent = 'Failed to load config';
-                document.getElementById('oidcStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('oidcStatus'), 'var(--danger-fill)');
             }
 
             try {
                 await refreshRadiusData();
             } catch (e) {
                 document.getElementById('radiusStatus').textContent = 'Failed to load built-in RADIUS data';
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--danger-fill)');
             }
         }
         async function saveSlackWebhook() {
             const url = document.getElementById('notifSlackWebhook').value.trim();
             const statusEl = document.getElementById('notifStatus');
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ slack_webhook_url: url }),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
+                return true;
             } catch (e) {
                 statusEl.textContent = 'Failed to save: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
+                return false;
             }
         }
         async function testSlackWebhookModal() {
@@ -7462,26 +7589,26 @@
             const statusEl = document.getElementById('notifStatus');
             if (!url) {
                 statusEl.textContent = 'Enter a webhook URL first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             // Save first, then test
-            await saveSlackWebhook();
+            if (!await saveSlackWebhook()) return;
             statusEl.textContent = 'Sending test...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/slack/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = 'Test sent! Check your Slack channel.';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7505,37 +7632,40 @@
             const pw = document.getElementById('emailSmtpPassword').value;
             if (pw) settings.email_smtp_password = pw;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
+                return true;
             } catch (e) {
                 statusEl.textContent = 'Failed to save: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
+                return false;
             }
         }
 
         async function testEmail() {
             const statusEl = document.getElementById('emailStatus');
-            await saveEmailSettings();
+            if (!await saveEmailSettings()) return;
             statusEl.textContent = 'Sending test email...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/email/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = 'Test email sent! Check your inbox.';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test email';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7561,10 +7691,12 @@
                 });
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
+                return true;
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
+                return false;
             }
         }
 
@@ -7572,25 +7704,25 @@
             const statusEl = document.getElementById('snmpStatus');
             if (!document.getElementById('snmpTrapsEnabled').checked) {
                 statusEl.textContent = 'Enable SNMP traps first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
-            await saveSnmpSettings();
+            if (!await saveSnmpSettings()) return;
             statusEl.textContent = 'Sending test trap...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/snmp/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = data.message || 'Test trap sent!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test trap';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7611,7 +7743,7 @@
             if (headers) {
                 try { JSON.parse(headers); } catch (e) {
                     statusEl.textContent = 'Invalid JSON in custom headers';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                     return;
                 }
             }
@@ -7619,10 +7751,11 @@
                 webhook_enabled: document.getElementById('webhookEnabled').checked ? 'true' : 'false',
                 webhook_url: document.getElementById('webhookUrl').value.trim(),
                 webhook_method: document.getElementById('webhookMethod').value,
-                webhook_secret: document.getElementById('webhookSecret').value,
                 webhook_headers: headers || '{}',
                 webhook_events: events.join(','),
             };
+            const secret = document.getElementById('webhookSecret').value;
+            if (secret) settings.webhook_secret = secret;
             try {
                 const resp = await fetch('/api/settings', {
                     method: 'PUT',
@@ -7631,10 +7764,12 @@
                 });
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
+                return true;
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
+                return false;
             }
         }
 
@@ -7642,30 +7777,30 @@
             const statusEl = document.getElementById('webhookStatus');
             if (!document.getElementById('webhookEnabled').checked) {
                 statusEl.textContent = 'Enable webhooks first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             if (!document.getElementById('webhookUrl').value.trim()) {
                 statusEl.textContent = 'Enter a webhook URL first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
-            await saveWebhookSettings();
+            if (!await saveWebhookSettings()) return;
             statusEl.textContent = 'Sending test webhook...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/webhooks/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = data.message || 'Test webhook sent!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test webhook';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7674,8 +7809,8 @@
             if (!badge) return;
             if (radius?.running && radius?.healthy !== false) {
                 badge.textContent = 'Active';
-                badge.style.background = '#d1fae5';
-                badge.style.color = '#065f46';
+                badge.style.background = 'var(--state-neutral-bg)';
+                badge.style.color = 'var(--state-neutral-text)';
             } else if (radius?.running) {
                 badge.textContent = 'Degraded';
                 badge.style.background = '#fee2e2';
@@ -7756,7 +7891,7 @@
             const container = document.getElementById('radiusUsersList');
             if (!container) return;
             if (!users || users.length === 0) {
-                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No RADIUS admin accounts configured.</div>';
+                container.innerHTML = '<div style="font-size:0.75rem;color:var(--state-neutral-text);padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No RADIUS admin accounts configured.</div>';
                 return;
             }
 
@@ -7765,11 +7900,11 @@
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <strong style="font-size:0.82rem;">${escapeHtml(user.username)}</strong>
-                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${user.enabled ? '#d1fae5' : '#fee2e2'};color:${user.enabled ? '#065f46' : '#991b1b'};">
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${user.enabled ? 'var(--state-neutral-bg)' : '#fee2e2'};color:${user.enabled ? 'var(--state-neutral-text)' : '#991b1b'};">
                                 ${user.enabled ? 'Enabled' : 'Disabled'}
                             </span>
                         </div>
-                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                        <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">
                             Last auth: ${user.last_auth_at ? escapeHtml(formatDateTime(user.last_auth_at)) : 'Never'}
                         </div>
                     </div>
@@ -7785,7 +7920,7 @@
             const container = document.getElementById('radiusClientsList');
             if (!container) return;
             if (!clients || clients.length === 0) {
-                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No manual client overrides configured.</div>';
+                container.innerHTML = '<div style="font-size:0.75rem;color:var(--state-neutral-text);padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No manual client overrides configured.</div>';
                 return;
             }
 
@@ -7794,11 +7929,11 @@
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <strong style="font-size:0.82rem;">${escapeHtml(client.client_spec)}</strong>
-                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${client.enabled ? '#d1fae5' : '#fee2e2'};color:${client.enabled ? '#065f46' : '#991b1b'};">
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${client.enabled ? 'var(--state-neutral-bg)' : '#fee2e2'};color:${client.enabled ? 'var(--state-neutral-text)' : '#991b1b'};">
                                 ${client.enabled ? 'Enabled' : 'Disabled'}
                             </span>
                         </div>
-                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                        <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">
                             Short name: ${escapeHtml(client.shortname || '(auto)')}
                         </div>
                     </div>
@@ -7813,7 +7948,7 @@
         function renderRadiusRecentLogins(entries) {
             const container = document.getElementById('radiusRecentLogins');
             if (!entries || entries.length === 0) {
-                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No admin login activity yet.</div>';
+                container.innerHTML = '<div style="font-size:0.75rem;color:var(--state-neutral-text);padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No admin login activity yet.</div>';
                 return;
             }
 
@@ -7822,17 +7957,17 @@
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <strong style="font-size:0.82rem;">${escapeHtml(entry.username || '(unknown)')}</strong>
-                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${entry.outcome === 'accept' ? '#d1fae5' : '#fee2e2'};color:${entry.outcome === 'accept' ? '#065f46' : '#991b1b'};">
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${entry.outcome === 'accept' ? 'var(--state-neutral-bg)' : '#fee2e2'};color:${entry.outcome === 'accept' ? 'var(--state-neutral-text)' : '#991b1b'};">
                                 ${entry.outcome === 'accept' ? 'Accept' : 'Reject'}
                             </span>
                         </div>
-                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                        <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">
                             ${escapeHtml(entry.client_name || entry.client_ip || 'Unknown device')}
                             ${entry.client_model ? ` · <span class="font-mono">${escapeHtml(entry.client_model)}</span>` : ''}
                             ${entry.reason ? ` · ${escapeHtml(entry.reason)}` : ''}
                         </div>
                     </div>
-                    <div style="font-size:0.72rem;color:#6b7280;text-align:right;white-space:nowrap;">
+                    <div style="font-size:0.72rem;color:var(--state-neutral-text);text-align:right;white-space:nowrap;">
                         ${entry.client_ip ? escapeHtml(entry.client_ip) + '<br>' : ''}
                         ${escapeHtml(formatDateTime(entry.occurred_at))}
                     </div>
@@ -7879,7 +8014,7 @@
             const progress = rollout.progress || {};
             summaryEl.textContent = `Phase ${rollout.phase} • ${rollout.status} • ${progress.updated || 0}/${progress.total || 0} updated${rollout.pause_reason ? ` • ${rollout.pause_reason}` : ''}`;
             statusEl.textContent = `Service account: ${escapeHtml(rollout.service_username || 'unknown')}`;
-            statusEl.style.color = rollout.status === 'paused' ? '#b45309' : (rollout.status === 'completed' ? '#10b981' : '#6b7280');
+            setStatusTone(statusEl, rollout.status === 'paused' ? 'var(--warning-text)' : (rollout.status === 'completed' ? 'var(--state-neutral-text)' : 'var(--state-neutral-text)'));
 
             const devices = rollout.devices || [];
             if (!devices.length) {
@@ -7901,11 +8036,11 @@
                         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
                             <div style="font-size:0.78rem;color:#111827;flex:1 1 auto;">
                                 <strong>${escapeHtml(device.ip)}</strong>
-                                <span style="color:#6b7280;"> • ${escapeHtml(device.device_type || 'device')} • ${escapeHtml(device.phase_assigned || 'pending')}</span>
-                                ${device.parent_ap_ip ? `<div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">Parent AP: <span class="font-mono">${escapeHtml(device.parent_ap_ip)}</span></div>` : ''}
+                                <span style="color:var(--state-neutral-text);"> • ${escapeHtml(device.device_type || 'device')} • ${escapeHtml(device.phase_assigned || 'pending')}</span>
+                                ${device.parent_ap_ip ? `<div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">Parent AP: <span class="font-mono">${escapeHtml(device.parent_ap_ip)}</span></div>` : ''}
                             </div>
                             <div style="display:flex;align-items:flex-end;flex-direction:column;gap:6px;">
-                                <div style="font-size:0.72rem;color:${device.status === 'updated' ? '#065f46' : (device.status === 'failed' ? '#991b1b' : '#6b7280')};text-align:right;">
+                                <div style="font-size:0.72rem;color:${device.status === 'updated' ? 'var(--state-neutral-text)' : (device.status === 'failed' ? '#991b1b' : 'var(--state-neutral-text)')};text-align:right;">
                                     ${escapeHtml(device.status || 'pending')}
                                     ${device.error ? `<div style="margin-top:4px;max-width:280px;white-space:normal;">${escapeHtml(device.error)}</div>` : ''}
                                 </div>
@@ -7914,14 +8049,14 @@
                         </div>
                         ${repairOpen ? `
                             <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #d1d5db;">
-                                <div style="font-size:0.72rem;color:#6b7280;margin-bottom:6px;">Update AP ${escapeHtml(repairTarget)} credentials and reprobe attached CPEs before resuming the rollout.</div>
+                                <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-bottom:6px;">Update AP ${escapeHtml(repairTarget)} credentials and reprobe attached CPEs before resuming the rollout.</div>
                                 <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:end;">
                                     <div>
-                                        <label style="font-size:0.68rem;color:#6b7280;">Username</label>
+                                        <label style="font-size:0.68rem;color:var(--state-neutral-text);">Username</label>
                                         <input id="radiusRepairUser-${repairKey}" type="text" placeholder="root" class="u-input-compact">
                                     </div>
                                     <div>
-                                        <label style="font-size:0.68rem;color:#6b7280;">Password</label>
+                                        <label style="font-size:0.68rem;color:var(--state-neutral-text);">Password</label>
                                         <input id="radiusRepairPass-${repairKey}" type="password" placeholder="Enter password" class="u-input-compact">
                                     </div>
                                     <div>
@@ -7964,13 +8099,13 @@
             renderRadiusRecentLogins(data.recent_logins || []);
             if (data.enabled && data.last_error) {
                 document.getElementById('radiusStatus').textContent = data.last_error;
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--danger-fill)');
             } else if (data.enabled && data.running && data.healthy === false) {
                 document.getElementById('radiusStatus').textContent = `RADIUS container is unhealthy (${data.health_status || 'unknown'})`;
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--danger-fill)');
             } else if (data.enabled && data.running) {
                 document.getElementById('radiusStatus').textContent = `RADIUS listening on UDP ${data.port}`;
-                document.getElementById('radiusStatus').style.color = '#10b981';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--state-neutral-text)');
             }
         }
 
@@ -7979,13 +8114,13 @@
             if (!el) return;
             if (error) {
                 el.textContent = error;
-                el.style.color = '#ef4444';
+                setStatusTone(el, 'var(--danger-fill)');
             } else if (running) {
                 el.textContent = 'RADIUS running';
-                el.style.color = '#10b981';
+                setStatusTone(el, 'var(--state-neutral-text)');
             } else {
                 el.textContent = 'RADIUS stopped';
-                el.style.color = '#ef4444';
+                setStatusTone(el, 'var(--danger-fill)');
             }
         }
 
@@ -8011,7 +8146,7 @@
                 await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
             } catch (e) {
                 const statusEl = document.getElementById('radiusStatus');
-                if (statusEl) { statusEl.textContent = e.message || 'Failed to refresh RADIUS data'; statusEl.style.color = '#ef4444'; }
+                if (statusEl) { statusEl.textContent = e.message || 'Failed to refresh RADIUS data'; setStatusTone(statusEl, 'var(--danger-fill)'); }
                 // Don't leave a content area stuck on the loading placeholder if a
                 // loader threw before it could render.
                 for (const el of [clientsEl, loginsEl]) {
@@ -8025,21 +8160,21 @@
         async function restartRadiusServer() {
             const statusEl = document.getElementById('radiusStatus');
             statusEl.textContent = 'Restarting...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 await fetch('/api/auth/radius/restart', { method: 'POST' });
                 statusEl.textContent = 'Restart triggered';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
             } catch (e) {
                 statusEl.textContent = 'Restart failed';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
         async function testRadiusLdap() {
             const statusEl = document.getElementById('radiusLdapStatus');
             statusEl.textContent = 'Testing LDAP connection...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/auth/radius/test-ldap', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8052,19 +8187,19 @@
                 });
                 const data = await resp.json();
                 statusEl.textContent = data.success ? data.message : (data.error || 'Test failed');
-                statusEl.style.color = data.success ? '#10b981' : '#ef4444';
+                setStatusTone(statusEl, data.success ? 'var(--state-neutral-text)' : 'var(--danger-fill)');
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
         async function pushRadiusToDevices() {
             const statusEl = document.getElementById('radiusStatus');
             const addr = document.getElementById('authRadiusHost').value.trim();
-            if (!addr) { statusEl.textContent = 'Enter an advertised address first'; statusEl.style.color = '#f59e0b'; return; }
+            if (!addr) { statusEl.textContent = 'Enter an advertised address first'; setStatusTone(statusEl, 'msg-warn'); return; }
             statusEl.textContent = 'Pushing RADIUS config to devices...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/auth/radius/push-to-devices', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8073,15 +8208,15 @@
                 if (resp.ok) {
                     const data = await resp.json();
                     statusEl.textContent = data.message;
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     const err = await resp.json();
                     statusEl.textContent = extractDetail(err.detail);
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8099,22 +8234,22 @@
             const statusEl = document.getElementById('cfgStatus-radius');
             if (statusEl) {
                 statusEl.textContent = 'Server and port filled from this appliance. Enter the shared secret.';
-                statusEl.style.color = 'var(--primary)';
+                setStatusTone(statusEl, 'var(--info-text)');
             }
         }
 
         async function testRadiusConfig() {
             const statusEl = document.getElementById('radiusStatus');
             statusEl.innerHTML = '<span class="spinner-inline"></span> Testing...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/auth/radius/test', { method: 'POST' });
                 const data = await resp.json();
                 statusEl.textContent = data.message || (data.success ? 'RADIUS server is healthy' : 'RADIUS test failed');
-                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
+                setStatusTone(statusEl, data.success ? 'var(--state-neutral-text)' : 'var(--danger-fill)');
             } catch (e) {
                 statusEl.textContent = 'Test failed: ' + e.message;
-                statusEl.style.color = '#dc2626';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8130,7 +8265,7 @@
 
             if (enabled && !secret && !secretAlreadySet) {
                 statusEl.textContent = 'Shared secret required when RADIUS is enabled';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8160,12 +8295,12 @@
                 if (!resp.ok) throw new Error(data.detail || 'Failed to save');
                 if (ldapPw) { ldapPw.value = ''; ldapPw.placeholder = '(unchanged)'; }
                 statusEl.textContent = 'RADIUS config saved';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await loadAuthSettings();
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save RADIUS config';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8182,11 +8317,11 @@
                 renderRadiusSecretHealth(builtinRadiusSummary);
                 setRadiusBadge(builtinRadiusSummary);
                 statusEl.textContent = 'Secret review date recorded';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to mark secret reviewed';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8198,11 +8333,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to start Radius rollout');
                 statusEl.textContent = 'Radius rollout started';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to start Radius rollout';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8217,11 +8352,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to resume Radius rollout');
                 statusEl.textContent = 'Radius rollout resumed';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to resume Radius rollout';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8236,11 +8371,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to cancel Radius rollout');
                 statusEl.textContent = 'Radius rollout cancelled';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to cancel Radius rollout';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8251,7 +8386,7 @@
             const password = document.getElementById(`radiusRepairPass-${key}`)?.value || '';
             if (!username || !password) {
                 statusEl.textContent = 'Enter both AP username and password to repair inherited CPE credentials.';
-                statusEl.style.color = '#b45309';
+                setStatusTone(statusEl, 'var(--warning-text)');
                 return;
             }
             try {
@@ -8266,11 +8401,11 @@
                 if (!resp.ok) throw new Error(data.detail || 'Failed to update AP credentials');
                 radiusRolloutRepairTarget = null;
                 statusEl.textContent = `AP ${ip} credentials updated and reprobed`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to update AP credentials';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8282,12 +8417,12 @@
 
             if (!username || !password) {
                 statusEl.textContent = 'Username and password are required';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             if (password.length < 12) {
                 statusEl.textContent = 'Password must be at least 12 characters';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8303,11 +8438,11 @@
                 document.getElementById('radiusNewPassword').value = '';
                 document.getElementById('radiusNewEnabled').checked = true;
                 statusEl.textContent = `Added ${data.username}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to create user';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8319,7 +8454,7 @@
 
             if (!client_spec) {
                 statusEl.textContent = 'Client IP or CIDR is required';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8335,11 +8470,11 @@
                 document.getElementById('radiusClientShortname').value = '';
                 document.getElementById('radiusClientEnabled').checked = true;
                 statusEl.textContent = `Added ${data.client_spec}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to create client override';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8362,11 +8497,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to update user');
                 statusEl.textContent = `Updated ${data.username}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to update user';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8389,11 +8524,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to update client override');
                 statusEl.textContent = `Updated ${data.client_spec}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to update client override';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8405,11 +8540,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to delete user');
                 statusEl.textContent = `Deleted ${username}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to delete user';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8421,11 +8556,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to delete client override');
                 statusEl.textContent = `Deleted ${clientSpec}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to delete client override';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8443,7 +8578,7 @@
 
             if (enabled && (!provider_url || !client_id || (!client_secret && !secretAlreadySet))) {
                 statusEl.textContent = 'Provider URL, Client ID, and Client Secret required when enabled';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8455,20 +8590,20 @@
                 });
                 if (resp.ok) {
                     statusEl.textContent = 'SSO config saved!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     throw new Error('Failed to save');
                 }
             } catch (e) {
                 statusEl.textContent = 'Failed to save SSO config';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
         async function testOidcConfig() {
             const statusEl = document.getElementById('oidcStatus');
             statusEl.textContent = 'Testing OIDC discovery...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
 
             try {
                 const resp = await fetch('/api/auth/test-oidc', {
@@ -8478,14 +8613,14 @@
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = data.message;
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'OIDC test failed';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error testing OIDC: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8499,7 +8634,7 @@
 
             if (enabled && (!username || (!password && !passwordAlreadySet))) {
                 statusEl.textContent = 'Username and password required when enabled';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8511,13 +8646,13 @@
                 });
                 if (resp.ok) {
                     statusEl.textContent = 'Device credentials saved!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     throw new Error('Failed to save');
                 }
             } catch (e) {
                 statusEl.textContent = 'Failed to save device credentials';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8529,11 +8664,11 @@
             if (!statusEl) return;
             statusEl.textContent = message || '';
             if (tone === 'error') {
-                statusEl.style.color = '#b91c1c';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             } else if (tone === 'success') {
-                statusEl.style.color = '#047857';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
             } else {
-                statusEl.style.color = '';
+                setStatusTone(statusEl, '');
             }
         }
 
@@ -8713,36 +8848,42 @@
 
         async function toggleAppAutoUpdate() {
             const toggle = document.getElementById('appAutoUpdateToggle');
-            setToggleActive(toggle, !toggle.classList.contains('active'));
+            const oldState = toggle.classList.contains('active');
+            setToggleActive(toggle, !oldState);
             const enabled = toggle.classList.contains('active') ? 'true' : 'false';
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ autoupdate_enabled: enabled }),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 const statusEl = document.getElementById('appUpdateStatus');
                 if (statusEl) {
                     statusEl.textContent = 'Saved';
                     setTimeout(() => loadAppUpdateStatus(), 1500);
                 }
-            } catch (e) {}
+            } catch (e) {
+                setToggleActive(toggle, oldState);
+                const statusEl = document.getElementById('appUpdateStatus');
+                if (statusEl) statusEl.textContent = e.message || 'Failed to save';
+            }
         }
 
         async function saveReleaseChannel() {
             const channel = document.getElementById('appReleaseChannel').value;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ release_channel: channel }),
                 });
-                const statusEl = document.getElementById('appUpdateStatus');
-                if (statusEl) {
-                    statusEl.textContent = 'Channel updated to ' + channel;
-                    setTimeout(() => loadAppUpdateStatus(), 1500);
-                }
-            } catch (e) {}
+                if (!resp.ok) throw new Error(await readSaveError(resp));
+                setAppUpdateStatusMessage('Channel updated to ' + channel, 'success');
+                setTimeout(() => loadAppUpdateStatus(), 1500);
+            } catch (e) {
+                setAppUpdateStatusMessage(e.message || 'Failed to save', 'error');
+            }
         }
 
         async function checkAppUpdate() {
@@ -8877,6 +9018,79 @@
 
         // ── Status Bar ──
 
+        let firmwareStopsLoading = null;
+        let firmwareStop = null;
+
+        function firmwareStopDetail(stop) {
+            let earliestDay = '';
+            try {
+                const [kind, day] = JSON.parse(stop.window_key);
+                const date = new Date(day + 'T00:00:00Z');
+                if (['manual', 'firmware'].includes(kind) && date.toISOString().slice(0, 10) === day) {
+                    date.setUTCDate(date.getUTCDate() + 1);
+                    earliestDay = date.toISOString().slice(0, 10);
+                }
+            } catch (e) {}
+            const when = earliestDay
+                ? `The earliest resolution day is ${earliestDay} in the schedule time zone. Resolve the stop after the stopped window ends.`
+                : 'Resolve the stop after the stopped window ends.';
+            return `Firmware updates stopped at ${stop.device_ip}. ${stop.reason} Device monitoring continues. ${when}`;
+        }
+
+        async function refreshFirmwareStop() {
+            if (firmwareStopsLoading) return firmwareStopsLoading;
+            firmwareStopsLoading = fetch('/api/firmware-window-stops')
+                .then(async resp => {
+                    if (resp.status === 403) firmwareStop = null;
+                    else if (resp.ok) firmwareStop = (await resp.json())[0] || null;
+                })
+                .catch(() => {});
+            await firmwareStopsLoading;
+            firmwareStopsLoading = null;
+            const notice = document.getElementById('barStopNotice');
+            const show = Boolean(firmwareStop);
+            document.getElementById('barStopDetail').textContent = show ? firmwareStopDetail(firmwareStop) : '';
+            setHidden(notice, !show);
+            syncDrawerPadding();
+        }
+
+        function openFirmwareStopResolution() {
+            if (!firmwareStop) return;
+            const dialog = document.getElementById('firmwareStopDialog');
+            dialog.dataset.stopId = firmwareStop.id;
+            document.getElementById('firmwareStopDialogDetail').textContent = firmwareStopDetail(firmwareStop);
+            document.getElementById('firmwareStopResolution').value = '';
+            document.getElementById('firmwareStopError').textContent = '';
+            dialog.showModal();
+        }
+
+        async function resolveFirmwareStop(event) {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const dialog = form.closest('dialog');
+            const submit = form.querySelector('button[type="submit"]');
+            const error = document.getElementById('firmwareStopError');
+            submit.disabled = true;
+            error.textContent = '';
+            try {
+                const resp = await fetch(`/api/firmware-window-stops/${dialog.dataset.stopId}/resolve`, {
+                    method: 'POST',
+                    body: new FormData(form),
+                });
+                if (!resp.ok) {
+                    error.textContent = await readSaveError(resp, 'Could not record the stop resolution. Try again.');
+                    return;
+                }
+                dialog.close();
+                await firmwareStopsLoading;
+                await refreshFirmwareStop();
+            } catch (e) {
+                error.textContent = 'Could not record the stop resolution. Try again.';
+            } finally {
+                submit.disabled = false;
+            }
+        }
+
         function updateSchedulerUI(status) {
             lastSchedulerStatus = status;
             const state = status.state || 'disabled';
@@ -8884,24 +9098,51 @@
             autoUpdateEnabled = state !== 'disabled';
             const barToggle = document.getElementById('barAutoToggle');
             const badge = document.getElementById('barStateBadge');
-            const reason = document.getElementById('barBlockReason');
-            const countSection = document.getElementById('barDeviceCountSection');
+            const reason = document.getElementById('barNotice');
             if (!badge) return;
+            refreshFirmwareStop();
 
             // Re-render table if auto-update state changed (affects status/actions columns)
             if (wasEnabled !== autoUpdateEnabled && topology) renderTable();
 
             if (barToggle) setToggleActive(barToggle, autoUpdateEnabled);
             badge.className = 'status-badge status-bar-badge';
-            reason.textContent = status.safety_block_reason || '';
-            reason.title = status.safety_block_reason || '';
+            const weatherNotice = status.weather_status || '';
+            reason.textContent = '';
+            setHidden(reason, true);
+
+            // Show weather only while the guard is enabled and data is available.
+            const weatherEnabled = document.getElementById('drawerWeatherToggle')?.classList.contains('active');
+            const weatherStatus = document.getElementById('drawerWeatherStatus');
+            const weatherTemp = document.getElementById('drawerWeatherTemp');
+            const headerTemp = document.getElementById('headerTemp');
+            if (!weatherEnabled) {
+                if (weatherStatus) weatherStatus.textContent = '';
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else if (!status.weather || status.weather.temperature_c == null) {
+                if (weatherStatus) weatherStatus.textContent = weatherNotice;
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else {
+                if (weatherStatus) weatherStatus.textContent = '';
+                const tempDisplay = displayTemp(status.weather.temperature_c);
+                const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
+                const sampleTime = status.weather.fetched_at
+                    ? new Date(status.weather.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                    : '';
+                if (weatherTemp) {
+                    weatherTemp.textContent = sampleTime ? `(sampled ${sampleTime}: ${tempDisplay}${unit})` : '';
+                }
+                if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
+            }
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
-                setHidden(countSection, true);
                 const rolloutSection = document.getElementById('barRolloutSection');
                 setHidden(rolloutSection, true);
                 lastAutoState = 'disabled';
+                syncDrawerPadding();
                 return;
             }
 
@@ -8924,7 +9165,9 @@
                 frozen:              { label: 'Paused',    cls: 'waiting', icon: PAUSED_ICON },
                 blocked_all_current: { label: 'Up to date', cls: 'current', icon: CURRENT_ICON },
             };
-            const view = PUBLIC[state] || { label: state.replace(/_/g, ' '), cls: 'idle', icon: SCHEDULED_ICON };
+            const rawReason = status.safety_block_reason || status.block_reason || status.rollout?.pause_reason || '';
+            const cutoff = state !== 'running' && /admission cutoff|maintenance window ended or is ending|too close to maintenance window end/i.test(rawReason);
+            const view = (cutoff ? PUBLIC.blocked_time : PUBLIC[state]) || { label: state.replace(/_/g, ' '), cls: 'idle', icon: SCHEDULED_ICON };
 
             // Trust the device count: nothing behind == "Up to date" even when
             // the scheduler hasn't formally landed in blocked_all_current
@@ -8937,7 +9180,7 @@
             // unknown) and must NOT be silently flipped to "Up to date".
             const OVERRIDE_STATES = { idle: true, waiting: true };
             const effectiveAllCurrent =
-                OVERRIDE_STATES[state] === true &&
+                !cutoff && OVERRIDE_STATES[state] === true &&
                 lastFleetTotal > 0 &&
                 lastBehindCount === 0;
             if (effectiveAllCurrent) {
@@ -8949,32 +9192,53 @@
             badge.innerHTML = view.icon + view.label;
             badge.classList.add(view.cls);
 
-            // Subtitle: friendly "Next: today at 3:00 AM" for scheduled states;
-            // raw block_reason for paused/holding states.
+            const paused = view.label === 'Paused' || view.label === 'Firmware hold';
+            const nextWindow = status.rollout?.next_window || status.next_window_iso || status.next_window;
             let subtitle = '';
-            if (effectiveAllCurrent) {
-                subtitle = 'Nothing to do';
-                if (status.next_window_iso) {
-                    subtitle += ' · next check ' + formatWhen(status.next_window_iso);
+            if (paused) {
+                const states = {
+                    blocked_safety: 'Scheduled updates are paused.',
+                    blocked_weather: 'Scheduled updates are paused for weather.',
+                    blocked_time: 'Scheduled updates are paused because the clock check failed.',
+                    blocked_firmware_hold: 'Firmware Hold delays scheduled updates.',
+                    frozen: 'Scheduled updates are paused during a freeze.',
+                    blocked_no_firmware: 'No firmware is selected for scheduled updates.',
+                };
+                let action = '';
+                if (cutoff) {
+                    action = nextWindow
+                        ? `The next maintenance window starts ${formatWhen(nextWindow) || nextWindow}.`
+                        : 'Set the next maintenance window in the Updates drawer.';
+                } else if (state === 'blocked_weather') {
+                    action = 'The scheduler retries at the next check.';
+                } else if (state === 'blocked_firmware_hold') {
+                    const holds = Object.entries(status.firmware_hold?.families || {})
+                        .filter(([, hold]) => hold.held && hold.clears_at);
+                    const dates = holds.map(([family, hold]) =>
+                        `Firmware Hold for ${family} clears on ${hold.clears_at.slice(0, 10)}.`);
+                    action = [...dates, 'A confirmed device can clear Firmware Hold early.'].join(' ');
+                } else if (state === 'blocked_no_firmware') {
+                    action = 'Select firmware in the Updates drawer.';
                 }
-            } else if (view.label === 'Scheduled') {
-                if (status.next_window_iso) {
-                    subtitle = 'Next: ' + formatWhen(status.next_window_iso);
-                } else if (status.block_reason) {
-                    subtitle = status.block_reason;
-                }
-            } else if ((view.label === 'Paused' || view.label === 'Running'
-                        || view.label === 'Firmware hold')
-                       && status.block_reason) {
-                subtitle = status.block_reason;
+                subtitle = [
+                    cutoff ? 'Scheduled updates are paused at the window cutoff.' : states[state],
+                    rawReason,
+                    weatherNotice && weatherNotice !== rawReason ? weatherNotice : '',
+                    'Device monitoring continues.',
+                    action,
+                ].filter(Boolean).join(' ');
+            } else if (weatherNotice) {
+                subtitle = `${weatherNotice} Device monitoring continues. The scheduler retries at the next check.`;
             }
-            // A Firmware Hold cleared early by a confirmed-working device is shown
-            // honestly here rather than silently skipped.
-            if (status.hold_clear_reason) {
-                subtitle = status.hold_clear_reason;
+            if (status.hold_clear_reason) subtitle = [subtitle, status.hold_clear_reason].filter(Boolean).join(' ');
+            const isInfoNotice = state === 'blocked_firmware_hold' || Boolean(status.hold_clear_reason);
+            reason.textContent = subtitle ? (isInfoNotice ? '◷ ' : 'Ⅱ ') + subtitle : '';
+            if (isInfoNotice) {
+                setStatusTone(reason, 'msg-info');
+            } else {
+                setStatusTone(reason, '');
             }
-            reason.textContent = status.safety_block_reason || subtitle;
-            reason.title = reason.textContent;
+            setHidden(reason, !subtitle);
 
             // Track state changes for UI updates
             const prevState = lastAutoState;
@@ -8983,20 +9247,6 @@
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
             lastNextWindowIso = status.next_window_iso || null;
-            updateBarDeviceCount();
-
-            // Hide device count section when all current - badge already conveys this
-            setHidden(countSection, state === 'blocked_all_current' || effectiveAllCurrent);
-
-            // Update weather temp in drawer and header
-            if (status.weather && status.weather.temperature_c !== null) {
-                const tempDisplay = displayTemp(status.weather.temperature_c);
-                const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
-                const el = document.getElementById('drawerWeatherTemp');
-                if (el) el.textContent = `(currently ${tempDisplay}${unit})`;
-                const headerTemp = document.getElementById('headerTemp');
-                if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
-            }
 
             // Show queue state while work remains or is blocked.
             const rolloutSection = document.getElementById('barRolloutSection');
@@ -9005,18 +9255,19 @@
                 renderQueueStatus(null);
             } else if (status.rollout) {
                 setHidden(rolloutSection, false);
-                renderQueueStatus(status.rollout);
+                renderQueueStatus({...status.rollout, next_window: cutoff ? null : nextWindow}, reason.textContent);
             } else {
                 setHidden(rolloutSection, false);
                 renderQueueStatus({
                     remaining_devices: lastBehindCount,
-                    next_window: status.next_window_iso || status.next_window,
-                    pause_reason: status.block_reason || status.safety_block_reason,
-                });
+                    next_window: cutoff ? null : nextWindow,
+                    pause_reason: status.block_reason,
+                }, reason.textContent);
             }
+            syncDrawerPadding();
         }
 
-        function renderQueueStatus(queue) {
+        function renderQueueStatus(queue, barReason = '') {
             const remainingEl = document.getElementById('barQueueRemaining');
             const currentEl = document.getElementById('barQueueCurrent');
             const cutoffEl = document.getElementById('barQueueCutoff');
@@ -9028,7 +9279,7 @@
             const remaining = Number.isFinite(queue.remaining_devices) ? queue.remaining_devices : null;
             remainingEl.textContent = remaining === null
                 ? ''
-                : `${remaining} ${remaining === 1 ? 'device' : 'devices'} remaining`;
+                : `${remaining} ${remaining === 1 ? 'device' : 'devices'} to update`;
             const current = queue.current_device;
             const role = { ap: 'AP', cpe: 'CPE', switch: 'Switch' }[current && current.role] || 'Device';
             const stage = current && (STAGE_LABELS[current.status] || current.status) || 'updating';
@@ -9039,8 +9290,7 @@
             cutoffEl.textContent = [cutoff, ramp].filter(Boolean).join(' · ');
             nextEl.textContent = queue.next_window ? `Next window: ${when(queue.next_window)}` : '';
             // Skip the reason when the Auto-Update section already shows it.
-            const barReason = document.getElementById('barBlockReason').textContent;
-            reasonEl.textContent = queue.pause_reason && queue.pause_reason !== barReason ? queue.pause_reason : '';
+            reasonEl.textContent = queue.pause_reason && !barReason.includes(queue.pause_reason) ? queue.pause_reason : '';
         }
 
         async function toggleAutoSchedule(event) {
@@ -9049,13 +9299,17 @@
             const newState = !toggle.classList.contains('active');
             setToggleActive(toggle, newState);
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ schedule_enabled: newState ? 'true' : 'false' }),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 showSavedIndicator();
-            } catch (e) {}
+            } catch (e) {
+                setToggleActive(toggle, !newState);
+                showToast(e.message || 'Failed to save', 'error');
+            }
         }
 
         // ── Column Mode (firmware / config) ──
@@ -9099,9 +9353,12 @@
         function handleTabClick(mode) {
             const drawer = document.getElementById('bottomDrawer');
             if (activeColumnMode === mode) {
-                // Same tab — toggle drawer open/close
-                drawer.classList.toggle('open');
-                if (drawer.classList.contains('open') && mode === 'firmware') loadDrawerSettings();
+                if (drawer.classList.contains('open')) {
+                    requestDrawerClose();
+                } else {
+                    drawer.classList.add('open');
+                    if (mode === 'firmware') loadDrawerSettings();
+                }
             } else {
                 // Different tab — switch mode, open drawer
                 switchColumnMode(mode);
@@ -9171,7 +9428,7 @@
                         // transition and the panel animates shut. Keep the saved
                         // height (don't persist the tiny drag height) so reopening
                         // restores the previous size.
-                        drawer.classList.remove('open');
+                        requestDrawerClose();
                         panel.classList.remove('dragging');
                         handleEl.classList.remove('dragging');
                         if (prevVar) drawer.style.setProperty('--drawer-panel-height', prevVar);
@@ -9208,7 +9465,7 @@
             // threshold — sub-threshold presses stay plain clicks (toggleDrawer).
             bar.addEventListener('pointerdown', (e) => {
                 if (e.button !== undefined && e.button !== 0) return;
-                if (e.target.closest('.toggle, .btn, .status-bar-actions, input, select, a, label')) return;
+                if (e.target.closest('.toggle, .btn, .status-bar-actions, .bar-save-cluster, input, select, a, label')) return;
                 const startX = e.clientX, startY = e.clientY, pid = e.pointerId;
                 const startHeight = drawer.classList.contains('open') ? panel.offsetHeight : 0;
                 const disarm = () => {
@@ -9263,7 +9520,7 @@
                 <div class="backup-modal history-modal">
                     <div class="history-header">
                         <h3>Job History</h3>
-                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.1rem;line-height:1;padding:4px;">&times;</button>
+                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:1.1rem;line-height:1;padding:4px;">&times;</button>
                     </div>
                     <div class="history-view-tabs">
                         <button class="history-view-tab active" id="historyViewDevices" onclick="switchHistoryView('devices')">By Device</button>
@@ -9312,7 +9569,7 @@
                                     <th>Version</th><th>Status</th><th>Failed Stage</th><th>Dur.</th>
                                 </tr></thead>
                                 <tbody id="historyTableBody">
-                                    <tr><td colspan="8" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">Loading...</td></tr>
+                                    <tr><td colspan="8" style="text-align:center;padding:16px;color:var(--state-neutral-text);font-size:0.75rem;">Loading...</td></tr>
                                 </tbody>
                             </table>
                             <div id="historyLoadMore" class="hidden" style="text-align:center;padding:10px;">
@@ -9326,7 +9583,7 @@
                                     <th>Success</th><th>Failed</th><th>Skipped</th><th>Bank Mode</th>
                                 </tr></thead>
                                 <tbody id="jobHistoryTableBody">
-                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">Loading&hellip;</td></tr>
+                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--state-neutral-text);font-size:0.75rem;">Loading&hellip;</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -9468,8 +9725,8 @@
                         <td class="u-history-cell-time">${escapeHtml(timeStr)}</td>
                         <td class="u-history-cell-mono">${escapeHtml(job.job_id || '-')}</td>
                         <td class="u-history-cell">${durStr}</td>
-                        <td class="u-history-cell" style="color:#16a34a;">${job.success_count || 0}</td>
-                        <td class="u-history-cell" style="color:${job.failed_count ? '#dc2626' : 'inherit'};">${job.failed_count || 0}</td>
+                        <td class="u-history-cell msg-ok">${job.success_count || 0}</td>
+                        <td class="u-history-cell" style="color:${job.failed_count ? 'var(--danger-fill)' : 'inherit'};">${job.failed_count || 0}</td>
                         <td class="u-history-cell">${job.skipped_count || 0}</td>
                         <td class="u-history-cell">${escapeHtml(job.bank_mode || '-')}</td>
                     `;
@@ -9571,32 +9828,54 @@
 
         // ── Drawer ──
 
-        function toggleDrawer(event) {
-            if (drawerDragJustEnded) { drawerDragJustEnded = false; return; }
-            // Don't toggle if clicking interactive controls
-            if (event.target.closest('.toggle, .btn, .status-bar-actions, input')) return;
+        function requestDrawerClose() {
+            if (drawerDirty) {
+                drawerCloseRequested = true;
+                if (activeColumnMode !== 'firmware') switchColumnMode('firmware');
+                document.getElementById('drawerSaveStatus').textContent = 'Save or discard your changes before closing.';
+                const save = document.getElementById('drawerSaveBtn');
+                (save.disabled ? document.getElementById('drawerHandle') : save).focus();
+                syncDrawerPadding();
+                return;
+            }
             const drawer = document.getElementById('bottomDrawer');
-            const opening = !drawer.classList.contains('open');
-            drawer.classList.toggle('open');
-            if (opening && activeColumnMode === 'firmware') loadDrawerSettings();
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-                }, 320);
-            });
+            drawer.classList.remove('open');
+            setTimeout(syncDrawerPadding, 320);
         }
 
-        // Collapse drawer when clicking outside it
+        function toggleDrawer(event) {
+            if (drawerDragJustEnded) { drawerDragJustEnded = false; return; }
+            if (event.target.closest('.toggle, .btn, .status-bar-actions, .bar-save-cluster, input, select, a')) return;
+            const drawer = document.getElementById('bottomDrawer');
+            if (drawer.classList.contains('open')) {
+                requestDrawerClose();
+                return;
+            }
+            drawer.classList.add('open');
+            if (activeColumnMode === 'firmware') loadDrawerSettings();
+            setTimeout(syncDrawerPadding, 320);
+        }
+
         document.addEventListener('click', function(e) {
             const drawer = document.getElementById('bottomDrawer');
             if (!drawer || !drawer.classList.contains('open')) return;
-            if (e.target.closest('.bottom-drawer')) return;
-            drawer.classList.remove('open');
-            requestAnimationFrame(() => {
-                setTimeout(() => {
-                    document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
-                }, 320);
-            });
+            if (e.composedPath().includes(drawer) || e.composedPath().includes(document.getElementById('firmwareStopDialog'))) return;
+            requestDrawerClose();
+        });
+
+        document.addEventListener('keydown', function(e) {
+            const handle = document.getElementById('drawerHandle');
+            if (e.target === handle && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault();
+                toggleDrawer(e);
+                return;
+            }
+            const drawer = document.getElementById('bottomDrawer');
+            if (e.key !== 'Escape' || !drawer.classList.contains('open')) return;
+            if (document.getElementById('firmwareStopDialog').open) return;
+            if (!e.composedPath().includes(drawer) && !drawerDirty) return;
+            if (!drawerDirty) handle.focus();
+            requestDrawerClose();
         });
 
         let drawerSettingsLoaded = false;
@@ -9613,7 +9892,7 @@
 
 
         async function loadDrawerSettings() {
-            if (drawerSettingsLoaded) return;
+            if (drawerSettingsLoaded) return true;
             try {
                 await ensureDrawerTopologyLoaded();
                 const resp = await fetch('/api/settings');
@@ -9633,18 +9912,10 @@
                 // Bank mode
                 document.getElementById('drawerBankMode').value = s.bank_mode || 'one';
 
-                // Parallel
-                document.getElementById('drawerParallel').value = s.parallel_updates || '2';
-
-
                 // Beta
                 drawerBetaEnabled = s.firmware_beta_enabled === 'true';
                 const betaToggle = document.getElementById('drawerBetaToggle');
                 setToggleActive(betaToggle, drawerBetaEnabled);
-
-                // Pre-update Reboot
-                const preRebootToggle = document.getElementById('drawerPreRebootToggle');
-                setToggleActive(preRebootToggle, s.pre_update_reboot !== 'false');
 
                 // Downgrade
                 const downgradeToggle = document.getElementById('drawerDowngradeToggle');
@@ -9668,43 +9939,71 @@
 
                 // Firmware Hold & per-device cooldown
                 document.getElementById('drawerCanaryHoldDays').value = s.firmware_canary_hold_days || '6';
-                document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days || '30';
+                document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days ?? '30';
 
                 drawerSettingsLoaded = true;
             } catch (e) {}
-            loadDrawerFirmware();
+            const firmwareLoaded = await loadDrawerFirmware();
+            return drawerSettingsLoaded && firmwareLoaded;
         }
 
         // ── Dirty state tracking ──
         let drawerDirty = false;
+        let drawerCloseRequested = false;
 
         function markDrawerDirty() {
             drawerDirty = true;
-            const btn = document.getElementById('drawerSaveBtn');
-            if (btn) btn.disabled = false;
-            const dot = document.getElementById('drawerUnsavedDot');
-            if (dot) dot.classList.add('visible');
+            document.getElementById('drawerSaveBtn').disabled = false;
+            setHidden(document.getElementById('barSaveCluster'), false);
+            setHidden(document.getElementById('drawerSavedIndicator'), true);
             const status = document.getElementById('drawerSaveStatus');
-            if (status) { status.textContent = 'Unsaved changes'; status.style.color = '#f59e0b'; }
+            status.textContent = drawerCloseRequested ? 'Save or discard your changes before closing.' : '✎ Unsaved changes';
+            setStatusTone(status, 'msg-warn');
+            syncDrawerPadding();
         }
 
         function clearDrawerDirty() {
             drawerDirty = false;
-            const btn = document.getElementById('drawerSaveBtn');
-            if (btn) btn.disabled = true;
-            const dot = document.getElementById('drawerUnsavedDot');
-            if (dot) dot.classList.remove('visible');
-            const status = document.getElementById('drawerSaveStatus');
-            if (status) { status.textContent = ''; }
+            document.getElementById('drawerSaveBtn').disabled = true;
+            setHidden(document.getElementById('barSaveCluster'), true);
+            if (drawerCloseRequested) {
+                drawerCloseRequested = false;
+                requestDrawerClose();
+                document.getElementById('drawerHandle').focus();
+            }
+            syncDrawerPadding();
+        }
+
+        async function discardDrawerSettings() {
+            const save = document.getElementById('drawerSaveBtn');
+            const discard = document.getElementById('drawerDiscardBtn');
+            const panel = document.getElementById('drawerPanel');
+            save.disabled = discard.disabled = panel.inert = true;
+            drawerSettingsLoaded = false;
+            try {
+                if (await loadDrawerSettings()) {
+                    clearDrawerDirty();
+                } else {
+                    document.getElementById('drawerSaveStatus').textContent = 'Could not reload saved settings. Try Discard again.';
+                }
+            } finally {
+                save.disabled = !drawerDirty;
+                discard.disabled = panel.inert = false;
+            }
         }
 
         let savedIndicatorTimeout = null;
         function showSavedIndicator() {
             const el = document.getElementById('drawerSavedIndicator');
-            if (!el) return;
+            if (!el || drawerDirty) return;
             if (savedIndicatorTimeout) clearTimeout(savedIndicatorTimeout);
+            setHidden(el, false);
             el.style.opacity = '1';
-            savedIndicatorTimeout = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+            savedIndicatorTimeout = setTimeout(() => {
+                setHidden(el, true);
+                syncDrawerPadding();
+            }, 3000);
+            syncDrawerPadding();
         }
 
         function toggleDrawerDay(btn) {
@@ -9718,12 +10017,6 @@
             setToggleActive(toggle, enabled);
             drawerBetaEnabled = enabled;
             renderDrawerFirmware();
-            markDrawerDirty();
-        }
-
-        function toggleDrawerPreReboot() {
-            const toggle = document.getElementById('drawerPreRebootToggle');
-            setToggleActive(toggle, !toggle.classList.contains('active'));
             markDrawerDirty();
         }
 
@@ -9742,7 +10035,7 @@
         // Attach change listeners to drawer inputs
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
-             'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
+             'drawerMinTemp', 'drawerZipCode',
              'drawerCanaryHoldDays', 'drawerCooldownDays'].forEach(id => {
 
                 const el = document.getElementById(id);
@@ -9765,9 +10058,16 @@
         async function saveDrawerSettings() {
             const btn = document.getElementById('drawerSaveBtn');
             const status = document.getElementById('drawerSaveStatus');
+            const panel = document.getElementById('drawerPanel');
+            panel.inert = true;
 
-            if (btn) { btn.disabled = true; btn.classList.add('saving'); btn.textContent = 'Saving\u2026'; }
-            if (status) { status.textContent = ''; }
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.add('saving');
+                btn.setAttribute('aria-busy', 'true');
+                btn.textContent = 'Saving\u2026';
+            }
+            document.getElementById('drawerDiscardBtn').disabled = true;
 
             const days = [];
             document.querySelectorAll('#drawerDays .drawer-day-btn.active').forEach(b => {
@@ -9779,16 +10079,13 @@
                 schedule_start_hour: document.getElementById('drawerStartHour').value,
                 schedule_end_hour: document.getElementById('drawerEndHour').value,
                 bank_mode: document.getElementById('drawerBankMode').value,
-                parallel_updates: document.getElementById('drawerParallel').value,
-                schedule_scope: 'all',
-                min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
+                min_temperature_c: String(storageTemp(Number.isFinite(parseFloat(document.getElementById('drawerMinTemp').value)) ? parseFloat(document.getElementById('drawerMinTemp').value) : 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
                 firmware_canary_hold_days: document.getElementById('drawerCanaryHoldDays').value,
                 firmware_update_cooldown_days: document.getElementById('drawerCooldownDays').value,
                 firmware_beta_enabled: drawerBetaEnabled ? 'true' : 'false',
                 allow_downgrade: document.getElementById('drawerDowngradeToggle').classList.contains('active') ? 'true' : 'false',
                 weather_check_enabled: document.getElementById('drawerWeatherToggle').classList.contains('active') ? 'true' : 'false',
-                pre_update_reboot: document.getElementById('drawerPreRebootToggle').classList.contains('active') ? 'true' : 'false',
             };
 
             // Empty selection = "Latest" (auto-track). Send the 'auto' sentinel so
@@ -9807,15 +10104,21 @@
 
                 clearDrawerDirty();
                 showSavedIndicator();
-                if (status) { status.textContent = 'Saved'; status.style.color = '#10b981'; }
-                if (btn) { btn.textContent = 'Save'; btn.classList.remove('saving'); }
+                if (btn) { btn.textContent = 'Save changes'; btn.classList.remove('saving'); }
 
                 drawerSettingsLoaded = false;
                 loadDrawerFirmware();
                 loadFleetStatus();
             } catch (e) {
-                if (status) { status.textContent = e.message || 'Save failed'; status.style.color = '#dc2626'; }
-                if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save'; }
+                if (status) {
+                    status.textContent = drawerCloseRequested ? 'Could not save changes. Try Save again or select Discard.' : '✕ Not saved. Try again.';
+                    setStatusTone(status, 'msg-err');
+                }
+                if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save changes'; }
+            } finally {
+                if (btn) btn.removeAttribute('aria-busy');
+                document.getElementById('drawerDiscardBtn').disabled = false;
+                panel.inert = false;
             }
         }
 
@@ -9883,6 +10186,7 @@
                     fetch('/api/firmware-files'),
                     fetch('/api/settings'),
                 ]);
+                if (!fwResp.ok || !settResp.ok) return false;
                 const fwData = await fwResp.json();
                 const settData = await settResp.json();
                 drawerFwFiles = fwData.files || [];
@@ -9913,7 +10217,7 @@
                 // Leave drawerFwLoaded as-is so the panel stays on "Loading…" instead
                 // of a misleading empty state; existing triggers (drawer open, save,
                 // upload, Check Now) re-run this and self-heal.
-                return;
+                return false;
             }
             // Phase 2 — vendor firmware-type labels (cosmetic; renderDrawerFirmware
             // falls back to the built-in 30x/303L/TNS100 labels until these arrive).
@@ -9928,6 +10232,7 @@
                 }
                 renderDrawerFirmware();
             } catch (e) {}
+            return true;
         }
 
         function renderDrawerFirmware() {
@@ -10071,7 +10376,7 @@
 
                 if (result.last_error) {
                     el.textContent = result.last_error;
-                    el.style.color = '#ef4444';
+                    setStatusTone(el, 'var(--danger-fill)');
                     return;
                 }
 
@@ -10084,19 +10389,23 @@
 
                     if (diffDays <= 0) {
                         el.textContent = 'Checked today';
-                        el.style.color = '';
+                        setStatusTone(el, '');
                     } else if (diffDays === 1) {
                         el.textContent = 'Checked yesterday';
-                        el.style.color = '';
+                        setStatusTone(el, '');
                     } else {
                         el.textContent = 'Stale (' + diffDays + ' days)';
-                        el.style.color = '#f59e0b';
+                        setStatusTone(el, 'msg-warn');
                     }
                 }
             } catch (e) {}
         }
 
         async function triggerDrawerFwFetch() {
+            if (drawerCloseRequested) {
+                requestDrawerClose();
+                return;
+            }
             if (drawerDirty) await saveDrawerSettings();
             const el = document.getElementById('drawerFwLastCheck');
             if (el) el.textContent = 'Checking\u2026';
@@ -10203,54 +10512,11 @@
                 // Re-drive the scheduler UI so the "Up to date" badge override
                 // picks up the freshly-loaded counts even when the fleet
                 // response arrives after the scheduler_status WebSocket frame
-                // that originally rendered the badge. Falls back to just the
-                // count text if no scheduler frame has arrived yet.
+                // that originally rendered the badge.
                 if (lastSchedulerStatus) {
                     updateSchedulerUI(lastSchedulerStatus);
-                } else {
-                    updateBarDeviceCount();
                 }
             } catch (e) {}
-        }
-
-        function updateBarDeviceCount() {
-            const section = document.getElementById('barDeviceCountSection');
-            const count = document.getElementById('barBehindCount');
-            if (!section || !count) return;
-            count.style.color = '';
-
-            // Don't show anything when auto-update is disabled
-            if (lastAutoState === 'disabled') {
-                setHidden(section, true);
-                return;
-            }
-
-            if (lastSchedulerStatus && lastSchedulerStatus.rollout
-                    && Number.isFinite(lastSchedulerStatus.rollout.remaining_devices)) {
-                setHidden(section, true);
-                return;
-            }
-
-            const nextWindowText = lastNextWindowIso
-                ? 'Next: ' + formatWhen(lastNextWindowIso)
-                : lastNextWindow;
-
-            if (lastBehindCount > 0) {
-                setHidden(section, false);
-                const label = lastBehindCount === 1 ? '1 device pending' : `${lastBehindCount} devices pending`;
-                let text = label;
-                // The schedule badge already shows "Next: ..." in the Scheduled
-                // state (idle/waiting), so don't repeat it here. In Paused states
-                // the badge shows the block reason instead, so the pill stays the
-                // only place the next window appears — keep it there.
-                const badgeShowsNext = (lastAutoState === 'idle' || lastAutoState === 'waiting');
-                if (nextWindowText && !badgeShowsNext) text += ' · ' + nextWindowText;
-                count.textContent = text;
-            } else {
-                // Nothing behind — the "Up to date" badge in updateSchedulerUI
-                // is the single source of truth; suppress the duplicate pill.
-                setHidden(section, true);
-            }
         }
 
         async function loadAutoSettings() {
@@ -10329,7 +10595,7 @@
                 const data = await resp.json();
                 if (data.enabled && data.domain) {
                     const expiry = data.days_until_expiry != null ? `${data.days_until_expiry} days` : 'unknown';
-                    const renewalClass = data.needs_renewal ? 'color:#ef4444;' : 'color:#22c55e;';
+                    const renewalClass = data.needs_renewal ? 'color:var(--danger-fill);' : 'color:var(--state-neutral-text);';
                     el.innerHTML = `<span style="font-weight:500;">Domain:</span> ${data.domain}<br>`
                         + `<span style="font-weight:500;">Certificate:</span> Let's Encrypt`
                         + ` &middot; <span style="${renewalClass}">expires in ${expiry}</span>`
@@ -10360,15 +10626,15 @@
                 const data = await resp.json();
                 if (resp.ok) {
                     status.textContent = 'Certificate configured successfully';
-                    status.style.color = '#22c55e';
+                    setStatusTone(status, 'var(--state-neutral-text)');
                     loadSslStatus();
                 } else {
                     status.textContent = data.detail || 'Failed to configure HTTPS';
-                    status.style.color = '#ef4444';
+                    setStatusTone(status, 'var(--danger-fill)');
                 }
             } catch (e) {
                 status.textContent = 'Error: ' + e.message;
-                status.style.color = '#ef4444';
+                setStatusTone(status, 'var(--danger-fill)');
             }
         }
 
@@ -10386,11 +10652,11 @@
             const status = document.getElementById('backupStatus');
             if (!passphrase || passphrase.length < 8) {
                 status.textContent = 'Passphrase must be at least 8 characters';
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
                 return;
             }
             status.textContent = 'Exporting...';
-            status.style.color = '#6b7280';
+            setStatusTone(status, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/backup/export', {
                     method: 'POST',
@@ -10414,11 +10680,11 @@
                 a.remove();
                 URL.revokeObjectURL(url);
                 status.textContent = 'CSV exported successfully';
-                status.style.color = '#16a34a';
+                setStatusTone(status, 'msg-ok');
                 document.getElementById('exportPassphrase').value = '';
             } catch (e) {
                 status.textContent = 'Export error: ' + e.message;
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
             }
         }
 
@@ -10430,17 +10696,17 @@
 
             if (!fileInput.files.length) {
                 status.textContent = 'Please select a CSV file';
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
                 return;
             }
             if (!passphrase || passphrase.length < 8) {
                 status.textContent = 'Passphrase must be at least 8 characters';
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
                 return;
             }
 
             status.innerHTML = '<span class="spinner-inline"></span> Importing...';
-            status.style.color = '#6b7280';
+            setStatusTone(status, 'var(--state-neutral-text)');
 
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
@@ -10476,7 +10742,7 @@
                 }
                 const totalFailures = failures + (ru.failed || 0);
                 status.textContent = summary;
-                status.style.color = totalFailures ? '#dc2626' : '#16a34a';
+                setStatusTone(status, totalFailures ? 'var(--danger-fill)' : 'var(--state-neutral-text)');
 
                 document.getElementById('importPassphrase').value = '';
                 fileInput.value = '';
@@ -10487,7 +10753,7 @@
                 loadFleetStatus();
             } catch (e) {
                 status.textContent = 'Import error: ' + e.message;
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
             }
         }
 
@@ -10720,7 +10986,7 @@
                 html += ` <a class="action-link" onclick="viewDeviceConfig('${ip}');event.stopPropagation();">View</a>`;
             }
             if (pushing) {
-                html += ' <span style="color:#6b7280;font-size:0.7rem;">Pushing...</span>';
+                html += ' <span style="color:var(--state-neutral-text);font-size:0.7rem;">Pushing...</span>';
             }
             return html;
         }
@@ -10782,7 +11048,7 @@
                     <div class="backup-modal" style="width:750px;max-height:80vh;display:flex;flex-direction:column;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                             <h3 class="u-m0">Config: ${escapeHtml(ip)}</h3>
-                            <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
+                            <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:1.2rem;">&times;</button>
                         </div>
                         <div style="display:flex;gap:16px;flex:1;overflow:hidden;">
                             <div style="flex:1;overflow:auto;">
@@ -10790,7 +11056,7 @@
                             </div>
                             <div style="width:250px;overflow-y:auto;">
                                 <h4 style="margin:0 0 8px;font-size:0.8rem;">Version History</h4>
-                                ${histHtml || '<p style="color:#9ca3af;font-size:0.72rem;">No history</p>'}
+                                ${histHtml || '<p style="color:var(--state-neutral-text);font-size:0.72rem;">No history</p>'}
                                 <div style="margin-top:8px;display:flex;gap:6px;">
                                     <button class="btn btn-sm btn-ghost diff-compare-btn" style="display:none;" onclick="compareSelectedConfigs('${ip}', this.closest('.backup-modal'))">Compare</button>
                                     <button class="btn btn-sm btn-ghost" onclick="previewMergeForDevice('${ip}')">Preview Merge</button>
@@ -10849,7 +11115,7 @@
                 }).join('');
                 skippedHtml = `
                     <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.4);padding:8px 12px;border-radius:6px;margin-bottom:8px;">
-                        <div style="font-weight:600;color:#f59e0b;margin-bottom:4px;">Skipped ${skipped.length} template${skipped.length === 1 ? '' : 's'} (target is ${targetType})</div>
+                        <div style="font-weight:600;color:var(--warning-text);margin-bottom:4px;">Skipped ${skipped.length} template${skipped.length === 1 ? '' : 's'} (target is ${targetType})</div>
                         <ul style="margin:4px 0 0 16px;padding:0;">${items}</ul>
                     </div>`;
             }
@@ -10864,7 +11130,7 @@
                     else diffHtml += `<div>${escaped}</div>`;
                 }
             } else {
-                diffHtml = '<div style="color:var(--text-dim);padding:8px;">No diff: every template was filtered out for this device type.</div>';
+                diffHtml = '<div style="color:var(--state-neutral-text);padding:8px;">No diff: every template was filtered out for this device type.</div>';
             }
             const overlay = document.createElement('div');
             overlay.className = 'backup-overlay open';
@@ -10873,7 +11139,7 @@
                 <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <h3 class="u-m0">Config Diff: ${escapeHtml(title)}</h3>
-                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
+                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:1.2rem;">&times;</button>
                     </div>
                     ${skippedHtml}
                     <div class="diff-pre" style="flex:1;overflow:auto;">${diffHtml}</div>
@@ -11785,13 +12051,14 @@
             const hour = parseInt(value);
             if (isNaN(hour) || hour < 0 || hour > 23) return;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({config_enforce_hour: String(hour)}),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
             } catch (e) {
-                console.debug('Failed to update enforce hour:', e);
+                showToast(e.message || 'Failed to save the enforcement hour', 'error');
             }
         }
 
@@ -11799,13 +12066,14 @@
             const mins = parseInt(value);
             if (isNaN(mins) || mins < 1) return;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({config_enforce_cooldown_minutes: String(mins)}),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
             } catch (e) {
-                console.debug('Failed to update cooldown:', e);
+                showToast(e.message || 'Failed to save the enforcement cooldown', 'error');
             }
         }
 
@@ -11901,7 +12169,7 @@
                 if (!panel) return;
                 if (countEl) countEl.textContent = entries.length ? `(${entries.length})` : '';
                 if (!entries.length) {
-                    panel.innerHTML = '<div style="color:var(--text-dim);padding:8px;">No enforce log entries yet.</div>';
+                    panel.innerHTML = '<div style="color:var(--state-neutral-text);padding:8px;">No enforce log entries yet.</div>';
                     return;
                 }
                 panel.innerHTML = entries.map(e => {

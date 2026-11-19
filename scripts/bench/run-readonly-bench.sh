@@ -4,15 +4,16 @@
 #
 # Usage, from the root of the checkout under test:
 #   /path/to/run-readonly-bench.sh <full-commit-sha> \
-#     [--mode integration|local-poll|session-proof|local-switch] [--duration-min N]
+#     [--mode integration|local-poll|session-proof|local-switch|firmware-stop] [--duration-min N] [--stop-id N]
 #
 # Run this script from a trusted checkout of main. It tests the checkout in
 # the current directory, so the commit under test does not need to contain it.
 #
-# The owner sets SIXTYOPS_BENCH_ACCESS_FILE to a private access file with
-# "Key: value" lines. This script parses that file in a subshell, runs one
-# fixed mode, limits device output, and writes a summary outside the
-# repository. See docs/dev-hardware-validation.md, "Read-only bench wrapper".
+# Set SIXTYOPS_BENCH_MANAGER_ACCESS_FILE and SIXTYOPS_BENCH_AP_ACCESS_FILE to
+# separate private files with "Key: value" lines. SIXTYOPS_BENCH_ACCESS_FILE
+# remains available for one-file setups. This script parses each file in a
+# subshell, runs one fixed mode, limits device output, and writes a summary
+# outside the repository. See docs/dev-hardware-validation.md.
 #
 # Do not add tracing (set -x) or an environment dump to this script.
 
@@ -28,7 +29,7 @@ ALLOWED_TEST_HOST="sixtyops-dev.infra.treehouse.mn"
 # a write test fixture skips even if it is collected.
 WRITE_LANE_VARS="SIXTYOPS_TEST_FIRMWARE_AP_IP SIXTYOPS_TEST_RADIUS_AP_IP SIXTYOPS_TEST_OIDC_PROVIDER_URL SIXTYOPS_TEST_OIDC_CLIENT_ID SIXTYOPS_TEST_OIDC_CLIENT_SECRET SIXTYOPS_TEST_OIDC_REDIRECT_URI SIXTYOPS_TEST_OIDC_ALLOWED_GROUP SIXTYOPS_TEST_OIDC_ADMIN_GROUP"
 
-# Changes to these paths in the commit under test stop the run. The owner
+# Changes to these paths in the commit under test stop the run. The operator
 # must review such a change and run the bench manually.
 PROTECTED_PATHS="tests/integration tests/conftest.py conftest.py pyproject.toml"
 
@@ -38,7 +39,7 @@ refuse() {
 }
 
 usage() {
-  echo "usage: run-readonly-bench.sh <full-commit-sha> [--mode integration|local-poll|session-proof|local-switch] [--duration-min N]" >&2
+  echo "usage: run-readonly-bench.sh <full-commit-sha> [--mode integration|local-poll|session-proof|local-switch|firmware-stop] [--duration-min N] [--stop-id N]" >&2
   exit 2
 }
 
@@ -55,12 +56,33 @@ trim() {
   printf '%s' "$s"
 }
 
+# Reject symlinks in every component before resolving the path.
+has_symlink_component() {
+  local path=$1 current part
+  [[ $path = /* ]] || path="$PWD/$path"
+  current=""
+  IFS=/ read -r -a path_parts <<< "$path"
+  for part in "${path_parts[@]}"; do
+    [ -n "$part" ] || continue
+    if [ "$part" = . ]; then
+      continue
+    elif [ "$part" = .. ]; then
+      current="$current/.."
+    else
+      current="$current/$part"
+    fi
+    [ ! -L "$current" ] || return 0
+  done
+  return 1
+}
+
 [ $# -ge 1 ] || usage
 expected_sha=$1
 shift
 mode=integration
 duration_min=35
 duration_explicit=0
+stop_id=""
 while [ $# -gt 0 ]; do
   case $1 in
     --mode)
@@ -74,14 +96,24 @@ while [ $# -gt 0 ]; do
       duration_explicit=1
       shift
       ;;
+    --stop-id)
+      [ $# -ge 2 ] || usage
+      stop_id=$2
+      shift
+      ;;
     *) refuse "unknown option" ;;
   esac
   shift
 done
 case $mode in
-  integration | local-poll | session-proof | local-switch) ;;
+  integration | local-poll | session-proof | local-switch | firmware-stop) ;;
   *) refuse "unknown mode" ;;
 esac
+if [ "$mode" = firmware-stop ]; then
+  [[ $stop_id =~ ^[1-9][0-9]*$ ]] || refuse "firmware-stop requires a positive --stop-id"
+elif [ -n "$stop_id" ]; then
+  refuse "--stop-id is only valid with firmware-stop"
+fi
 if [ "$mode" = session-proof ] && [ "$duration_explicit" = 0 ]; then
   duration_min=3
 fi
@@ -108,30 +140,45 @@ head_sha=$(git rev-parse HEAD)
 
 base=$(git merge-base origin/main HEAD 2>/dev/null) || refuse "cannot find the merge base with origin/main"
 # shellcheck disable=SC2086
-git diff --quiet "$base" HEAD -- $PROTECTED_PATHS || refuse "the commit changes test infrastructure; the owner must run it manually"
+git diff --quiet "$base" HEAD -- $PROTECTED_PATHS || refuse "the commit changes test infrastructure; the operator must run it manually"
 
-# 2. Access file checks. Do not print the path or the contents.
-access_file=${SIXTYOPS_BENCH_ACCESS_FILE:-}
-[ -n "$access_file" ] || refuse "SIXTYOPS_BENCH_ACCESS_FILE is not set"
-[ ! -L "$access_file" ] && [ -f "$access_file" ] && [ -r "$access_file" ] || refuse "the access file is missing or not readable"
-[ -O "$access_file" ] || refuse "the current user does not own the access file"
-# Try GNU stat first. GNU "stat -f" reports the file system, prints to
-# stdout, and fails, so the BSD form must come second.
-access_mode=$(stat -c %a "$access_file" 2>/dev/null || stat -f %Lp "$access_file")
-case $access_mode in
-  600 | 400) ;;
-  *) refuse "the access file mode must be 600 or 400 (chmod 600)" ;;
+# 2. Validate every supplied source. Do not print paths or file contents.
+manager_access_file=${SIXTYOPS_BENCH_MANAGER_ACCESS_FILE:-}
+ap_access_file=${SIXTYOPS_BENCH_AP_ACCESS_FILE:-}
+legacy_access_file=${SIXTYOPS_BENCH_ACCESS_FILE:-}
+legacy_mode=0
+if [ -n "$legacy_access_file" ]; then
+  [ -z "$manager_access_file" ] && [ -z "$ap_access_file" ] || refuse "use either the legacy access file or separate source files"
+  manager_access_file=$legacy_access_file
+  ap_access_file=$legacy_access_file
+  legacy_mode=1
+fi
+need_manager=0
+case $mode in integration | firmware-stop) need_manager=1 ;; esac
+if [ "$need_manager" = 1 ] && { [ -z "$manager_access_file" ] || [ -z "$ap_access_file" ]; }; then
+  refuse "Manager and AP access sources are required for this mode"
+fi
+case $mode in
+  local-poll | session-proof | local-switch) [ -n "$ap_access_file" ] || refuse "the AP access source is required for this mode" ;;
 esac
-access_dir=$(physical_dir "$(dirname "$access_file")")
-case "$access_dir/" in
-  "$repo"/* | "$bench_dir"/*) refuse "the access file must be outside the repository" ;;
-esac
+for access_file in "$manager_access_file" "$ap_access_file"; do
+  [ -n "$access_file" ] || continue
+  has_symlink_component "$access_file" && refuse "an access source path contains a symlink"
+  [ -f "$access_file" ] && [ -r "$access_file" ] || refuse "an access source is missing or not a readable regular file"
+  [ -O "$access_file" ] || refuse "an access source is not owned by the current user"
+  access_mode=$(stat -c %a "$access_file" 2>/dev/null || stat -f %Lp "$access_file")
+  case $access_mode in 600 | 400) ;; *) refuse "an access source mode must be 600 or 400" ;; esac
+  access_dir=$(physical_dir "$(dirname "$access_file")")
+  case "$access_dir/" in
+    "$repo"/* | "$bench_dir"/*) refuse "an access source must be outside the repository" ;;
+  esac
+done
 
 # 3. Summary location, outside the repository.
 umask 077
 summary_dir=${SIXTYOPS_BENCH_SUMMARY_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/sixtyops-bench}
 mkdir -p "$summary_dir" 2>/dev/null || refuse "cannot create the summary directory"
-if [ "$mode" = local-switch ]; then
+if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
   [ ! -L "$summary_dir" ] && [ -O "$summary_dir" ] || refuse "the summary directory must belong to the current user and must not be a symlink"
   summary_mode=$(stat -c %a "$summary_dir" 2>/dev/null || stat -f %Lp "$summary_dir")
   [ "$summary_mode" = 700 ] || refuse "the summary directory mode must be 700"
@@ -144,8 +191,8 @@ run_id="$(date -u +%Y%m%dT%H%M%SZ)-${head_sha:0:12}-$mode"
 log_file="$summary_dir/$run_id.log"
 summary_file="$summary_dir/$run_id.summary.txt"
 
-# Reserve both private output files before the switch reader can log in.
-if [ "$mode" = local-switch ]; then
+# Reserve private output files before a local reader can log in.
+if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
   for output_file in "$log_file" "$summary_file"; do
     (set -o noclobber; : > "$output_file") 2>/dev/null || refuse "cannot reserve a private output file"
     output_mode=$(stat -c %a "$output_file" 2>/dev/null || stat -f %Lp "$output_file")
@@ -183,8 +230,8 @@ if [ "$mode" != integration ]; then
   mkdir "$code_dir"
   git archive HEAD > "$archive_file"
   tar -x -f "$archive_file" -C "$code_dir"
-  if [ "$mode" != local-switch ]; then
-    (cd "$code_dir" && "$python" -c "import updater.poller" >/dev/null 2>&1) || refuse "the commit dependencies are not installed for this Python (set SIXTYOPS_BENCH_PYTHON)"
+  if [ "$mode" != local-switch ] && [ "$mode" != firmware-stop ]; then
+    (cd "$code_dir" && "$python" -c "from updater import database; database.init_db(); import updater.poller" >/dev/null 2>&1) || refuse "the commit dependencies are not installed for this Python (set SIXTYOPS_BENCH_PYTHON)"
   fi
 fi
 
@@ -193,46 +240,61 @@ fi
 set +e
 (
   set +x
-  if [ "$mode" = local-switch ]; then
-    unset SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
-  fi
+  # Only values parsed from the selected access source can satisfy a mode.
+  unset SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS
+  unset SIXTYOPS_TEST_AP_IP SIXTYOPS_TEST_CONFIG_AP_IP SIXTYOPS_TEST_SWITCH_IP
+  unset SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_SM_303L_IP SIXTYOPS_BENCH_SM_303X_IP
+  unset SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS
   redact_n=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=${line%$'\r'}
-    case $line in
-      "#"* | "") continue ;;
-      *:*) ;;
-      *) continue ;;
-    esac
-    key=$(trim "${line%%:*}")
-    value=$(trim "${line#*:}")
-    # redact.py does not replace values shorter than 3 characters. Stop
-    # before a run can print such a value. Do not print the key or value.
-    if [ -n "$value" ] && [ "${#value}" -lt 3 ]; then
-      echo "run-readonly-bench: REFUSED: an access file value is shorter than 3 characters" >&2
-      exit 2
-    fi
-    case $key in
-      "Manager URL") export SIXTYOPS_TEST_URL="$value" ;;
-      "Manager username") export SIXTYOPS_TEST_USER="$value" ;;
-      "Manager password") export SIXTYOPS_TEST_PASS="$value" ;;
-      "AP IP")
-        export SIXTYOPS_TEST_AP_IP="$value"
-        export SIXTYOPS_TEST_CONFIG_AP_IP="$value"
-        export SIXTYOPS_BENCH_AP_IP="$value"
-        ;;
-      "TNS-100 IP") export SIXTYOPS_TEST_SWITCH_IP="$value" ;;
-      "303L SM IP") export SIXTYOPS_BENCH_SM_303L_IP="$value" ;;
-      "303X SM IP") export SIXTYOPS_BENCH_SM_303X_IP="$value" ;;
-      "Shared device username") export SIXTYOPS_BENCH_AP_USER="$value" ;;
-      "Shared device password") export SIXTYOPS_BENCH_AP_PASS="$value" ;;
-    esac
-    # Redact every value in the file, also values with no mapped name.
-    if [ -n "$value" ]; then
-      redact_n=$((redact_n + 1))
-      export "SIXTYOPS_BENCH_REDACT_$redact_n=$value"
-    fi
-  done < "$access_file"
+  seen_keys="|"
+  parse_access_source() {
+    local access_file=$1 source_kind=$2 line key value
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%$'\r'}
+      case $line in "#"* | "") continue ;; *:*) ;; *) echo "run-readonly-bench: REFUSED: an access source has an invalid line" >&2; return 2 ;; esac
+      key=$(trim "${line%%:*}")
+      value=$(trim "${line#*:}")
+      case "$seen_keys" in *"|$key|"*) echo "run-readonly-bench: REFUSED: an access source has a duplicate key" >&2; return 2 ;; esac
+      seen_keys="$seen_keys$key|"
+      case $key in
+        "Manager URL" | "Manager CA file" | "Manager username" | "Manager password")
+          [ "$source_kind" = manager ] || [ "$source_kind" = legacy ] || { echo "run-readonly-bench: REFUSED: a key is in the wrong access source" >&2; return 2; }
+          ;;
+        "AP IP" | "TNS-100 IP" | "303L SM IP" | "303X SM IP" | "Shared device username" | "Shared device password")
+          [ "$source_kind" = ap ] || [ "$source_kind" = legacy ] || { echo "run-readonly-bench: REFUSED: a key is in the wrong access source" >&2; return 2; }
+          ;;
+        *) echo "run-readonly-bench: REFUSED: an access source has an unsupported key" >&2; return 2 ;;
+      esac
+      if [ -n "$value" ] && [ "${#value}" -lt 3 ]; then
+        echo "run-readonly-bench: REFUSED: an access source value is too short" >&2
+        return 2
+      fi
+      case $key in
+        "Manager URL") export SIXTYOPS_TEST_URL="$value" ;;
+        "Manager CA file") export SIXTYOPS_TEST_CA_FILE="$value" ;;
+        "Manager username") export SIXTYOPS_TEST_USER="$value" ;;
+        "Manager password") export SIXTYOPS_TEST_PASS="$value" ;;
+        "AP IP") export SIXTYOPS_TEST_AP_IP="$value" SIXTYOPS_TEST_CONFIG_AP_IP="$value" SIXTYOPS_BENCH_AP_IP="$value" ;;
+        "TNS-100 IP") export SIXTYOPS_TEST_SWITCH_IP="$value" ;;
+        "303L SM IP") export SIXTYOPS_BENCH_SM_303L_IP="$value" ;;
+        "303X SM IP") export SIXTYOPS_BENCH_SM_303X_IP="$value" ;;
+        "Shared device username") export SIXTYOPS_BENCH_AP_USER="$value" ;;
+        "Shared device password") export SIXTYOPS_BENCH_AP_PASS="$value" ;;
+      esac
+      if [ -n "$value" ]; then
+        redact_n=$((redact_n + 1))
+        export "SIXTYOPS_BENCH_REDACT_$redact_n=$value"
+      fi
+    done < "$access_file"
+  }
+  if [ "$legacy_mode" = 1 ]; then
+    parse_access_source "$legacy_access_file" legacy || exit 2
+  else
+    [ -z "$manager_access_file" ] || parse_access_source "$manager_access_file" manager || exit 2
+  fi
+  if [ "$legacy_mode" = 0 ] && [ -n "$ap_access_file" ]; then
+    parse_access_source "$ap_access_file" ap || exit 2
+  fi
 
   # Also redact the Manager host name alone.
   url_host=${SIXTYOPS_TEST_URL:-}
@@ -246,6 +308,7 @@ set +e
 
   case $mode in
     local-switch) required="SIXTYOPS_TEST_SWITCH_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
+    firmware-stop) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_CA_FILE SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
     integration) required="SIXTYOPS_TEST_URL SIXTYOPS_TEST_USER SIXTYOPS_TEST_PASS SIXTYOPS_TEST_AP_IP SIXTYOPS_TEST_SWITCH_IP" ;;
     *) required="SIXTYOPS_BENCH_AP_IP SIXTYOPS_BENCH_AP_USER SIXTYOPS_BENCH_AP_PASS" ;;
   esac
@@ -254,7 +317,7 @@ set +e
     [ -n "${!name:-}" ] || missing="$missing $name"
   done
   if [ -n "$missing" ]; then
-    echo "run-readonly-bench: REFUSED: the access file does not give:$missing" >&2
+    echo "run-readonly-bench: REFUSED: required access fields are missing" >&2
     exit 2
   fi
 
@@ -286,6 +349,14 @@ set +e
       env "${unset_args[@]}" "$python" "$bench_dir/readonly_switch.py" --repo "$code_dir" 2>/dev/null
       status=$?
       ;;
+    firmware-stop)
+      if [ "${SIXTYOPS_TEST_URL%%://*}" != https ] || [ "$url_host" != "$ALLOWED_TEST_HOST" ]; then
+        echo "run-readonly-bench: REFUSED: the Manager URL is not the authorized dev host" >&2
+        exit 2
+      fi
+      env "${unset_args[@]}" "$python" "$bench_dir/readonly_stop.py" --repo "$code_dir" --checkout "$repo" --stop-id "$stop_id" 2>/dev/null
+      status=$?
+      ;;
     local-poll)
       echo "== lane: local-poll (checked-out commit, read-only)"
       env "${unset_args[@]}" "$python" "$bench_dir/readonly_poll.py" --repo "$code_dir" 2>&1 \
@@ -307,13 +378,13 @@ set +e
 ) 2>&1 | tee "$log_file"
 run_statuses=("${PIPESTATUS[@]}")
 run_status=${run_statuses[0]}
-if [ "$mode" = local-switch ] && [ "${run_statuses[1]}" -ne 0 ]; then
+if { [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; } && [ "${run_statuses[1]}" -ne 0 ]; then
   run_status=1
 fi
 set -e
 
 # The switch reader emits only fixed fields. Keep its summary private.
-if [ "$mode" = local-switch ]; then
+if [ "$mode" = local-switch ] || [ "$mode" = firmware-stop ]; then
   {
     echo "commit: $head_sha"
     cat "$log_file"

@@ -1,7 +1,7 @@
 # Dev Hardware Validation
 
-**Key points:** The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
-may run this procedure. A worker may run it only when the lead assigns the
+**Key points:** The operator or the Manager owner under [AGENTS.md authority](../AGENTS.md#host-access)
+may run this procedure. A worker may run it only when the owner assigns the
 worker a named run. The exception in [AGENTS.md](../AGENTS.md#must-not-do)
 allows that worker to run only the integration tests named in the run brief,
 against the dev host and dedicated lab devices. Workers must not run other
@@ -24,9 +24,9 @@ validation lane. Use this lane only with its authorized test devices.
 
 ## Dev host access
 
-The lead host reaches the authorized dev host through a recorded SSH alias and
+The owner host reaches the authorized dev host through a recorded SSH alias and
 its approved network path. The alias, host details, and access record are on
-the lead host's local disk and in the private system record. Check those
+the owner host's local disk and in the private system record. Check those
 locations before reporting dev host access as missing. Keep the IP address,
 alias, usernames and host paths in the private record. An agent assigned dev
 host work has full authority on that host, including guest-local `sudo` and
@@ -48,18 +48,18 @@ several roles; its write tests then run one at a time.
 
 ### Lab firmware authority
 
-On 2026-11-03, the owner gave standing approval for firmware changes on the
+On 2026-11-03, the operator gave standing approval for firmware changes on the
 dedicated lab devices and the dev host environment. This approval includes the
 live firmware integration test (`tests/integration/test_firmware.py`) and the
 Dev host run procedure below: back up the dev host, deploy an exact `main` or
 pull request head, enable the lab inventory records, run the test, read back
-the state, and restore the backup. The lead and a worker the lead assigns to a
-named run may follow these steps without per-run owner approval. Use this
+the state, and restore the backup. The owner and a worker the owner assigns to a
+named run may follow these steps without per-run operator approval. Use this
 section as the approval source in the run brief.
 
 Use only firmware images in the Manager store for that model. Change one
 device at a time. Hold the shared dev hardware lock with a detached process on
-the dev host. The lead's lock helper starts this holder over one SSH call and
+the dev host. The owner's lock helper starts this holder over one SSH call and
 prints its PID:
 
 ```sh
@@ -73,19 +73,75 @@ connected CPE count, and config section names twice. Judge the write from
 these read-backs. On 2026-11-01, two lab bank writes returned success and the
 read-backs confirmed them, so the false failure in
 [#670](https://github.com/sixtyops/manager/issues/670) is intermittent. Record
-each change in the lead artifacts. This approval covers dedicated test lab
+each change in the owner artifacts. This approval covers dedicated test lab
 devices and the dev host environment. It does not cover production devices,
 stable releases, dev releases, or other hosts.
 
+### Power-cycle a lab AP through the switch
+
+**Key points:** Use this procedure when a lab AP answers ping but its web
+service hangs, or when a run needs a clean reboot without a firmware write.
+The operator approved this method on 2026-11-09. Hold the shared hardware lock
+before changing PoE.
+
+**Detail:** Find the AP's switch port in Manager's `switch_bridge_entries`
+table. Match the AP MAC address and the CPE MAC address behind it; both appear
+on the same switch port. Record the switch and port before continuing.
+
+The TNS-100 controls PoE with `ethernet.ports.<port>.poe`. The live Ethernet
+status is available from `GET /cgi.lua/status?type=ethernet`. For the port,
+check `poe_out`, `poe_fault`, and `link`.
+
+Hold the shared dev hardware lock with a detached process on the dev host:
+
+```sh
+ssh <dev host alias> 'setsid nohup flock -w 300 /var/lock/sixtyops-dev-hardware.lock sleep <seconds> >/dev/null 2>&1 < /dev/null & echo $!'
+```
+
+Confirm that the lock is held with
+`flock -n /var/lock/sixtyops-dev-hardware.lock -c true`; it must fail while the
+holder runs. Release the lock by stopping the printed PID and its child, then
+confirm that the same `flock -n` command succeeds.
+
+Use `TachyonClient.get_config()` to read the full config. Change only
+`ethernet.ports.<port>.poe` and pass the full config to
+`TachyonClient.apply_config()`. First call it with `dry_run=True`; after the
+dry run succeeds, apply the same config with `preserve_user_passwords=True`.
+Pass `preserve_user_passwords=True` on the dry run as well, so stored user
+password hashes remain unchanged through the full-config round trip.
+
+Power-cycle the port in this order:
+
+1. Set PoE to `false` and apply it. Read back the config value for `poe` and
+   Ethernet status values `poe_out`, `poe_fault`, and `link` twice.
+2. Wait 15 seconds.
+3. Set PoE to `true` and apply it. Read back `poe` and status values
+   `poe_out`, `poe_fault`, and `link` twice.
+
+If any step after PoE is disabled fails, restore PoE to `true` in a cleanup
+step. Run the same dry-run and apply sequence for the restore, then read back
+`poe`, `poe_out`, `poe_fault`, and `link` twice. Do not release the shared lock
+until PoE has been restored or the restore failure has been recorded.
+
+A TNA-301 on firmware 1.15.1 answers about 75 to 85 seconds after PoE returns.
+On firmware 1.15.0, it took about 4.5 minutes. Wait about 90 seconds after boot
+before the first login, then probe every 30 seconds. Fast repeated logins
+during boot preceded web server hangs. Its management address can change after
+reboot. Find it through the CPE's wireless peer report, then confirm its serial;
+see
+[#777](https://github.com/sixtyops/manager/issues/777). Do not use the TNA-30x
+1.15.0 image for lab runs. It has a known web server hang that 1.15.1 fixes.
+Read the vendor release notes before any lab flash.
+
 ### Dev host run procedure
 
-The operator or the Manager lead under [AGENTS.md authority](../AGENTS.md#host-access)
-may run dev host procedures. A worker may run a procedure only when the lead
+The operator or the Manager owner under [AGENTS.md authority](../AGENTS.md#host-access)
+may run dev host procedures. A worker may run a procedure only when the owner
 assigns that worker a named run. The brief names the lock holder and gives the
 exact approved backup, verify, and restore command lines. Run procedures on the dev host over the
 recorded SSH alias. Use the
 approved backup, verify, and restore commands with `sudo -n`; do not run
-`sudo` on the lead host. Read command arguments and paths from the approved
+`sudo` on the owner host. Read command arguments and paths from the approved
 `sixtyops-manager-loop.env` file without copying its values into Git. Before a
 deploy, list the backup and test-extract it into a temporary directory.
 Record the backup name immediately after creation.
@@ -119,17 +175,17 @@ after a password change.
 
 ## Manual Commands
 
-### Lead integration write lane
+### Owner integration write lane
 
-Run integration write tests from the lead host against the authorized dev host
-through the lead's integration runner. The runner reads the private lab access
+Run integration write tests from the owner host against the authorized dev host
+through the owner's integration runner. The runner reads the private lab access
 file, exports the required `SIXTYOPS_TEST_*` variables for pytest only, and
-prints no variable value. The runner lives in the lead's private state folder.
+prints no variable value. The runner lives in the owner's private state folder.
 
 The lab has one access point (AP). Use it for the AP, firmware AP, config AP,
 and RADIUS AP roles. Run write tests on this lab one at a time. Before each
 write run, confirm that the lab AP and switch are enabled in the dev host
-inventory, keep autoupdate, schedule, and scheduled readiness settings off,
+inventory, keep autoupdate and schedule settings off,
 and verify a full private backup.
 
 Blocking lane:
@@ -237,7 +293,7 @@ GitHub branch protection is not repo-tracked. After merging the workflow, config
 
 **Key points:** Unit tests do not prove device behavior. Every engine or
 driver change needs real Tachyon bench proof on the exact pull request head
-before merge. Only the owner names bench devices.
+before merge. Only the operator names bench devices.
 
 **Detail:** Record the tested models, firmware, recovery evidence, and exact
 commit in the pull request. Re-run bench proof after any change to the pull
@@ -248,9 +304,9 @@ read-only customer-router signals and their current limits.
 
 ## Read-only bench wrapper
 
-**Key points:** The lead runs `scripts/bench/run-readonly-bench.sh` to get
-read-only bench evidence on an exact commit. The wrapper reads the private
-access file and never prints its values. The wrapper does not change device
+**Key points:** The owner runs `scripts/bench/run-readonly-bench.sh` to get
+read-only bench evidence on an exact commit. The wrapper reads private access
+files and never prints their values. The wrapper does not change device
 firmware or configuration.
 
 **Detail:**
@@ -260,9 +316,11 @@ the current directory:
 
 ```bash
 cd <checkout-under-test>
-SIXTYOPS_BENCH_ACCESS_FILE=<private-file> \
+SIXTYOPS_BENCH_MANAGER_ACCESS_FILE=<manager-file> \
+SIXTYOPS_BENCH_AP_ACCESS_FILE=<ap-file> \
   <main-checkout>/scripts/bench/run-readonly-bench.sh <full-commit-sha> \
-  [--mode integration|local-poll|session-proof|local-switch] [--duration-min 35]
+  [--mode integration|local-poll|session-proof|local-switch|firmware-stop] \
+  [--duration-min 35] [--stop-id N]
 ```
 
 Guards, in this order:
@@ -271,20 +329,25 @@ Guards, in this order:
    clean. The wrapper checks this before it reads the access file.
 2. The commit must not change `tests/integration/`, `tests/conftest.py`,
    `conftest.py`, or `pyproject.toml`.
-3. The access file must be owned by the current user, have mode `600` or
-   `400`, and be outside the repository. The wrapper parses its
-   `Key: value` lines in a subshell. It does not `source` the file. It
-   refuses the run if a value is shorter than 3 characters, because the
-   filter does not replace such short values.
+3. Each supplied access file must be a regular file owned by the current
+   user, have mode `600` or `400`, contain no symlink in its path, and resolve
+   outside the repository and bench code. The wrapper parses its `Key: value`
+   lines in a subshell. It does not `source` the files. It refuses duplicate
+   keys, keys in the wrong file, and values shorter than 3 characters because
+   the filter does not replace such short values.
 4. The integration and AP modes send output through `scripts/bench/redact.py`.
    The filter replaces every access-file value and IPv4 address. The switch
    mode emits fixed result fields only. The log and summary go to
    `SIXTYOPS_BENCH_SUMMARY_DIR`. The default is
    `sixtyops-bench` in `XDG_STATE_HOME`, or in `~/.local/state`.
 
-Access file keys: `Manager URL`, `Manager username`, `Manager password`,
-`TNS-100 IP`, `AP IP`, `303L SM IP`, `303X SM IP`, `Shared device username`,
-and `Shared device password`.
+The Manager file accepts `Manager URL`, `Manager CA file`, `Manager username`,
+and `Manager password`. The AP file accepts `TNS-100 IP`, `AP IP`, `303L SM IP`,
+`303X SM IP`, `Shared device username`, and `Shared device password`.
+`integration` and `firmware-stop` require both files. AP modes require only the
+AP file. Existing one-file setups can keep using `SIXTYOPS_BENCH_ACCESS_FILE`;
+that file may contain keys from both groups. Do not set the legacy variable
+with either separate-file variable.
 
 Modes:
 
@@ -301,6 +364,14 @@ Modes:
   The firmware and bank results must stay the same. It emits only fixed
   PASS/FAIL fields. It does not save model labels, versions, serials, MAC
   addresses, raw responses, or exception text.
+- `firmware-stop`: pass `--stop-id N` to select one unresolved stop row. The
+  wrapper creates the normal Manager auth session and audit entry, reads the
+  expected serial from the stop list, then logs in to the AP and compares its
+  serial. It verifies Manager with the supplied CA file and the Manager host
+  name. It does not follow redirects. Login must return the expected local
+  redirect and session cookie. It emits fixed status fields only. It does not
+  change stop, inventory, schedule, or device data, and it does not resolve
+  the stop.
 - `local-poll`: logs in to the AP with the commit's driver and reads device
   information and the CPE list.
 - `session-proof`: for the CPE session reuse proof
@@ -317,13 +388,28 @@ For session-sensitive changes, run the exact-head session proof for at least
 three minutes. Follow the session policy in that commit. Record login, reuse,
 renewal, and logout recovery evidence in the sanitized summary.
 
-For `local-switch`, the wrapper also requires an owner-only output directory
-with mode `700`. It creates a new log and summary with mode `600` before
+For `local-switch` and `firmware-stop`, the wrapper also requires an owner-only
+output directory with mode `700`. It creates a new log and summary with mode `600` before
 login. Unsafe output permissions or a failed file creation stop the run before
-device contact. It uses the existing `TNS-100 IP`, `Shared device username`,
-and `Shared device password` fields. Missing fields fail the run. Inherited
-device inputs cannot replace missing fields in the access file. A log write
-failure makes the lane fail even when both device reads succeed.
+device contact. `local-switch` uses the existing `TNS-100 IP`, `Shared device
+username`, and `Shared device password` fields. `firmware-stop` uses `Manager
+URL`, `Manager username`, `Manager password`, `AP IP`, `Shared device username`,
+and `Shared device password`. It also requires `Manager CA file`, which must
+give the absolute path to the trusted Manager CA certificate. Store the CA
+file outside the repository in an owner-only directory. Provision the PEM from
+the approved certificate source, then set the directory to mode `700` and the
+file to mode `600`. For example, use `install -d -m 700` for the destination
+directory and `install -m 600` to place the provisioned CA file there. Confirm
+its fingerprint through a separate trusted channel. Do not paste certificate
+or credential contents into commands, logs, or the repository. Keep the
+directory and file owned by root or the user running the helper. The helper
+rejects symlinks and group or world write access on the CA file and path
+components. It reads the CA through verified file descriptors and uses only
+that certificate for Manager TLS. The helper does not read the access file.
+Missing or invalid CA files fail closed.
+Missing fields fail the run. Inherited device inputs cannot replace missing
+fields in the access file. A log write failure makes the lane fail even when
+reads succeed.
 
 The tool-only change can merge after the normal review and offline gates,
 before a lab run. This makes the wrapper available from trusted `main`.
@@ -338,9 +424,9 @@ not satisfy the other device and recovery gates for
 [PR 558](https://github.com/sixtyops/manager/pull/558). A skipped or failed run
 is not hardware proof.
 
-`tests/test_bench_wrapper.py` checks the SHA refusal and that the allowlist
-has no write test. The local modes run the commit's driver code with the
-device login. Review the commit before you run them.
+`tests/test_bench_wrapper.py` checks the source-file guards, the SHA refusal,
+and that the allowlist has no write test. The local modes run the commit's
+driver code with the device login. Review the commit before you run them.
 
 ## Private access records
 
@@ -358,7 +444,7 @@ On the authorized dev host, the lab access manifest and credential files are
 on local disk in owner-only folders in the operator's home directory. One
 credential file covers the switch lanes; one covers the AP lanes. Check these
 records before reporting access missing. Pass the correct file to the bench
-wrapper with `SIXTYOPS_BENCH_ACCESS_FILE`. Do not ask the owner for access
+wrapper with `SIXTYOPS_BENCH_ACCESS_FILE`. Do not ask the operator for access
 already recorded there. Do not read, print, or copy these files. Only the
 wrapper reads them.
 

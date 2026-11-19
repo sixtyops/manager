@@ -1,0 +1,88 @@
+{
+  "wireless": {
+    "radios": {
+      "wlan0": {
+        "mac": "02:00:00:00:00:01",
+        "name": "synthetic-device",
+        "phy": "synthetic",
+        "protocol": "synthetic",
+        "antennas": 0,
+        "txPower": 0,
+        "channel": 0,
+        "frequency": 0,
+        "channelWidth": 0,
+        "noise": 0,
+        "countryCode": "synthetic",
+        "vendor": "synthetic",
+        "T_radio": 0,
+        "T_mac": 0,
+        "TxAntennaSectors": 0,
+        "txBO": 0,
+        "modemSpeed": 0,
+        "channelMib": 0,
+        "channelLabel": "synthetic"
+      }
+    },
+    "vaps": [
+      {
+        "ifIndex": 0,
+        "name": "synthetic-device",
+        "mac": "02:00:00:00:00:01",
+        "radio": "synthetic",
+        "operationMode": "synthetic",
+        "ssid": "synthetic-device",
+        "hiddenSsid": false,
+        "peerCount": 0,
+        "security": "synthetic",
+        "maxPeerCount": 0,
+        "ptp": false,
+        "rxmcs": 0,
+        "rxPackets": 0,
+        "rxErrors": 0,
+        "txPackets": 0
+      }
+    ],
+    "peers": [
+      {
+        "mac": "02:00:00:00:00:01",
+        "vap": "synthetic",
+        "vapIfIndex": 0,
+        "rxBytes": 0,
+        "rxPackets": 0,
+        "txBytes": 0,
+        "txPackets": 0,
+        "linkUptime": 0,
+        "combinedSignal": 0,
+        "txRate": 0,
+        "mcs": 0,
+        "width": "synthetic",
+        "shortgi": false,
+        "rxRate": 0,
+        "peerIfName": "synthetic",
+        "ifaceName": "synthetic",
+        "rxmcs": 0,
+        "lastLocalRssi": 0,
+        "lastBeaconRssi": 0,
+        "lastRtsRxRssi": 0,
+        "rxPower": 0,
+        "lastRemoteRssi": 0,
+        "txmcs": 0,
+        "bfSnr": 0,
+        "quasiOmniRssi": 0,
+        "quasiOmniSnr": 0,
+        "lastDataRxSnr": 0,
+        "linkDistance": 0,
+        "rxSector": 0,
+        "txSector": 0,
+        "ipv4": "198.51.100.10",
+        "ipv6": "2001:db8::10",
+        "system_name": "synthetic-device",
+        "system_desc": "synthetic-device",
+        "fw": "synthetic",
+        "antenna_kit": "synthetic",
+        "model": "TNA-301",
+        "model_id": "TNA-301"
+      }
+    ]
+  }
+}

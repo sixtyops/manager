@@ -16,6 +16,10 @@ class _DeviceClient:
     calls = {}
     fail_at = None
     connect_calls = {}
+    management_after_update = None
+    management_before_update = None
+    management_new_address_serial = None
+    management_new_address_auth = True
 
     def __init__(self, ip, username, password):
         self.ip = ip
@@ -23,7 +27,7 @@ class _DeviceClient:
         self.calls.setdefault(ip, []).append("client")
 
     async def connect(self):
-        self.calls[self.ip].append("connect")
+        self.calls.setdefault(self.ip, []).append("connect")
         self.connect_calls[self.ip] = self.connect_calls.get(self.ip, 0) + 1
         if (
             self.ip == "192.0.2.1"
@@ -31,6 +35,8 @@ class _DeviceClient:
             and self.connect_calls[self.ip] == 2
         ):
             raise RuntimeError("reconnect failed")
+        if self.ip == "192.0.2.2" and not self.management_new_address_auth:
+            return False
         return True
 
     async def get_connected_cpes(self):
@@ -46,10 +52,21 @@ class _DeviceClient:
         return {"system": {"name": "test"}}
 
     async def get_device_info(self):
+        management = (
+            self.management_after_update if self.updated
+            else self.management_before_update
+        )
+        management = management or {
+            "management_vlan_id": 12,
+            "management_ip_mode": "static",
+            "management_address": "192.0.2.1",
+        }
         return SimpleNamespace(
-            model="TNA-301", serial="SYNTHETIC-SERIAL",
+            model="TNA-301",
+            serial=(self.management_new_address_serial or "SYNTHETIC-SERIAL")
+            if self.ip == "192.0.2.2" else "SYNTHETIC-SERIAL",
             current_version="2.0.0.1" if self.updated else "1.0.0.100",
-            extra={},
+            ip=management.get("ip", "192.0.2.1"), extra=management,
         )
 
     def get_hardware_id(self, model):
@@ -87,6 +104,22 @@ class _DeviceClient:
             {"check": "cpe_signal_levels", "passed": passed},
         ]
         return SimpleNamespace(passed=passed, warnings=[] if passed else ["traffic missing"], checks=checks)
+
+
+class _ManagementDeviceClient(_DeviceClient):
+    """Tachyon-like test client that enables management recovery checks."""
+
+    def __init__(self, ip, username, password):
+        super().__init__(ip, username, password)
+        self._client = SimpleNamespace(ip=ip, _base_url=f"https://{ip}", _token=None)
+
+    async def get_ap_radio_mac(self):
+        return "02:00:00:00:00:02"
+
+    async def get_device_info(self):
+        info = await super().get_device_info()
+        info.mac = "02:00:00:00:00:01"
+        return info
 
 
 def _install_snapshot_store(monkeypatch, *, failure=None):
@@ -380,7 +413,7 @@ def test_stopped_window_blocks_device_action_and_resolution_does_not_reopen_it(m
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cutoff_checks, expected_reboot", [((20, 0), False), ((20, 20, 0), True)])
 async def test_queue_cutoff_blocks_before_start_but_finishes_started_device(mock_db, monkeypatch, cutoff_checks, expected_reboot):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.fail_at = None
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
@@ -430,7 +463,7 @@ async def test_resolved_failure_on_target_runs_read_only_recovery(smoke_failure,
     )
     old_stop = db.get_firmware_window_stop(("firmware", "2026-10-27"))
     db.resolve_firmware_window_stop(old_stop["id"], "admin", "Device is on target")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = "smoke" if smoke_failure else None
@@ -475,7 +508,7 @@ async def test_resolved_failure_recovery_requires_saved_serial(
         "Device did not return", expected_serial="SYNTHETIC-SERIAL",
     )
     db.resolve_firmware_window_stop(prior["id"], "admin", "Device is on target")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     monkeypatch.setattr(app_module, "_shutting_down", False)
@@ -537,6 +570,7 @@ def test_restart_routes_keep_failed_window_closed_and_record_resolution(tmp_path
         ))
 
     stop_id = db.get_firmware_window_stop(failed_key)["id"]
+    db.set_setting("timezone", "UTC")
     monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda settings, now=None: next_key)
     resolved = client.post(f"/api/firmware-window-stops/{stop_id}/resolve", data={
         "resolution": "Bench recovery verified",
@@ -569,8 +603,8 @@ def test_configured_stop_resolution_requires_a_later_parsed_window(
     stop_id = 12
     resolved = {"id": stop_id, "resolved_at": "now"}
     monkeypatch.setattr(db, "get_unresolved_firmware_window_stops", lambda: [{"id": stop_id, "window_key": stored_key}])
-    monkeypatch.setattr(db, "get_all_settings", lambda: {})
-    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda _settings: current_key)
+    monkeypatch.setattr(db, "get_all_settings", lambda: {"timezone": "UTC"})
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda _settings, now=None: current_key)
     monkeypatch.setattr(db, "resolve_firmware_window_stop", lambda *args: resolved)
     monkeypatch.setattr(db, "log_audit", lambda *args: None)
 
@@ -714,7 +748,7 @@ def test_manual_fallback_admission_is_blocked_by_configured_window_stop(mock_db,
     local_day_key = ("manual", "2026-10-27")
     db.stop_firmware_window(configured_key, "scheduled-job", "192.0.2.1", "flash", "Upload failed")
     monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: None)
-    monkeypatch.setattr(app_module, "_manual_firmware_window_key", lambda now=None: local_day_key)
+    monkeypatch.setattr(app_module, "_manual_firmware_window_key", lambda now=None, **kwargs: local_day_key)
 
     manual_key = rollout_gate.firmware_window_key(db.get_all_settings()) or app_module._manual_firmware_window_key()
     assert manual_key == local_day_key
@@ -740,10 +774,11 @@ def test_manual_fallback_admission_is_blocked_by_configured_window_stop(mock_db,
 
 
 @pytest.mark.asyncio
-async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
+async def test_manual_fallback_job_does_not_bypass_scheduled_queue_auto_update(
     mock_db, monkeypatch, utc_window_clock,
 ):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
+    db.set_setting("schedule_timezone", "UTC")
     settings = {
         "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
         "schedule_start_hour": 0,
@@ -826,12 +861,12 @@ def test_window_key_stays_constant_across_midnight():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("boundary", ["pre_reboot", "flash"])
-@pytest.mark.parametrize("closure", ["readiness", "window"])
+@pytest.mark.parametrize("closure", ["auto_update", "window"])
 @pytest.mark.parametrize("scheduled", [True, False])
 async def test_current_admission_after_connect_blocks_scheduled_writes(
     mock_db, monkeypatch, boundary, closure, scheduled,
 ):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     state = {"closed": False}
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
@@ -841,8 +876,8 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
         async def connect(self):
             result = await super().connect()
             state["closed"] = True
-            if closure == "readiness":
-                db.set_setting("scheduled_rollout_safety_ready", "false")
+            if closure == "auto_update":
+                db.set_setting("schedule_enabled", "false")
             return result
 
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: ClosingClient)
@@ -876,18 +911,18 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
     assert (boundary in calls) is not scheduled
     assert ("flash" in calls) is not scheduled
     if scheduled:
-        assert job.devices["192.0.2.1"].status == ("cancelled" if closure == "readiness" else "pending")
-        assert job.cancelled is (closure == "readiness")
+        assert job.devices["192.0.2.1"].status == ("cancelled" if closure == "auto_update" else "pending")
+        assert job.cancelled is (closure == "auto_update")
     else:
         assert job.devices["192.0.2.1"].status == "success"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("closure", ["cutoff", "readiness", "window_stop"])
+@pytest.mark.parametrize("closure", ["cutoff", "auto_update", "window_stop"])
 async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_other_gates(
     mock_db, monkeypatch, closure,
 ):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     key = ("firmware", "2026-10-27")
     state = {"minutes_until_end": 60}
 
@@ -897,8 +932,8 @@ async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_o
             await asyncio.sleep(0)
             if closure == "cutoff":
                 state["minutes_until_end"] = 0
-            elif closure == "readiness":
-                db.set_setting("scheduled_rollout_safety_ready", "false")
+            elif closure == "auto_update":
+                db.set_setting("schedule_enabled", "false")
             else:
                 app_module._stop_firmware_window(
                     job, "192.0.2.2", "upload", "Another device failed",
@@ -951,7 +986,7 @@ async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_o
     else:
         assert "upload" not in calls
         assert "trigger" not in calls
-    if closure == "readiness":
+    if closure == "auto_update":
         assert job.devices["192.0.2.1"].status == "pending"
         assert job.devices["192.0.2.1"].error is None
         assert db.get_firmware_window_stop(key) is None
@@ -964,7 +999,7 @@ async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_o
 @pytest.mark.asyncio
 async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypatch, utc_window_clock):
     key = ("firmware", "2026-10-27")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
 
     class FailedUpdateClient(_DeviceClient):
         async def update_firmware(self, _path, progress, **kwargs):
@@ -992,3 +1027,487 @@ async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypat
     stop = db.get_firmware_window_stop(key)
     assert stop["device_ip"] == "192.0.2.1"
     assert stop["reason"] == "Upload failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("after", "expected_reason"), [
+    ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.1"}, None),
+    ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.2"},
+     "Management address was not confirmed by AP recovery"),
+    ({"management_vlan_id": 20, "management_ip_mode": "static", "management_address": "192.0.2.1"},
+     "management VLAN changed from 12 to 20 after update"),
+    ({"management_vlan_id": 20, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
+     "management VLAN changed from 12 to 20 after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"},
+     "management IP mode changed from static to dhcp after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": "192.0.2.2"},
+     "management address changed after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "unknown", "management_address": "192.0.2.1"},
+     "management IP mode is unavailable after update"),
+    ({"management_vlan_id": None, "management_ip_mode": "static", "management_address": "192.0.2.1"},
+     "management VLAN is unavailable after update"),
+    ({"management_vlan_id": 12, "management_ip_mode": "static", "management_address": None, "ip": None},
+     "management address is unavailable after update"),
+])
+async def test_changed_management_settings_stop_firmware_window(
+    mock_db, monkeypatch, utc_window_clock, after, expected_reason,
+):
+    db.upsert_device("192.0.2.1", "ap", "u", "p")
+    key = ("firmware", "2026-10-27")
+    db.set_setting("schedule_enabled", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+    _DeviceClient.management_new_address_serial = None
+    _DeviceClient.management_new_address_auth = True
+    _DeviceClient.management_after_update = after
+    _DeviceClient.management_before_update = (
+        {"management_vlan_id": 12, "management_ip_mode": "dhcp", "management_address": "192.0.2.1"}
+        if after.get("management_ip_mode") == "dhcp" and (
+            expected_reason is None or expected_reason == "Management address was not confirmed by AP recovery")
+        else None
+    )
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
+    job = app_module.UpdateJob(
+        job_id="management-change",
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={"192.0.2.1": ("u", "p")}, device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap")},
+        is_scheduled=True, start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key, pre_update_reboot=False,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1", pass_number=2)
+
+    stop = db.get_firmware_window_stop(key)
+    assert "flash" in _ManagementDeviceClient.calls["192.0.2.1"]
+    if expected_reason is None:
+        assert job.devices["192.0.2.1"].status == "success"
+        assert stop is None
+        if after["management_address"] == "192.0.2.2":
+            assert _DeviceClient.connect_calls["192.0.2.2"] == 1
+    else:
+        assert job.devices["192.0.2.1"].status == "failed"
+        assert expected_reason in stop["reason"]
+    _DeviceClient.management_after_update = None
+    _DeviceClient.management_before_update = None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("new_address_serial", "new_address_auth", "expected_reason"),
+    [
+        ("OTHER-SERIAL", True, "Expected serial did not match at the new management address"),
+        (None, False, "Authentication failed at the new management address"),
+    ],
+)
+async def test_changed_dhcp_address_without_recovery_callback_is_rejected(
+    mock_db, monkeypatch, utc_window_clock,
+    new_address_serial, new_address_auth, expected_reason,
+):
+    db.upsert_device("192.0.2.1", "ap", "u", "p")
+    key = ("firmware", "2026-10-27")
+    db.set_setting("schedule_enabled", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = None
+    _DeviceClient.management_new_address_serial = new_address_serial
+    _DeviceClient.management_new_address_auth = new_address_auth
+    _DeviceClient.management_after_update = {
+        "management_vlan_id": 12,
+        "management_ip_mode": "dhcp",
+        "management_address": "192.0.2.2",
+    }
+    _DeviceClient.management_before_update = {
+        "management_vlan_id": 12,
+        "management_ip_mode": "dhcp",
+        "management_address": "192.0.2.1",
+    }
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
+    job = app_module.UpdateJob(
+        job_id="management-new-address-identity",
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={"192.0.2.1": ("u", "p")},
+        device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap")},
+        is_scheduled=True, start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key, pre_update_reboot=False,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1", pass_number=2)
+
+    stop = db.get_firmware_window_stop(key)
+    assert job.devices["192.0.2.1"].status == "failed"
+    assert "Management address was not confirmed by AP recovery" in stop["reason"]
+    assert "192.0.2.2" not in _DeviceClient.connect_calls
+    _DeviceClient.management_after_update = None
+    _DeviceClient.management_before_update = None
+    _DeviceClient.management_new_address_serial = None
+    _DeviceClient.management_new_address_auth = True
+
+
+@pytest.mark.asyncio
+async def test_unreachable_ap_stop_records_pre_update_management_settings(
+    mock_db, monkeypatch, utc_window_clock,
+):
+    db.upsert_device("192.0.2.1", "ap", "u", "p")
+    key = ("firmware", "2026-10-27")
+    db.set_setting("schedule_enabled", "true")
+    _DeviceClient.calls = {}
+    _DeviceClient.connect_calls = {}
+    _DeviceClient.fail_at = "recovery"
+    _DeviceClient.management_after_update = None
+    monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _ManagementDeviceClient)
+    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
+    monkeypatch.setattr(app_module, "_shutting_down", False)
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: key)
+    job = app_module.UpdateJob(
+        job_id="management-no-return",
+        device_firmware_map={"192.0.2.1": "/tmp/tna-30x-2.0.0-r1.bin"},
+        credentials={"192.0.2.1": ("u", "p")}, device_roles={"192.0.2.1": "ap"},
+        devices={"192.0.2.1": app_module.DeviceStatus(ip="192.0.2.1", role="ap")},
+        is_scheduled=True, start_hour=0, end_hour=23, schedule_days=["tue"],
+        schedule_timezone="UTC", window_key=key, pre_update_reboot=False,
+    )
+
+    await app_module._update_single_device(job, "192.0.2.1", pass_number=2)
+
+    stop = db.get_firmware_window_stop(key)
+    assert stop["reason"] == (
+        "Device did not return on its management address after update; "
+        "pre-update management VLAN 12, IP mode static"
+    )
+    assert "192.0.2.1" not in stop["reason"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_callback_timeout_stop_records_pre_update_management_settings(
+    mock_db, monkeypatch, utc_window_clock,
+):
+    async def timeout(self, *args, **kwargs):
+        return app_module.UpdateResult(
+            ip=self.ip, success=False, error="Recovery callback timed out",
+        )
+
+    monkeypatch.setattr(_ManagementDeviceClient, "update_firmware", timeout)
+    await test_unreachable_ap_stop_records_pre_update_management_settings(
+        mock_db, monkeypatch, utc_window_clock,
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_flash_auth_failure_stop_records_pre_update_management_settings(
+    mock_db, monkeypatch, utc_window_clock,
+):
+    async def update_firmware(self, *args, **kwargs):
+        self.updated = True
+        return app_module.UpdateResult(
+            ip=self.ip, success=True, old_version="1.0.0.100", new_version="2.0.0.1",
+        )
+
+    async def connect(self):
+        return not self.updated
+
+    monkeypatch.setattr(_ManagementDeviceClient, "update_firmware", update_firmware)
+    monkeypatch.setattr(_ManagementDeviceClient, "connect", connect)
+    await test_unreachable_ap_stop_records_pre_update_management_settings(
+        mock_db, monkeypatch, utc_window_clock,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_window_cache_resolution_and_expiry(monkeypatch):
+    from updater import services
+
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    lookup = AsyncMock(return_value={"timezone": "America/Chicago"})
+    monkeypatch.setattr(services, "get_location_from_ip", lookup)
+    settings = {"schedule_days": "wed", "schedule_start_hour": 16,
+                "schedule_end_hour": 17, "timezone": "auto"}
+    now = datetime.fromisoformat("2026-11-18T22:30:00+00:00")
+    assert rollout_gate.firmware_window_key(settings, now) is None
+    lookup.assert_not_awaited()
+    await services.get_timezone()
+    assert rollout_gate.firmware_window_key(settings, now) == ("firmware", "2026-11-18")
+    services._location_cache_times[services._RESOLVED_TIMEZONE_KEY] -= services._LOCATION_CACHE_TTL
+    assert rollout_gate.firmware_window_key(settings, now) is None
+    lookup.return_value = {"timezone": "Invalid/Zone"}
+    with pytest.raises(KeyError):
+        await services.get_timezone()
+    assert rollout_gate.firmware_window_key(settings, now) is None
+    lookup.return_value = None
+    await services.get_timezone()
+    assert rollout_gate.firmware_window_key(settings, now) == ("firmware", "2026-11-18")
+
+
+@pytest.mark.parametrize("zone,now,expected", [
+    ("America/Chicago", "2026-11-18T22:30:00+00:00", "2026-11-18"),
+    ("America/Chicago", "2026-11-18T16:30:00", "2026-11-18"),
+    ("auto", "2026-11-18T22:30:00", "2026-11-18"),
+    ("auto", "2026-11-18T16:30:00", None),
+    ("UTC", "2026-11-18T22:30:00+00:00", None),
+    ("Invalid/Zone", "2026-11-18T22:30:00+00:00", None),
+])
+def test_window_zone_precedence_and_naive_contract(monkeypatch, zone, now, expected):
+    import os
+    import time
+
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    previous = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    try:
+        settings = {"schedule_days": "wed", "schedule_start_hour": 16,
+                    "schedule_end_hour": 17, "timezone": "America/Chicago",
+                    "schedule_timezone": zone}
+        key = rollout_gate.firmware_window_key(settings, datetime.fromisoformat(now))
+        assert key == (("firmware", expected) if expected else None)
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+
+@pytest.mark.parametrize("instant", ["2026-11-01T06:30:00+00:00", "2026-11-01T07:30:00+00:00"])
+def test_auto_overnight_dst_keeps_start_day(monkeypatch, instant):
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    settings = {"schedule_days": "sat", "schedule_start_hour": 23,
+                "schedule_end_hour": 2, "timezone": "auto"}
+    assert rollout_gate.firmware_window_key(settings, datetime.fromisoformat(instant)) == (
+        "firmware", "2026-10-31"
+    )
+
+
+@pytest.mark.parametrize("zone", [None, "auto", "America/Chicago"])
+def test_window_current_clock_uses_resolved_zone(monkeypatch, zone):
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert str(tz) == "America/Chicago"
+            return datetime.fromisoformat("2026-11-18T22:30:00+00:00").astimezone(tz)
+
+    monkeypatch.setattr(rollout_gate, "datetime", Clock)
+    settings = {"schedule_days": "wed", "schedule_start_hour": 16,
+                "schedule_end_hour": 17, "timezone": zone}
+    assert rollout_gate.firmware_window_key(settings) == ("firmware", "2026-11-18")
+
+
+@pytest.mark.parametrize(
+    "instant,start,end,expected_status",
+    [
+        ("2026-10-27T18:00:00+00:00", 3, 4, 200),  # Later day, outside hours.
+        ("2026-10-26T08:30:00+00:00", 3, 4, 409),  # Same window in Chicago.
+        ("2026-10-26T18:00:00+00:00", 3, 4, 409),  # Same local day after hours.
+        ("2026-10-27T01:00:00+00:00", 3, 4, 409),  # UTC tomorrow, Chicago today.
+        ("2026-10-27T06:30:00+00:00", 23, 2, 409),  # Overnight tail.
+        ("2026-10-27T07:00:00+00:00", 23, 2, 200),  # Overnight window ended.
+        ("2026-10-28T04:30:00+00:00", 23, 2, 200),  # Later window start.
+    ],
+)
+@pytest.mark.parametrize("zone_setting", ["auto", "America/Chicago"])
+def test_firmware_stop_resolution_uses_local_day_and_preserves_stopped_window(
+    mock_db, monkeypatch, instant, start, end, expected_status, zone_setting,
+):
+    db.set_settings({
+        "timezone": zone_setting,
+        "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+        "schedule_start_hour": str(start),
+        "schedule_end_hour": str(end),
+    })
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    captured = datetime.fromisoformat(instant)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return captured.astimezone(tz)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    failed_key = ("firmware", "2026-10-26")
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+    if expected_status == 409:
+        with pytest.raises(app_module.HTTPException) as error:
+            asyncio.run(app_module.resolve_firmware_window_stop_api(
+                stop["id"], "Recovery verified", {"username": "operator"},
+            ))
+        assert error.value.status_code == 409
+        assert db.get_firmware_window_stop(failed_key)["resolved_at"] is None
+    else:
+        asyncio.run(app_module.resolve_firmware_window_stop_api(
+            stop["id"], "  Recovery verified  ", {"username": "operator"},
+        ))
+        record = db.get_firmware_window_stop(failed_key)
+        assert record["resolved_at"]
+        assert record["resolved_by"] == "operator"
+        assert record["resolution"] == "Recovery verified"
+        with pytest.raises(app_module.HTTPException):
+            app_module._check_firmware_window_admission(failed_key)
+
+    with db.get_db() as conn:
+        audits = conn.execute(
+            "SELECT * FROM audit_log WHERE action = 'firmware.window_stop.resolve'",
+        ).fetchall()
+    assert len(audits) == (1 if expected_status == 200 else 0)
+
+
+@pytest.mark.parametrize("stop_day,expected_status", [("2026-11-17", 200), ("2026-11-18", 409)])
+def test_firmware_stop_resolution_detects_timezone_with_scheduling_disabled(
+    operator_client, monkeypatch, stop_day, expected_status,
+):
+    db.set_settings({
+        "timezone": "auto",
+        "schedule_enabled": "false",
+        "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+        "schedule_start_hour": "3",
+        "schedule_end_hour": "4",
+    })
+    services = app_module.services
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    lookup = AsyncMock(return_value={"timezone": "America/Chicago"})
+    monkeypatch.setattr(services, "get_location_from_ip", lookup)
+    instant = datetime(2026, 11, 19, 0, 22, tzinfo=timezone.utc)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz) if tz else instant.astimezone().replace(tzinfo=None)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    failed_key = ("firmware", stop_day)
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+
+    response = operator_client.post(
+        f"/api/firmware-window-stops/{stop['id']}/resolve",
+        data={"resolution": "Recovery verified"},
+    )
+
+    assert response.status_code == expected_status, response.text
+    lookup.assert_awaited_once()
+    assert bool(db.get_firmware_window_stop(failed_key)["resolved_at"]) == (expected_status == 200)
+    if expected_status == 409:
+        assert response.json()["detail"] == "This maintenance window is stopped and cannot be resumed"
+
+
+@pytest.mark.parametrize("zone", [None, "Invalid/Zone"])
+def test_firmware_stop_resolution_rejects_unavailable_zone(mock_db, monkeypatch, zone):
+    db.set_setting("timezone", "auto")
+    services = app_module.services
+    if zone is None:
+        monkeypatch.setattr(services, "get_timezone", AsyncMock(return_value=None))
+    else:
+        monkeypatch.setattr(services, "get_cached_timezone", lambda: None)
+        monkeypatch.setattr(services, "get_location_from_ip", AsyncMock(return_value={"timezone": zone}))
+    failed_key = ("firmware", "2026-10-26")
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+    with pytest.raises(app_module.HTTPException) as error:
+        asyncio.run(app_module.resolve_firmware_window_stop_api(
+            stop["id"], "Recovery verified", {"username": "admin"},
+        ))
+    assert error.value.status_code == 409
+    assert "timezone" in error.value.detail
+    assert db.get_firmware_window_stop(failed_key)["resolved_at"] is None
+
+
+@pytest.mark.parametrize("schedule", ["firmware", "manual"])
+def test_stop_resolution_rejects_empty_text(mock_db, schedule):
+    failed_key = (schedule, "2026-10-26")
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+    with pytest.raises(app_module.HTTPException) as error:
+        asyncio.run(app_module.resolve_firmware_window_stop_api(
+            stop["id"], "   ", {"username": "admin"},
+        ))
+    assert error.value.status_code == 400
+    assert db.get_firmware_window_stop(failed_key)["resolved_at"] is None
+
+
+@pytest.mark.parametrize("zone_setting", [None, "auto", "America/Chicago"])
+@pytest.mark.asyncio
+async def test_manual_stop_uses_chicago_day_until_local_midnight(
+    mock_db, monkeypatch, zone_setting,
+):
+    db.set_settings({"timezone": zone_setting or "", "schedule_days": ""})
+    services = app_module.services
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    lookup = AsyncMock(return_value={"timezone": "America/Chicago"})
+    monkeypatch.setattr(services, "get_location_from_ip", lookup)
+    instant = datetime.fromisoformat("2026-11-19T00:59:00+00:00")
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is not None
+            return instant.astimezone(tz)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    key = await app_module._manual_update_window_key()
+    assert key == ("manual", "2026-11-18")
+    stop = db.stop_firmware_window(key, "manual-job", "192.0.2.1", "flash", "Upload failed")
+    for timestamp in ("2026-11-19T00:59:00+00:00", "2026-11-19T05:59:59+00:00"):
+        instant = datetime.fromisoformat(timestamp)
+        with pytest.raises(app_module.HTTPException) as error:
+            await app_module.resolve_firmware_window_stop_api(
+                stop["id"], "Recovery verified", {"username": "operator"},
+            )
+        assert error.value.status_code == 409
+        assert db.get_firmware_window_stop(key)["resolved_at"] is None
+    instant = datetime.fromisoformat("2026-11-19T06:00:00+00:00")
+    await app_module.resolve_firmware_window_stop_api(
+        stop["id"], "Recovery verified", {"username": "operator"},
+    )
+    assert db.get_firmware_window_stop(key)["resolved_at"]
+    with pytest.raises(app_module.HTTPException):
+        app_module._check_firmware_window_admission(key)
+    if zone_setting == "America/Chicago":
+        lookup.assert_not_awaited()
+    else:
+        lookup.assert_awaited_once()
+
+
+@pytest.mark.parametrize("zone", [None, "Invalid/Zone"])
+@pytest.mark.asyncio
+async def test_manual_zone_unavailable_rejects_admission_and_resolution(mock_db, monkeypatch, zone):
+    db.set_settings({"timezone": "auto", "schedule_days": ""})
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: None)
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value=zone))
+    key = ("manual", "2026-11-18")
+    stop = db.stop_firmware_window(key, "manual-job", "192.0.2.1", "flash", "Upload failed")
+    for action in (
+        lambda: app_module._manual_update_window_key(),
+        lambda: app_module.resolve_firmware_window_stop_api(
+            stop["id"], "Recovery verified", {"username": "operator"},
+        ),
+    ):
+        with pytest.raises(app_module.HTTPException) as error:
+            await action()
+        assert error.value.status_code == 409
+        assert "timezone" in error.value.detail
+    with pytest.raises(app_module.HTTPException):
+        app_module._manual_firmware_window_key()
+    assert db.get_firmware_window_stop(key)["resolved_at"] is None
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({"timezone": "UTC"}, "2026-11-19"),
+    ({"timezone": "UTC", "schedule_timezone": "America/Chicago"}, "2026-11-18"),
+    ({"timezone": "auto"}, "2026-11-18"),
+])
+def test_manual_key_converts_aware_time_and_honors_explicit_zone(monkeypatch, settings, expected):
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    now = datetime.fromisoformat("2026-11-19T00:59:00+00:00")
+    assert app_module._manual_firmware_window_key(now, settings=settings) == ("manual", expected)

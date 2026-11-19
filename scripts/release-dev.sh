@@ -114,7 +114,7 @@ else
 fi
 
 if [[ "$yes" != true ]]; then
-  printf 'Only the owner may sign and push this release tag. Type yes to continue: '
+  printf 'Only the operator may sign and push this release tag. Type yes to continue: '
   IFS= read -r answer
   [[ "$answer" == yes ]] || fail "Release canceled."
 fi

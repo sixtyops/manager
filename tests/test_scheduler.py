@@ -503,7 +503,6 @@ class TestSchedulerCanaries:
 
     @pytest.mark.asyncio
     async def test_manual_canary_job_disables_window_cutoff(self, mock_db, tmp_path):
-        db.set_setting("scheduled_rollout_safety_ready", "true")
         firmware_dir = tmp_path / "firmware"
         firmware_dir.mkdir()
         fw_name = "tna-30x-1.2.3-r123.bin"
@@ -544,7 +543,6 @@ class TestSchedulerStartFailure:
         fw = "tna-30x-1.2.3-r123.bin"
         db.set_settings({
             "schedule_enabled": "true",
-            "scheduled_rollout_safety_ready": "true",
             "selected_firmware_30x": fw,
             "timezone": "America/Chicago",
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -596,7 +594,6 @@ class TestSchedulerStartFailure:
         fw = "tna-30x-1.2.3-r123.bin"
         db.set_settings({
             "schedule_enabled": "true",
-            "scheduled_rollout_safety_ready": "true",
             "selected_firmware_30x": fw,
             "timezone": "America/Chicago",
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -639,7 +636,6 @@ class TestSchedulerStartFailure:
         fw = "tna-30x-1.2.3-r123.bin"
         db.set_settings({
             "schedule_enabled": "true",
-            "scheduled_rollout_safety_ready": "true",
             "selected_firmware_30x": fw,
             "timezone": "America/Chicago",
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -691,7 +687,6 @@ class TestSchedulerStartFailure:
         fw = "tna-30x-1.2.3-r123.bin"
         db.set_settings({
             "schedule_enabled": "true",
-            "scheduled_rollout_safety_ready": "true",
             "selected_firmware_30x": fw,
             "timezone": "America/Chicago",
             "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -799,7 +794,6 @@ class TestSchedulerSettingsSafety:
         _seed_rollout_devices()
         db.set_settings({
             "schedule_enabled": "true",
-            "scheduled_rollout_safety_ready": "true",
             "timezone": "America/Chicago",
             "selected_firmware_30x": "firmware.bin",
             "weather_check_enabled": "false",
@@ -960,3 +954,74 @@ class TestExtractVersionFromFilename:
 
     def test_empty_returns_empty(self, extract):
         assert extract("") == ""
+
+
+@pytest.fixture
+def utc_host():
+    import os
+    import time
+
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+
+@pytest.mark.asyncio
+async def test_auto_scheduler_and_window_identity_share_chicago_clock(mock_db, monkeypatch, caplog, utc_host):
+    from zoneinfo import ZoneInfo
+    from updater import services, rollout_gate
+
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    monkeypatch.setattr(services, "get_location_from_ip", AsyncMock(
+        return_value={"timezone": "America/Chicago"}
+    ))
+    instant = datetime.fromisoformat("2026-11-18T22:30:00+00:00")
+    assert instant.astimezone().hour == 22
+
+    async def validated_time(zone):
+        assert zone == "America/Chicago"
+        return True, instant.astimezone(ZoneInfo(zone))
+
+    monkeypatch.setattr(services, "validate_time_sources", validated_time)
+    db.set_settings({"schedule_enabled": "true",
+                     "timezone": "auto", "schedule_days": "wed", "schedule_start_hour": "16",
+                     "schedule_end_hour": "17", "weather_check_enabled": "false",
+                     "selected_firmware_30x": "firmware.bin"})
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+    queue = AsyncMock()
+    monkeypatch.setattr(scheduler, "_run_derived_queue", queue)
+    with caplog.at_level("INFO"):
+        await scheduler._check_and_run()
+    queue.assert_awaited_once()
+    assert queue.await_args.args[1].hour == 16
+    assert "hour=16" in caplog.text
+    assert rollout_gate.firmware_window_key(db.get_all_settings(), instant) == (
+        "firmware", "2026-11-18"
+    )
+
+
+@pytest.mark.asyncio
+async def test_queue_rejects_unresolved_auto_identity(mock_db, monkeypatch):
+    """The scheduled queue rejects None; manual-day admission is outside this gate."""
+    from updater import services
+
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    start = AsyncMock()
+    scheduler = AutoUpdateScheduler(AsyncMock(), start)
+    await scheduler._run_derived_queue(
+        {}, datetime.fromisoformat("2026-11-18T22:30:00+00:00"), ["wed"], 16, 17,
+        "auto", "firmware.bin", "", "", False,
+    )
+    start.assert_not_awaited()
+    assert scheduler._state == "waiting"
+    assert scheduler._block_reason == "Maintenance window identity is invalid"

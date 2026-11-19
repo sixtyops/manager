@@ -65,6 +65,8 @@ class TachyonDriver(VendorDriver):
                 "macs": info.macs,
                 "management_interface": info.management_interface,
                 "management_vlan_id": info.management_vlan_id,
+                "management_ip_mode": getattr(info, "management_ip_mode", None),
+                "management_address": getattr(info, "management_address", None) or info.ip,
                 "management_mac": info.management_mac,
                 "firmware_sha256": info.firmware_sha256,
             },
@@ -140,9 +142,19 @@ class TachyonDriver(VendorDriver):
     async def get_connected_cpes(self) -> list:
         return await self._client.get_connected_cpes()
 
+    async def get_connected_aps(self) -> list:
+        return await self._client.get_connected_aps()
+
+    async def get_ap_radio_mac(self) -> Optional[str]:
+        return await self._client.get_ap_radio_mac()
+
     @property
     def last_connected_cpes_valid(self):
         return self._client.last_connected_cpes_valid
+
+    @property
+    def last_connected_aps_valid(self):
+        return self._client.last_connected_aps_valid
 
     async def get_ap_info(self) -> Dict[str, Any]:
         return await self._client.get_ap_info()

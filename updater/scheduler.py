@@ -467,6 +467,8 @@ class AutoUpdateScheduler:
             weather_ok, weather_data = await services.check_weather_ok(
                 zip_code if zip_code else None, min_temp_c
             )
+            if weather_data:
+                weather_data["fetched_at"] = datetime.now().isoformat()
             self._weather_info = weather_data
             self._weather_ok = weather_ok
             self._weather_checked_today = datetime.now().strftime("%Y-%m-%d")
@@ -613,6 +615,8 @@ class AutoUpdateScheduler:
                 weather_ok, weather_data = await services.check_weather_ok(
                     zip_code if zip_code else None, min_temp_c
                 )
+                if weather_data:
+                    weather_data["fetched_at"] = datetime.now().isoformat()
                 self._weather_info = weather_data
                 self._weather_ok = weather_ok
                 self._weather_checked_today = today_key
@@ -745,7 +749,7 @@ class AutoUpdateScheduler:
             return
 
         # Count a target window only after the update runner has accepted the
-        # queue. A readiness block or rejected job must leave its ordinal alone.
+        # queue. An admission block or rejected job must leave its ordinal alone.
         try:
             for family, target_sha256, cutoff, encoded_key, ordinal in timing_admissions:
                 timing = db.record_firmware_window_admission(
@@ -845,12 +849,12 @@ class AutoUpdateScheduler:
         return queue, None, None
 
     def _scheduled_admission_allowed(self) -> bool:
-        """Check current readiness without yielding before admission."""
+        """Check Auto-Update without yielding before admission."""
         admitted, reason = rollout_gate.current_scheduled_admission_decision()
         if not admitted:
-            if self._state != "blocked_safety":
-                db.log_schedule_event("blocked_safety", reason)
-            self._state = "blocked_safety"
+            if self._state != "disabled":
+                db.log_schedule_event("disabled", reason)
+            self._state = "disabled"
             self._block_reason = reason
         return admitted
 
@@ -1579,11 +1583,16 @@ class AutoUpdateScheduler:
         )
         next_window_iso = next_windows[0].isoformat() if next_windows else None
 
+        weather_status = None
+        if (settings.get("weather_check_enabled") == "true"
+                and (self._weather_info or {}).get("temperature_c") is None):
+            weather_status = "Weather or location data unavailable. Weather Guard did not run."
+
         return {
             "state": self._state,
-            "safety_block_reason": rollout_gate.scheduled_admission_decision(settings)[1],
             "block_reason": self._block_reason,
             "weather": self._weather_info,
+            "weather_status": weather_status,
             "last_run_result": self._last_run_result,
             "last_run_time": self._last_run_time,
             "current_job_id": self._current_job_id,

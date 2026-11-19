@@ -7,7 +7,7 @@ API Endpoints:
 - GET /cgi.lua/status?type=wireless,zones - Get connected peers (CPEs)
 - PUT /cgi.lua/update - Upload firmware (multipart: fw=binary, force=false)
 - POST /cgi.lua/update - Trigger firmware install (JSON: {reset:false, force:false})
-- POST /reboot - Reboot device
+- POST /cgi.lua/reboot - Reboot device (HTTP 200)
 
 Security Note:
     By default, SSL certificate verification is disabled (-k flag) because Tachyon
@@ -17,6 +17,7 @@ Security Note:
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import math
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # SSL verification for device connections (disabled by default for self-signed certs)
 VERIFY_SSL = os.environ.get("TACHYON_VERIFY_SSL", "").lower() in ("1", "true", "yes")
+HTTP_TIMEOUT_S = 30
 
 
 def _curl_config_value(value: str) -> str:
@@ -77,7 +79,16 @@ async def _run_curl(args: list[str]) -> tuple[int, bytes]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _stderr = await proc.communicate(config)
+    try:
+        stdout, _stderr = await proc.communicate(config)
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        await proc.communicate()
+        raise
     # Curl diagnostics can include request values. Expose only its exit code.
     return proc.returncode, stdout
 
@@ -203,6 +214,7 @@ class DeviceInfo:
     macs: Dict[str, str] = field(default_factory=dict)
     management_interface: Optional[str] = None
     management_vlan_id: Optional[int] = None
+    management_address: Optional[str] = None
     management_mac: Optional[str] = None
     current_version: Optional[str] = None
     bank1_version: Optional[str] = None
@@ -274,12 +286,14 @@ class TachyonClient:
         self.username = username
         self.password = password
         self.timeout = timeout
+        self.read_deadline: Optional[float] = None
         self._token: Optional[str] = None
         self._base_url = f"https://{ip}"
         # Set as a side-effect by get_connected_cpes() — channel/BW/freq/kit
         # for the AP's radio, used by the link-budget UI.
         self.last_radio_params: Optional[Dict[str, Any]] = None
         self.last_connected_cpes_valid = False
+        self.last_connected_aps_valid = False
         self.last_reboot_deadline: Optional[float] = None
 
     @staticmethod
@@ -391,18 +405,61 @@ class TachyonClient:
     @staticmethod
     def _parse_config_management_ip_mode(config: Any) -> tuple[bool, bool, Optional[str]]:
         """Return config validity, mode presence, and its normalized value."""
-        if config is None:
-            return False, False, None
         if not isinstance(config, dict):
             return False, False, None
-        value = config
-        for key in ("network", "zones", "wan", "management", "proto"):
-            if not isinstance(value, dict):
-                return False, False, None
-            if key not in value:
-                return True, False, None
-            value = value[key]
-        return True, True, TachyonClient._normalize_management_ip_mode(value)
+        if "network" not in config:
+            return True, False, None
+        network = config["network"]
+        if not isinstance(network, dict):
+            return False, False, None
+        if "zones" not in network:
+            return True, False, None
+        zones = network["zones"]
+        if not isinstance(zones, dict):
+            return False, False, None
+        if "wan" not in zones:
+            return True, False, None
+        wan = zones["wan"]
+        if not isinstance(wan, dict):
+            return False, False, None
+        if "management" not in wan:
+            return True, False, None
+        management = wan["management"]
+        if not isinstance(management, dict):
+            return False, False, None
+
+        # The management protocol is the VLAN tag protocol (for example,
+        # 802.1q). The IP mode comes from the selected address source.
+        if management.get("use_zone_ip") is True:
+            return True, True, TachyonClient._normalize_management_ip_mode(wan.get("mode"))
+        ip_config = management.get("ip")
+        if isinstance(ip_config, dict) and ip_config.get("enabled") is True:
+            return True, True, "static"
+        return True, True, None
+
+    @staticmethod
+    def _parse_config_management_address(config: Any) -> Optional[str]:
+        """Return the configured management address when the config has one."""
+        if not isinstance(config, dict):
+            return None
+        network = config.get("network")
+        zones = network.get("zones") if isinstance(network, dict) else None
+        wan = zones.get("wan") if isinstance(zones, dict) else None
+        management = wan.get("management") if isinstance(wan, dict) else None
+        ip_config = management.get("ip") if isinstance(management, dict) else None
+        if not isinstance(ip_config, dict) or ip_config.get("enabled") is not True:
+            return None
+        address = ip_config.get("ipaddr")
+        return address.strip() if isinstance(address, str) and address.strip() else None
+
+    def _request_timeout(self) -> float:
+        """Bound each recovery request by the remaining read deadline."""
+        if self.read_deadline is None:
+            return self.timeout
+        remaining = self.read_deadline - asyncio.get_running_loop().time()
+        if not math.isfinite(remaining) or remaining <= 0:
+            raise TimeoutError("Recovery read deadline expired")
+        return min(HTTP_TIMEOUT_S, remaining)
 
     async def _curl(
         self,
@@ -416,7 +473,7 @@ class TachyonClient:
         """Execute curl command and return (status_code, response_body)."""
         url = f"{self._base_url}{endpoint}"
 
-        cmd = ["-s", "-m", str(self.timeout)]
+        cmd = ["-s", "-m", str(self._request_timeout())]
         if not VERIFY_SSL:
             cmd.append("-k")  # Skip certificate verification for self-signed certs
 
@@ -447,7 +504,8 @@ class TachyonClient:
         cmd.extend(["-w", "\n%{http_code}"])
         cmd.append(url)
 
-        returncode, stdout = await _run_curl(cmd)
+        async with asyncio.timeout_at(self.read_deadline):
+            returncode, stdout = await _run_curl(cmd)
 
         if returncode != 0:
             detail = ": request timed out" if returncode == 28 else ""
@@ -482,7 +540,7 @@ class TachyonClient:
                 "password": self.password,
             })
 
-            cmd = ["-s", "-m", str(self.timeout)]
+            cmd = ["-s", "-m", str(self._request_timeout())]
             if not VERIFY_SSL:
                 cmd.append("-k")
             cmd.extend([
@@ -493,7 +551,8 @@ class TachyonClient:
                 url,
             ])
 
-            returncode, stdout = await _run_curl(cmd)
+            async with asyncio.timeout_at(self.read_deadline):
+                returncode, stdout = await _run_curl(cmd)
 
             if returncode != 0:
                 logger.error(f"Login curl failed for {self.ip} (exit code {returncode})")
@@ -627,9 +686,10 @@ class TachyonClient:
                 if config_status != "ok":
                     self._log_config_fetch_failure(config_status, config_err)
                 config_valid, config_present, config_mode = self._parse_config_management_ip_mode(config)
+                info.management_address = self._parse_config_management_address(config) or self.ip
                 if not status_valid or config_status != "ok" or not config_valid:
                     info.management_ip_mode = None
-                elif (status_present and status_mode is None) or (config_present and config_mode is None):
+                elif not config_present or (status_present and status_mode is None) or config_mode is None:
                     info.management_ip_mode = None
                 elif status_present and config_present and status_mode != config_mode:
                     info.management_ip_mode = None
@@ -845,135 +905,113 @@ class TachyonClient:
             logger.info(f"Update triggered on {self.ip} (connection closed)")
             return True
 
+    @staticmethod
+    def _parse_uptime(body: str) -> Optional[float]:
+        """Read finite, nonnegative system uptime in seconds."""
+        value = TachyonClient._parse_system_status(body).get("uptime")
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            return None
+        return float(value)
+
+    @staticmethod
+    def _reboot_api_ready(status: int, body: str) -> bool:
+        """Require authenticated system data before declaring API return."""
+        try:
+            data = json.loads(body)
+        except (ValueError, TypeError):
+            return False
+        return (status == 200 and isinstance(data, dict)
+                and isinstance(data.get("system"), dict) and bool(data["system"])
+                and data.get("statusCode") not in (401, 403)
+                and "Authorization Failed" not in str(data))
+
     async def wait_for_reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
-        """Wait for device to come back online after reboot.
-
-        Two-phase approach:
-        1. Wait for ping response
-        2. Wait for web server to be ready
-        """
-        logger.info(f"Waiting for {self.ip} to reboot...")
+        """Require reboot evidence and API return within one absolute deadline."""
         loop = asyncio.get_running_loop()
-        self.last_reboot_deadline = loop.time() + timeout
-        # The initial wait is inside A4's absolute reboot deadline.
-        await asyncio.sleep(min(10, max(0, self.last_reboot_deadline - loop.time())))
-        ping_responded = False
-
-        while loop.time() < self.last_reboot_deadline:
-            if recovery_callback:
-                remaining = self.last_reboot_deadline - loop.time()
+        started, deadline, baseline = getattr(
+            self, "_reboot_observation", (loop.time(), loop.time() + timeout, None)
+        )
+        self.last_reboot_deadline = deadline
+        previous_read_deadline = self.read_deadline
+        self.read_deadline = min(deadline, previous_read_deadline or deadline)
+        dropped = False
+        recovered = not recovery_callback
+        reboot_proven = False
+        try:
+            while loop.time() < self.read_deadline:
+                status, body = 0, ""
                 try:
-                    if await asyncio.wait_for(
-                        recovery_callback(
-                            self.last_reboot_deadline,
-                            self.last_reboot_deadline - timeout,
-                        ), timeout=remaining
+                    status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+                    if status in (302, 401, 403) or (
+                        status == 200 and not self._reboot_api_ready(status, body)
                     ):
-                        return True
-                except asyncio.TimeoutError:
-                    raise RuntimeError("Recovery callback timed out")
-                except Exception as exc:
-                    logger.debug("Recovery callback for %s failed: %s", self.ip, exc)
-                    raise
-            if not ping_responded:
-                # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
-                responded = False
-                proc = None
-                use_curl_fallback = False
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        "ping", "-c", "1", "-W", "2", self.ip,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _, stderr = await proc.communicate()
-                    if proc.returncode == 0:
-                        responded = True
-                    elif b"Operation not permitted" in stderr or b"not permitted" in stderr:
-                        # ping failed due to missing capabilities, use curl instead
-                        use_curl_fallback = True
-                except FileNotFoundError:
-                    # ping not available (e.g., minimal Docker image), use curl instead
-                    use_curl_fallback = True
-
-                if use_curl_fallback:
+                        if await self.login() is True:
+                            status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+                except (RuntimeError, OSError, TimeoutError):
+                    dropped = True
+                uptime = self._parse_uptime(body) if status == 200 else None
+                reboot_proven = reboot_proven or dropped or (
+                    baseline is not None and uptime is not None and uptime < baseline
+                )
+                if (recovered and reboot_proven and status == 200
+                        and self._reboot_api_ready(status, body) and loop.time() < self.read_deadline):
+                    logger.info("%s reboot confirmed and API ready", self.ip)
+                    return True
+                # A drop at the old address is proof even if only a new address returns.
+                # Let recovery find that address before requiring authenticated readiness.
+                if recovery_callback and not recovered and reboot_proven:
+                    remaining = self.read_deadline - loop.time()
+                    if remaining <= 0:
+                        break
                     try:
-                        check_cmd = ["curl", "-s", "-m", "3"]
-                        if not VERIFY_SSL:
-                            check_cmd.append("-k")
-                        check_cmd.extend([
-                            "-o", "/dev/null", "-w", "%{http_code}",
-                            f"https://{self.ip}/"
-                        ])
-                        proc = await asyncio.create_subprocess_exec(
-                            *check_cmd,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.DEVNULL,
-                        )
-                        stdout, _ = await proc.communicate()
-                        if proc.returncode == 0:
-                            status = stdout.decode().strip()
-                            responded = status and status.isdigit() and int(status) > 0
-                    except Exception:
-                        if proc and proc.returncode is None:
-                            try:
-                                proc.kill()
-                                await proc.wait()
-                            except ProcessLookupError:
-                                pass
-
-                if responded:
-                    logger.info(f"{self.ip} responding, waiting for web server...")
-                    ping_responded = True
-                    # Wait for web services to initialize
-                    await asyncio.sleep(10)
-                    continue
-            else:
-                # Phase 2: Check if web server is up
-                check_cmd = ["curl", "-s", "-m", "5"]
-                if not VERIFY_SSL:
-                    check_cmd.append("-k")
-                check_cmd.extend([
-                    "-o", "/dev/null", "-w", "%{http_code}",
-                    f"https://{self.ip}/"
-                ])
-                proc = None
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *check_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    stdout, _ = await proc.communicate()
-
-                    if proc.returncode == 0:
-                        status = stdout.decode().strip()
-                        if status and status.isdigit() and int(status) > 0:
-                            if not recovery_callback:
-                                logger.info(f"{self.ip} web server is up, device ready")
-                                return True
-                except Exception:
-                    if proc and proc.returncode is None:
-                        try:
-                            proc.kill()
-                            await proc.wait()
-                        except ProcessLookupError:
-                            pass
-
-            await asyncio.sleep(3)
-
-        logger.error(f"{self.ip} did not come back online before its reboot deadline")
+                        recovered = bool(await asyncio.wait_for(
+                            recovery_callback(deadline, started),
+                            timeout=remaining,
+                        ))
+                    except asyncio.TimeoutError:
+                        raise RuntimeError("Recovery callback timed out") from None
+                    # Recovery can retarget the client. Read that address before success.
+                    if recovered:
+                        continue
+                remaining = self.read_deadline - loop.time()
+                if remaining > 0:
+                    await asyncio.sleep(min(3, remaining))
+        finally:
+            self.read_deadline = previous_read_deadline
+        logger.error("%s reboot was not confirmed before its deadline", self.ip)
         return False
 
-    async def reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
-        """Reboot the device and wait for it to come back online."""
-        logger.info(f"Rebooting {self.ip}...")
+    async def _read_reboot_baseline(self) -> Optional[float]:
+        """Read system uptime before requesting a reboot."""
         try:
-            await self._curl("POST", "/reboot")
-        except Exception:
-            # Connection may drop immediately during reboot
-            logger.info(f"Reboot triggered on {self.ip} (connection closed)")
-        return await self.wait_for_reboot(timeout=timeout, recovery_callback=recovery_callback)
+            status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+        except (RuntimeError, OSError, TimeoutError):
+            return None
+        return self._parse_uptime(body) if status == 200 else None
+
+    async def reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
+        """Request the UI reboot endpoint and prove the device restarted."""
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = min(started + timeout, self.read_deadline or started + timeout)
+        self.last_reboot_deadline = deadline
+        previous_read_deadline = self.read_deadline
+        self.read_deadline = deadline
+        try:
+            baseline = await self._read_reboot_baseline()
+            try:
+                status, _ = await self._curl("POST", "/cgi.lua/reboot")
+            except (RuntimeError, OSError, TimeoutError):
+                logger.error("Reboot request failed for %s", self.ip)
+                return False
+            if status != 200:
+                logger.error("Reboot request rejected by %s (HTTP %s)", self.ip, status)
+                return False
+            self._reboot_observation = (started, deadline, baseline)
+            return await self.wait_for_reboot(timeout=timeout, recovery_callback=recovery_callback)
+        finally:
+            self.read_deadline = previous_read_deadline
+            self.__dict__.pop("_reboot_observation", None)
 
     async def restart_wireless_or_reboot(self, timeout: int = 300) -> bool:
         """Reboot the device because no supported wireless restart API is known."""
@@ -1110,14 +1148,33 @@ class TachyonClient:
                     return await reconcile_readback(reason)
             if serial_check and not await serial_check("install"):
                 return await reconcile_readback("Expected serial did not match before install")
-            if not await self.trigger_update():
-                return await reconcile_readback("Failed to trigger update", allow_target_success=True)
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            previous_read_deadline = self.read_deadline
+            deadline = min(started + reboot_timeout, previous_read_deadline or math.inf)
+            self.read_deadline = deadline
+            try:
+                baseline = await self._read_reboot_baseline()
+                admitted, reason = admission_check() if admission_check else (True, "")
+                install_expired = loop.time() >= deadline
+                triggered = admitted and not install_expired and await self.trigger_update()
+                if triggered:
+                    progress("Rebooting...")
+                    self._reboot_observation = (started, deadline, baseline)
+                    rebooted = await self.wait_for_reboot(
+                        timeout=reboot_timeout, recovery_callback=recovery_callback
+                    )
+            finally:
+                self.read_deadline = previous_read_deadline
+                self.__dict__.pop("_reboot_observation", None)
 
-            # Wait for reboot
-            progress("Rebooting...")
-            if not await self.wait_for_reboot(
-                timeout=reboot_timeout, recovery_callback=recovery_callback
-            ):
+            if not admitted:
+                return await reconcile_readback(reason)
+            if install_expired:
+                return await reconcile_readback("Install deadline expired")
+            if not triggered:
+                return await reconcile_readback("Failed to trigger update", allow_target_success=True)
+            if not rebooted:
                 readback = await reconcile_readback("Device did not come back online")
                 target_version = _extract_version_from_firmware(firmware_path)
                 if (
@@ -1127,10 +1184,7 @@ class TachyonClient:
                     return readback
                 if not recovery_callback:
                     return readback
-                loop = asyncio.get_running_loop()
-                deadline = self.last_reboot_deadline or loop.time()
-                reboot_started = deadline - reboot_timeout
-                if not await recovery_callback(deadline, reboot_started):
+                if not await recovery_callback(deadline, started):
                     return readback
 
             # Re-login and verify
@@ -1278,6 +1332,75 @@ class TachyonClient:
             logger.error(f"Failed to parse wireless status from {self.ip}: {e}")
 
         return cpes
+
+    async def get_connected_aps(self) -> List[Dict[str, Any]]:
+        """Read AP peer locators from a CPE wireless status response."""
+        self.last_connected_aps_valid = False
+        status, body = await self._curl("GET", "/cgi.lua/status?type=wireless,zones")
+        if status != 200:
+            logger.warning("Failed to get wireless status from %s: HTTP %s", self.ip, status)
+            return []
+
+        try:
+            data = json.loads(body)
+            wireless = data.get("wireless") if isinstance(data, dict) else None
+            peers = wireless.get("peers") if isinstance(wireless, dict) else None
+            if not isinstance(peers, list):
+                logger.error("Wireless peer data is unavailable from %s", self.ip)
+                return []
+            self.last_connected_aps_valid = True
+            aps = []
+            for peer in peers:
+                if not isinstance(peer, dict):
+                    continue
+                ip = peer.get("ipv4")
+                model = peer.get("model")
+                system_name = peer.get("system_name")
+                raw_mac = peer.get("mac")
+                mac = self._normalize_mac(raw_mac)
+                if not isinstance(ip, str) or not ip.strip():
+                    continue
+                try:
+                    ipaddress.IPv4Address(ip)
+                except (ipaddress.AddressValueError, TypeError):
+                    continue
+                if (mac is None or not isinstance(model, str) or not model.strip()
+                        or not isinstance(system_name, str) or not system_name.strip()):
+                    continue
+                aps.append({
+                    "ip": ip,
+                    "mac": mac,
+                    "system_name": system_name,
+                    "model": model,
+                })
+            return aps
+        except (json.JSONDecodeError, TypeError, AttributeError) as e:
+            logger.error("Failed to parse wireless status from %s: %s", self.ip, e)
+            return []
+
+    async def get_ap_radio_mac(self) -> Optional[str]:
+        """Read the AP radio MAC from its wireless status response."""
+        status, body = await self._curl("GET", "/cgi.lua/status?type=wireless,zones")
+        if status != 200:
+            return None
+        try:
+            data = json.loads(body)
+            wireless = data.get("wireless") if isinstance(data, dict) else None
+            radios = wireless.get("radios") if isinstance(wireless, dict) else None
+            if isinstance(radios, dict):
+                radio_rows = radios.values()
+            elif isinstance(radios, list):
+                radio_rows = radios
+            else:
+                return None
+            for radio in radio_rows:
+                if isinstance(radio, dict):
+                    mac = self._normalize_mac(radio.get("mac"))
+                    if mac is not None:
+                        return mac
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return None
+        return None
 
     @staticmethod
     def _counter(value: Any) -> Optional[int]:

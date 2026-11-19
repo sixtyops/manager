@@ -1,7 +1,7 @@
 # One right way to keep a Tachyon fleet current
 
 **Key points:** Manager owns update safety. The operator chooses when and how
-fast. "Keep my fleet current" is the primary action. The queue behavior shipped in [PR #715](https://github.com/sixtyops/manager/pull/715) and follow-up PRs. The owner set this direction on 2026-09-30.
+fast. "Keep my fleet current" is the primary action. The queue behavior shipped in [PR #715](https://github.com/sixtyops/manager/pull/715) and follow-up PRs. The operator set this direction on 2026-09-30.
 
 **Detail:** Manager is a standalone product for Tachyon networks. Use Manager's
 data and the device APIs it calls for every design and safety check. Do not
@@ -59,15 +59,15 @@ does not interrupt. Save the risk statement, gate inputs and results, device
 results, notifications, and operator actions. Failure delivery must survive restart.
 
 Every engine or driver change needs real Tachyon bench proof on the exact PR
-head before merge. Unit tests do not prove device behavior. Only the owner names
-bench devices. The repository lead agent may merge under the owner's 2026-10-02
+head before merge. Unit tests do not prove device behavior. Only the operator names
+bench devices. The epic owner agent may merge under the operator's 2026-10-02
 delegation after independent review, current-head CI and sign-off, and any
 required exact-head bench proof pass. Worker agents do not merge. This
 delegation does not grant authority to write production devices or publish
 stable releases. This work never touches the Treehouse production fleet.
-The lead assigns bounded implementation, investigation, testing, and detailed
+The owner assigns bounded implementation, investigation, testing, and detailed
 review work to subagents under the
-[repository delegation rules](lead-operations-sop.md#priority-and-delegation).
+[repository delegation rules](owner-operations-sop.md#priority-and-delegation).
 Delegation does not grant workers merge or release authority.
 
 ## Gaps, in priority order
