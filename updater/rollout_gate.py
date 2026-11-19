@@ -1,31 +1,30 @@
-"""Shared firmware maintenance-window identity and readiness gates."""
+"""Shared firmware maintenance-window identity and admission gates."""
 
 from datetime import datetime
 from typing import Optional
 
 
-SCHEDULED_ROLLOUT_SAFETY_REASON = (
-    "Scheduled firmware updates are paused for safety qualification. "
-    "Complete the rollout safety fixes and bench tests, then have the operator record readiness."
-)
+SCHEDULE_DISABLED_REASON = "Deferred: Auto-Update is off or unavailable"
 
 
 def scheduled_admission_decision(settings: dict) -> tuple[bool, Optional[str]]:
-    """Admit scheduled work after the operator records safety readiness."""
-    if settings.get("scheduled_rollout_safety_ready") != "true":
-        return False, SCHEDULED_ROLLOUT_SAFETY_REASON
+    """Admit scheduled work only while Auto-Update is on."""
+    if settings.get("schedule_enabled") != "true":
+        return False, SCHEDULE_DISABLED_REASON
     return True, None
 
 
 def current_scheduled_admission_decision() -> tuple[bool, Optional[str]]:
-    """Read current readiness at each scheduled admission boundary."""
+    """Read Auto-Update at each scheduled admission boundary."""
     from . import database as db
 
     try:
-        readiness = db.get_setting("scheduled_rollout_safety_ready")
+        enabled = db.get_setting("schedule_enabled")
     except Exception:
-        return False, SCHEDULED_ROLLOUT_SAFETY_REASON
-    return scheduled_admission_decision({"scheduled_rollout_safety_ready": readiness})
+        return False, SCHEDULE_DISABLED_REASON
+    return scheduled_admission_decision({"schedule_enabled": enabled})
+
+
 from zoneinfo import ZoneInfo
 
 from .core.gates import MaintenanceSchedule, window_instance_key

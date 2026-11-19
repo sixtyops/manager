@@ -243,7 +243,7 @@ def _queue_status_payload(status: dict) -> dict:
         "status": rollout.get("status"),
         "remaining_devices": rollout.get("remaining_devices"),
         "current_device": _current_queue_device(status.get("current_job_id")),
-        "pause_reason": rollout.get("pause_reason") or status.get("block_reason") or status.get("safety_block_reason"),
+        "pause_reason": rollout.get("pause_reason") or status.get("block_reason"),
         "cutoff_utc": rollout.get("cutoff_utc"),
         "ramp_ordinal": rollout.get("ramp_ordinal"),
         "next_window": status.get("next_window_iso") or status.get("next_window"),
@@ -2370,7 +2370,6 @@ async def get_settings(session: dict = Depends(require_auth)):
 
 
 _SETTINGS_WRITABLE = {
-    "scheduled_rollout_safety_ready",
     "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
     "parallel_updates", "bandwidth_limit_kbps",
     "bank_mode", "allow_downgrade", "timezone", "zip_code",
@@ -2453,7 +2452,6 @@ def _validate_settings(filtered: dict):
         raise HTTPException(400, "temperature_unit must be 'auto', 'c', or 'f'")
 
     bool_like = {
-        "scheduled_rollout_safety_ready",
         "schedule_enabled", "allow_downgrade", "weather_check_enabled",
         "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
         "snmp_traps_enabled",
@@ -6295,7 +6293,7 @@ def _minutes_until_window_end(now: datetime, start_hour: int, end_hour: int) -> 
 
 
 def _scheduled_action_decision(job: "UpdateJob") -> tuple[bool, str]:
-    """Admit a scheduled action using current readiness; keep recovery running."""
+    """Admit a scheduled action using Auto-Update; keep recovery running."""
     if not job.is_scheduled:
         return True, ""
     if job.cancelled:
@@ -6316,7 +6314,7 @@ def _hold_scheduled_device(job: "UpdateJob", device_status: "DeviceStatus") -> b
 
 
 def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
-    """Recheck the stop, current readiness, and window before a device write."""
+    """Recheck the stop, Auto-Update, and window before a device write."""
     stop = db.get_firmware_window_stop(job.window_key) if job.window_key else None
     if stop:
         reason = _firmware_stop_message(stop)
@@ -7153,7 +7151,6 @@ async def _update_single_device(job: "UpdateJob", ip: str, pass_number: int = 1)
             return
         is_admission_deferred = (
             admission_denial["reason"].startswith("Deferred:")
-            or admission_denial["reason"] == rollout_gate.SCHEDULED_ROLLOUT_SAFETY_REASON
         )
         if is_admission_deferred and not getattr(device_status, "_firmware_upload_started", False):
             # A gate hold during driver login is deferred because no firmware write began.
