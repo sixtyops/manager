@@ -570,6 +570,7 @@ def test_restart_routes_keep_failed_window_closed_and_record_resolution(tmp_path
         ))
 
     stop_id = db.get_firmware_window_stop(failed_key)["id"]
+    db.set_setting("timezone", "UTC")
     monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda settings, now=None: next_key)
     resolved = client.post(f"/api/firmware-window-stops/{stop_id}/resolve", data={
         "resolution": "Bench recovery verified",
@@ -602,8 +603,8 @@ def test_configured_stop_resolution_requires_a_later_parsed_window(
     stop_id = 12
     resolved = {"id": stop_id, "resolved_at": "now"}
     monkeypatch.setattr(db, "get_unresolved_firmware_window_stops", lambda: [{"id": stop_id, "window_key": stored_key}])
-    monkeypatch.setattr(db, "get_all_settings", lambda: {})
-    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda _settings: current_key)
+    monkeypatch.setattr(db, "get_all_settings", lambda: {"timezone": "UTC"})
+    monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda _settings, now=None: current_key)
     monkeypatch.setattr(db, "resolve_firmware_window_stop", lambda *args: resolved)
     monkeypatch.setattr(db, "log_audit", lambda *args: None)
 
@@ -1302,3 +1303,88 @@ def test_window_current_clock_uses_resolved_zone(monkeypatch, zone):
     settings = {"schedule_days": "wed", "schedule_start_hour": 16,
                 "schedule_end_hour": 17, "timezone": zone}
     assert rollout_gate.firmware_window_key(settings) == ("firmware", "2026-11-18")
+
+
+@pytest.mark.parametrize(
+    "instant,start,end,expected_status",
+    [
+        ("2026-10-27T18:00:00+00:00", 3, 4, 200),  # Later day, outside hours.
+        ("2026-10-26T08:30:00+00:00", 3, 4, 409),  # Same window in Chicago.
+        ("2026-10-26T18:00:00+00:00", 3, 4, 409),  # Same local day after hours.
+        ("2026-10-27T01:00:00+00:00", 3, 4, 409),  # UTC tomorrow, Chicago today.
+        ("2026-10-27T06:30:00+00:00", 23, 2, 409),  # Overnight tail.
+        ("2026-10-27T07:00:00+00:00", 23, 2, 200),  # Overnight window ended.
+        ("2026-10-28T04:30:00+00:00", 23, 2, 200),  # Later window start.
+    ],
+)
+@pytest.mark.parametrize("zone_setting", ["auto", "America/Chicago"])
+def test_firmware_stop_resolution_uses_local_day_and_preserves_stopped_window(
+    mock_db, monkeypatch, instant, start, end, expected_status, zone_setting,
+):
+    db.set_settings({
+        "timezone": zone_setting,
+        "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+        "schedule_start_hour": str(start),
+        "schedule_end_hour": str(end),
+    })
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    captured = datetime.fromisoformat(instant)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return captured.astimezone(tz)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    failed_key = ("firmware", "2026-10-26")
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+    if expected_status == 409:
+        with pytest.raises(app_module.HTTPException) as error:
+            asyncio.run(app_module.resolve_firmware_window_stop_api(
+                stop["id"], "Recovery verified", {"username": "operator"},
+            ))
+        assert error.value.status_code == 409
+        assert db.get_firmware_window_stop(failed_key)["resolved_at"] is None
+    else:
+        asyncio.run(app_module.resolve_firmware_window_stop_api(
+            stop["id"], "  Recovery verified  ", {"username": "operator"},
+        ))
+        record = db.get_firmware_window_stop(failed_key)
+        assert record["resolved_at"]
+        assert record["resolved_by"] == "operator"
+        assert record["resolution"] == "Recovery verified"
+        with pytest.raises(app_module.HTTPException):
+            app_module._check_firmware_window_admission(failed_key)
+
+    with db.get_db() as conn:
+        audits = conn.execute(
+            "SELECT * FROM audit_log WHERE action = 'firmware.window_stop.resolve'",
+        ).fetchall()
+    assert len(audits) == (1 if expected_status == 200 else 0)
+
+
+@pytest.mark.parametrize("zone", [None, "Invalid/Zone"])
+def test_firmware_stop_resolution_rejects_unavailable_zone(mock_db, monkeypatch, zone):
+    db.set_setting("timezone", "auto")
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: zone)
+    failed_key = ("firmware", "2026-10-26")
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+    with pytest.raises(app_module.HTTPException) as error:
+        asyncio.run(app_module.resolve_firmware_window_stop_api(
+            stop["id"], "Recovery verified", {"username": "admin"},
+        ))
+    assert error.value.status_code == 409
+    assert "timezone" in error.value.detail
+    assert db.get_firmware_window_stop(failed_key)["resolved_at"] is None
+
+
+@pytest.mark.parametrize("schedule", ["firmware", "manual"])
+def test_stop_resolution_rejects_empty_text(mock_db, schedule):
+    failed_key = (schedule, "2026-10-26")
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+    with pytest.raises(app_module.HTTPException) as error:
+        asyncio.run(app_module.resolve_firmware_window_stop_api(
+            stop["id"], "   ", {"username": "admin"},
+        ))
+    assert error.value.status_code == 400
+    assert db.get_firmware_window_stop(failed_key)["resolved_at"] is None
