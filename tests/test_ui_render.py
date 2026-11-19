@@ -85,3 +85,19 @@ def test_login_page_renders(client):
 def test_unauthenticated_monitor_page_does_not_render(client):
     response = client.get("/", follow_redirects=False)
     assert response.status_code in (302, 303, 307, 401)
+
+
+def test_updates_bar_has_one_save_cluster_and_full_notice(authed_client):
+    html = authed_client.get('/').text
+    assert html.count('id="drawerSaveBtn"') == 1
+    assert 'class="bar-save-cluster hidden"' in html
+    assert 'aria-describedby="barNotice"' in html
+    assert 'id="barNotice" role="status"' in html
+    for removed in ('drawerSaveRow', 'drawerUnsavedDot', 'barBlockReason', 'barDeviceCountSection', 'barBehindCount'):
+        assert f'id="{removed}"' not in html
+    for element in ('barQueueRemaining', 'barQueueNextWindow'):
+        assert html.count(f'id="{element}"') == 1
+    css = re.search(r'\.status-bar-notice \{(.*?)\}', html, re.S)[1]
+    assert 'white-space: normal' in css
+    assert 'text-overflow' not in css
+    assert 'max-width' not in css

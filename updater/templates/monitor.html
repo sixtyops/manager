@@ -2053,37 +2053,40 @@
             color: var(--text-muted);
         }
 
-        .drawer-save-row {
+        .bar-save-cluster {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px 0 0;
-            border-top: 1px solid var(--border);
-            margin-top: 12px;
+            gap: var(--space-4);
+            margin-left: auto;
+            flex-shrink: 0;
         }
-        .drawer-save-btn {
-            padding: 6px 20px;
-            background: var(--primary);
-            color: white;
-            border: none;
+        #drawerHandleLeft { flex-wrap: wrap; }
+        #drawerHandleLeft #barRolloutSection { order: 0; }
+        #drawerSavedIndicator { margin-left: auto; }
+        .status-bar-notice {
+            flex-basis: 100%;
+            order: 1;
+            padding: var(--space-4) var(--space-5);
+            margin-top: var(--space-3);
             border-radius: var(--radius-md);
             font-size: var(--text-base);
-            font-family: inherit;
-            cursor: pointer;
-            transition: background var(--tr-base), opacity var(--tr-base);
+            line-height: 1.45;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            background: var(--warning-bg);
+            color: var(--text);
+            border-left: 4px solid var(--warning-text);
         }
-        .drawer-save-btn:hover { background: var(--primary-hover); }
-        .drawer-save-btn:disabled { background: var(--toggle-off); cursor: not-allowed; opacity: 0.7; }
-        .drawer-save-btn.saving { opacity: 0.7; cursor: wait; }
-        .drawer-unsaved-dot {
-            width: 6px; height: 6px; border-radius: 50%;
-            background: #f59e0b; display: none; flex-shrink: 0;
+        .status-bar-notice.info {
+            background: var(--info-bg-subtle);
+            border-left-color: var(--info-strong);
         }
-        .drawer-unsaved-dot.visible { display: inline-block; }
-        .drawer-save-status {
-            font-size: var(--text-sm);
-            color: var(--text-dim, #6b7280);
-            transition: opacity var(--tr-slow);
+        @media (max-width: 768px) {
+            .bar-save-cluster { flex-basis: 100%; flex-wrap: wrap; order: 2; }
+            .bar-save-cluster .btn { min-height: 44px; }
+            #drawerSaveStatus { margin-right: auto; }
+            #drawerHandleLeft > .status-bar-section { flex-wrap: wrap; min-width: 0; }
+            #barQueueStatus { flex-wrap: wrap; }
         }
 
         /* Status bar sections (inside drawer handle) */
@@ -2180,8 +2183,8 @@
 
         .status-bar-count {
             font-variant-numeric: tabular-nums;
-            color: var(--warning-light);
-            font-weight: 500;
+            color: var(--text);
+            font-weight: 600;
             white-space: nowrap;
         }
 
@@ -2942,17 +2945,13 @@
             <button class="mode-tab-btn active" id="modeTabFw" onclick="handleTabClick('firmware')">Updates<span class="mode-tab-badge" id="modeTabFwBadge"></span></button>
             <button class="mode-tab-btn" id="modeTabCfg" onclick="handleTabClick('config')">Config<span class="mode-tab-badge" id="modeTabCfgBadge"></span></button>
         </div>
-        <div class="drawer-handle" id="drawerHandle" onclick="toggleDrawer(event)">
+        <div class="drawer-handle" id="drawerHandle" tabindex="0" onclick="toggleDrawer(event)">
             <!-- Firmware/Updates bar (shown when firmware mode active) -->
             <div class="drawer-handle-half active" id="drawerHandleLeft">
                 <div class="status-bar-section">
-                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-describedby="barBlockReason" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
+                    <button class="toggle" id="barAutoToggle" type="button" aria-label="Toggle auto-update" aria-describedby="barNotice" aria-pressed="false" onclick="toggleAutoSchedule(event)" data-min-role-disable="operator"></button>
                     <span class="status-bar-label">Auto-Update</span>
                     <span class="status-badge status-bar-badge" id="barStateBadge">Off</span>
-                    <span class="status-bar-reason" id="barBlockReason" role="status"></span>
-                </div>
-                <div class="status-bar-section hidden" id="barDeviceCountSection">
-                    <span class="status-bar-count" id="barBehindCount"></span>
                 </div>
                 <div class="status-bar-section status-bar-rollout u-ml-auto" id="barRolloutSection">
                     <div class="status-bar-queue" id="barQueueStatus" role="status" aria-live="polite">
@@ -2963,8 +2962,13 @@
                         <span class="status-bar-reason" id="barQueueReason"></span>
                     </div>
                 </div>
-                <span class="drawer-unsaved-dot" id="drawerUnsavedDot" title="Unsaved changes"></span>
-                <span id="drawerSavedIndicator" class="u-saved-indicator u-transition-opacity">Saved</span>
+                <div class="bar-save-cluster hidden" id="barSaveCluster" data-min-role="operator">
+                    <span class="status-bar-badge waiting" id="drawerSaveStatus" role="status">✎ Unsaved changes</span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="drawerDiscardBtn" onclick="discardDrawerSettings()">Discard</button>
+                    <button type="button" class="btn btn-primary btn-sm" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save changes</button>
+                </div>
+                <span id="drawerSavedIndicator" class="hidden u-saved-indicator u-transition-opacity" role="status">✓ Saved</span>
+                <div class="status-bar-notice hidden" id="barNotice" role="status"></div>
             </div>
             <!-- Config bar (shown when config mode active) -->
             <div class="drawer-handle-half" id="drawerHandleRight">
@@ -3094,11 +3098,6 @@
                             <span class="drawer-upload-status" id="drawerUploadStatus"></span>
                         </div>
                     </div>
-                </div>
-
-                <div class="drawer-save-row" id="drawerSaveRow" data-min-role="operator">
-                    <button class="drawer-save-btn" id="drawerSaveBtn" onclick="saveDrawerSettings()" disabled>Save</button>
-                    <span class="drawer-save-status" id="drawerSaveStatus"></span>
                 </div>
             </div>
             </div><!-- /drawerContent-updates -->
@@ -8899,8 +8898,7 @@
             autoUpdateEnabled = state !== 'disabled';
             const barToggle = document.getElementById('barAutoToggle');
             const badge = document.getElementById('barStateBadge');
-            const reason = document.getElementById('barBlockReason');
-            const countSection = document.getElementById('barDeviceCountSection');
+            const reason = document.getElementById('barNotice');
             if (!badge) return;
 
             // Re-render table if auto-update state changed (affects status/actions columns)
@@ -8909,8 +8907,8 @@
             if (barToggle) setToggleActive(barToggle, autoUpdateEnabled);
             badge.className = 'status-badge status-bar-badge';
             const weatherNotice = status.weather_status || '';
-            reason.textContent = weatherNotice;
-            reason.title = weatherNotice;
+            reason.textContent = '';
+            setHidden(reason, true);
 
             // Show weather only while the guard is enabled and data is available.
             const weatherEnabled = document.getElementById('drawerWeatherToggle')?.classList.contains('active');
@@ -8940,10 +8938,10 @@
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
-                setHidden(countSection, true);
                 const rolloutSection = document.getElementById('barRolloutSection');
                 setHidden(rolloutSection, true);
                 lastAutoState = 'disabled';
+                syncDrawerPadding();
                 return;
             }
 
@@ -8991,32 +8989,28 @@
             badge.innerHTML = view.icon + view.label;
             badge.classList.add(view.cls);
 
-            // Subtitle: friendly "Next: today at 3:00 AM" for scheduled states;
-            // raw block_reason for paused/holding states.
+            const paused = view.label === 'Paused' || view.label === 'Firmware hold';
+            const rawReason = status.safety_block_reason || status.block_reason || status.rollout?.pause_reason || '';
             let subtitle = '';
-            if (effectiveAllCurrent) {
-                subtitle = 'Nothing to do';
-                if (status.next_window_iso) {
-                    subtitle += ' · next check ' + formatWhen(status.next_window_iso);
-                }
-            } else if (view.label === 'Scheduled') {
-                if (status.next_window_iso) {
-                    subtitle = 'Next: ' + formatWhen(status.next_window_iso);
-                } else if (status.block_reason) {
-                    subtitle = status.block_reason;
-                }
-            } else if ((view.label === 'Paused' || view.label === 'Running'
-                        || view.label === 'Firmware hold')
-                       && status.block_reason) {
-                subtitle = status.block_reason;
+            if (paused) {
+                const states = {
+                    blocked_safety: 'Scheduled updates are paused.',
+                    blocked_weather: 'Scheduled updates are paused for weather.',
+                    blocked_time: 'Scheduled updates are paused outside the maintenance window.',
+                    blocked_firmware_hold: 'Firmware Hold delays scheduled updates.',
+                    frozen: 'Scheduled updates are paused during a freeze.',
+                    blocked_no_firmware: 'No firmware is selected for scheduled updates.',
+                };
+                subtitle = [states[state] || 'Scheduled updates are paused.', rawReason,
+                    weatherNotice && weatherNotice !== rawReason ? weatherNotice : '',
+                    'Manual updates still work.',
+                    state === 'blocked_no_firmware' ? 'Select firmware in the Updates drawer.' : '',
+                ].filter(Boolean).join(' ');
             }
-            // A Firmware Hold cleared early by a confirmed-working device is shown
-            // honestly here rather than silently skipped.
-            if (status.hold_clear_reason) {
-                subtitle = status.hold_clear_reason;
-            }
-            reason.textContent = [subtitle, weatherNotice].filter(Boolean).join(' · ');
-            reason.title = reason.textContent;
+            if (status.hold_clear_reason) subtitle = [subtitle, status.hold_clear_reason].filter(Boolean).join(' ');
+            reason.textContent = subtitle ? (state === 'blocked_firmware_hold' || status.hold_clear_reason ? '◷ ' : 'Ⅱ ') + subtitle : '';
+            reason.classList.toggle('info', state === 'blocked_firmware_hold' || Boolean(status.hold_clear_reason));
+            setHidden(reason, !subtitle);
 
             // Track state changes for UI updates
             const prevState = lastAutoState;
@@ -9025,10 +9019,6 @@
             // Store next window for use in device count text
             lastNextWindow = status.next_window || '';
             lastNextWindowIso = status.next_window_iso || null;
-            updateBarDeviceCount();
-
-            // Hide device count section when all current - badge already conveys this
-            setHidden(countSection, state === 'blocked_all_current' || effectiveAllCurrent);
 
             // Show queue state while work remains or is blocked.
             const rolloutSection = document.getElementById('barRolloutSection');
@@ -9037,15 +9027,16 @@
                 renderQueueStatus(null);
             } else if (status.rollout) {
                 setHidden(rolloutSection, false);
-                renderQueueStatus(status.rollout, subtitle);
+                renderQueueStatus({...status.rollout, next_window: status.rollout.next_window || status.next_window_iso || status.next_window}, reason.textContent);
             } else {
                 setHidden(rolloutSection, false);
                 renderQueueStatus({
                     remaining_devices: lastBehindCount,
                     next_window: status.next_window_iso || status.next_window,
                     pause_reason: status.block_reason,
-                }, subtitle);
+                }, reason.textContent);
             }
+            syncDrawerPadding();
         }
 
         function renderQueueStatus(queue, barReason = '') {
@@ -9060,7 +9051,7 @@
             const remaining = Number.isFinite(queue.remaining_devices) ? queue.remaining_devices : null;
             remainingEl.textContent = remaining === null
                 ? ''
-                : `${remaining} ${remaining === 1 ? 'device' : 'devices'} remaining`;
+                : `${remaining} ${remaining === 1 ? 'device' : 'devices'} to update`;
             const current = queue.current_device;
             const role = { ap: 'AP', cpe: 'CPE', switch: 'Switch' }[current && current.role] || 'Device';
             const stage = current && (STAGE_LABELS[current.status] || current.status) || 'updating';
@@ -9071,7 +9062,7 @@
             cutoffEl.textContent = [cutoff, ramp].filter(Boolean).join(' · ');
             nextEl.textContent = queue.next_window ? `Next window: ${when(queue.next_window)}` : '';
             // Skip the reason when the Auto-Update section already shows it.
-            reasonEl.textContent = queue.pause_reason && queue.pause_reason !== barReason ? queue.pause_reason : '';
+            reasonEl.textContent = queue.pause_reason && !barReason.includes(queue.pause_reason) ? queue.pause_reason : '';
         }
 
         async function toggleAutoSchedule(event) {
@@ -9243,7 +9234,7 @@
             // threshold — sub-threshold presses stay plain clicks (toggleDrawer).
             bar.addEventListener('pointerdown', (e) => {
                 if (e.button !== undefined && e.button !== 0) return;
-                if (e.target.closest('.toggle, .btn, .status-bar-actions, input, select, a, label')) return;
+                if (e.target.closest('.toggle, .btn, .status-bar-actions, .bar-save-cluster, input, select, a, label')) return;
                 const startX = e.clientX, startY = e.clientY, pid = e.pointerId;
                 const startHeight = drawer.classList.contains('open') ? panel.offsetHeight : 0;
                 const disarm = () => {
@@ -9609,7 +9600,7 @@
         function toggleDrawer(event) {
             if (drawerDragJustEnded) { drawerDragJustEnded = false; return; }
             // Don't toggle if clicking interactive controls
-            if (event.target.closest('.toggle, .btn, .status-bar-actions, input')) return;
+            if (event.target.closest('.toggle, .btn, .status-bar-actions, .bar-save-cluster, input')) return;
             const drawer = document.getElementById('bottomDrawer');
             const opening = !drawer.classList.contains('open');
             drawer.classList.toggle('open');
@@ -9625,13 +9616,22 @@
         document.addEventListener('click', function(e) {
             const drawer = document.getElementById('bottomDrawer');
             if (!drawer || !drawer.classList.contains('open')) return;
-            if (e.target.closest('.bottom-drawer')) return;
+            if (e.composedPath().includes(drawer) || drawerDirty) return;
             drawer.classList.remove('open');
             requestAnimationFrame(() => {
                 setTimeout(() => {
                     document.body.style.paddingBottom = drawer.offsetHeight + 16 + 'px';
                 }, 320);
             });
+        });
+
+        document.addEventListener('keydown', function(e) {
+            const drawer = document.getElementById('bottomDrawer');
+            if (e.key !== 'Escape' || drawerDirty || !drawer.classList.contains('open')) return;
+            if (!e.composedPath().includes(drawer)) return;
+            drawer.classList.remove('open');
+            document.getElementById('drawerHandle').focus();
+            setTimeout(syncDrawerPadding, 320);
         });
 
         let drawerSettingsLoaded = false;
@@ -9707,31 +9707,40 @@
 
         function markDrawerDirty() {
             drawerDirty = true;
-            const btn = document.getElementById('drawerSaveBtn');
-            if (btn) btn.disabled = false;
-            const dot = document.getElementById('drawerUnsavedDot');
-            if (dot) dot.classList.add('visible');
+            document.getElementById('drawerSaveBtn').disabled = false;
+            setHidden(document.getElementById('barSaveCluster'), false);
+            setHidden(document.getElementById('drawerSavedIndicator'), true);
             const status = document.getElementById('drawerSaveStatus');
-            if (status) { status.textContent = 'Unsaved changes'; status.style.color = '#f59e0b'; }
+            status.textContent = '✎ Unsaved changes';
+            status.className = 'status-bar-badge waiting';
+            syncDrawerPadding();
         }
 
         function clearDrawerDirty() {
             drawerDirty = false;
-            const btn = document.getElementById('drawerSaveBtn');
-            if (btn) btn.disabled = true;
-            const dot = document.getElementById('drawerUnsavedDot');
-            if (dot) dot.classList.remove('visible');
-            const status = document.getElementById('drawerSaveStatus');
-            if (status) { status.textContent = ''; }
+            document.getElementById('drawerSaveBtn').disabled = true;
+            setHidden(document.getElementById('barSaveCluster'), true);
+            syncDrawerPadding();
+        }
+
+        async function discardDrawerSettings() {
+            drawerSettingsLoaded = false;
+            await loadDrawerSettings();
+            if (drawerSettingsLoaded) clearDrawerDirty();
         }
 
         let savedIndicatorTimeout = null;
         function showSavedIndicator() {
             const el = document.getElementById('drawerSavedIndicator');
-            if (!el) return;
+            if (!el || drawerDirty) return;
             if (savedIndicatorTimeout) clearTimeout(savedIndicatorTimeout);
+            setHidden(el, false);
             el.style.opacity = '1';
-            savedIndicatorTimeout = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+            savedIndicatorTimeout = setTimeout(() => {
+                setHidden(el, true);
+                syncDrawerPadding();
+            }, 3000);
+            syncDrawerPadding();
         }
 
         function toggleDrawerDay(btn) {
@@ -9787,8 +9796,13 @@
             const btn = document.getElementById('drawerSaveBtn');
             const status = document.getElementById('drawerSaveStatus');
 
-            if (btn) { btn.disabled = true; btn.classList.add('saving'); btn.textContent = 'Saving\u2026'; }
-            if (status) { status.textContent = ''; }
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.add('saving');
+                btn.setAttribute('aria-busy', 'true');
+                btn.textContent = 'Saving\u2026';
+            }
+            document.getElementById('drawerDiscardBtn').disabled = true;
 
             const days = [];
             document.querySelectorAll('#drawerDays .drawer-day-btn.active').forEach(b => {
@@ -9825,15 +9839,17 @@
 
                 clearDrawerDirty();
                 showSavedIndicator();
-                if (status) { status.textContent = 'Saved'; status.style.color = '#10b981'; }
-                if (btn) { btn.textContent = 'Save'; btn.classList.remove('saving'); }
+                if (btn) { btn.textContent = 'Save changes'; btn.classList.remove('saving'); }
 
                 drawerSettingsLoaded = false;
                 loadDrawerFirmware();
                 loadFleetStatus();
             } catch (e) {
-                if (status) { status.textContent = e.message || 'Save failed'; status.style.color = '#dc2626'; }
-                if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save'; }
+                if (status) { status.textContent = '✕ Not saved. Try again.'; status.className = 'status-bar-badge blocked'; }
+                if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save changes'; }
+            } finally {
+                if (btn) btn.removeAttribute('aria-busy');
+                document.getElementById('drawerDiscardBtn').disabled = false;
             }
         }
 
@@ -10221,54 +10237,11 @@
                 // Re-drive the scheduler UI so the "Up to date" badge override
                 // picks up the freshly-loaded counts even when the fleet
                 // response arrives after the scheduler_status WebSocket frame
-                // that originally rendered the badge. Falls back to just the
-                // count text if no scheduler frame has arrived yet.
+                // that originally rendered the badge.
                 if (lastSchedulerStatus) {
                     updateSchedulerUI(lastSchedulerStatus);
-                } else {
-                    updateBarDeviceCount();
                 }
             } catch (e) {}
-        }
-
-        function updateBarDeviceCount() {
-            const section = document.getElementById('barDeviceCountSection');
-            const count = document.getElementById('barBehindCount');
-            if (!section || !count) return;
-            count.style.color = '';
-
-            // Don't show anything when auto-update is disabled
-            if (lastAutoState === 'disabled') {
-                setHidden(section, true);
-                return;
-            }
-
-            if (lastSchedulerStatus && lastSchedulerStatus.rollout
-                    && Number.isFinite(lastSchedulerStatus.rollout.remaining_devices)) {
-                setHidden(section, true);
-                return;
-            }
-
-            const nextWindowText = lastNextWindowIso
-                ? 'Next: ' + formatWhen(lastNextWindowIso)
-                : lastNextWindow;
-
-            if (lastBehindCount > 0) {
-                setHidden(section, false);
-                const label = lastBehindCount === 1 ? '1 device pending' : `${lastBehindCount} devices pending`;
-                let text = label;
-                // The schedule badge already shows "Next: ..." in the Scheduled
-                // state (idle/waiting), so don't repeat it here. In Paused states
-                // the badge shows the block reason instead, so the pill stays the
-                // only place the next window appears — keep it there.
-                const badgeShowsNext = (lastAutoState === 'idle' || lastAutoState === 'waiting');
-                if (nextWindowText && !badgeShowsNext) text += ' · ' + nextWindowText;
-                count.textContent = text;
-            } else {
-                // Nothing behind — the "Up to date" badge in updateSchedulerUI
-                // is the single source of truth; suppress the duplicate pill.
-                setHidden(section, true);
-            }
         }
 
         async function loadAutoSettings() {
