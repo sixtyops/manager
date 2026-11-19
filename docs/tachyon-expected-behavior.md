@@ -41,20 +41,20 @@ name. See the [TNA-30x API v1.0.8](https://tachyon-networks.github.io/api_docs/t
 
 **Key points:** Shipped A5 recovery checks require the saved CPE peer to return by radio MAC. They check CPE `eth0` link-up only when the pre-reboot report showed it up.
 
-**Detail:** `get_connected_cpes()` returns the radio MAC used to confirm peer return. `get_eth0_recovery_state()` reads reported link state and counters. Recovery uses the link result only when the pre-reboot report showed `eth0` up. Unknown pre-reboot link state skips this check; it does not create a baseline or fail recovery. AP recovery also requires the saved CPE peers to return, then reboots each reachable saved CPE and checks peer return again.
+**Detail:** `get_connected_cpes()` returns the radio MAC used to confirm peer return. `get_eth0_recovery_state()` reads reported link state and counters. Recovery uses the link result only when the pre-reboot report showed `eth0` up. Unknown pre-reboot link state skips this check; it does not create a baseline or fail recovery. AP recovery requires the saved CPE peers to return. This path reads peer and link state; it does not reboot CPEs.
 
 The capture above documents observable fields. It does not define recovery thresholds. Bridge learning, byte counters, negotiated rate, DHCP state, and customer application traffic are not A5 recovery gates. The current client does not use those signals to qualify a customer path.
 
 ## AP update CPE rejoin
 
-**Key points:** Manager calls `POST /reboot` for each reachable CPE saved in
-the pre-update peer list, then checks peer return. On firmware 1.15.1, this
-endpoint returns HTTP 302 and does not reboot the device. The CPE reboot step
-does not reboot the CPE. This behavior is tracked in [issue #790](https://github.com/sixtyops/manager/issues/790).
+**Key points:** AP recovery checks peer return without CPE reboot writes.
+The standalone reboot method uses `POST /cgi.lua/reboot`. The request must
+return HTTP 200. Redirects and other statuses fail the call.
 
-**Detail:** The device web UI reboots with `POST /cgi.lua/reboot`. Manager's
-reboot method uses `POST /reboot`; the issue tracks changing the method and
-checking that a reboot occurred. Manager skips and logs CPEs it cannot reach.
+**Detail:** Manager confirms a reachability drop followed by API return, or
+`system.uptime` lower than the value read immediately before the request.
+Missing evidence fails at the existing reboot deadline. Exact-head lab proof
+remains required by [#790](https://github.com/sixtyops/manager/issues/790).
 
 ## Management MAC and address after an update
 

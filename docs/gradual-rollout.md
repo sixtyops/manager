@@ -16,7 +16,7 @@ Manager stores the expected serial and current address before a write. After reb
 
 Manager checks the expected serial before each write. It saves a moved address only after serial confirmation. Missing, conflicting, or ambiguous identity evidence, failed persistence, or timeout stops the job and requires operator resolution.
 
-After an AP update recovers, Manager calls `POST /reboot` for each reachable CPE in the saved pre-update peer list, then checks for peer return. On Tachyon firmware 1.15.1, this endpoint returns HTTP 302 and does not reboot the device. The CPE reboot step therefore does not reboot the CPE. This behavior is tracked in [issue #790](https://github.com/sixtyops/manager/issues/790). AP re-find through its CPEs is planned in [issue #786](https://github.com/sixtyops/manager/issues/786).
+After an AP update, Manager checks saved CPE peers and their required link state through reads. This recovery path does not reboot CPEs. The standalone Tachyon reboot method uses `POST /cgi.lua/reboot` and requires HTTP 200. It confirms a reachability drop and API return, or a lower `system.uptime` than the value read immediately before the request. Missing reboot evidence fails at the existing deadline. AP recovery can re-find a changed address through its saved CPE peers.
 
 ## Scheduled readiness
 

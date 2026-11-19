@@ -152,6 +152,7 @@ async def test_driver_rechecks_before_upload_and_install(runtime_mocks, monkeypa
     monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
     monkeypatch.setattr(client, "get_device_info", AsyncMock(side_effect=get_info))
     monkeypatch.setattr(client, "upload_firmware", AsyncMock(side_effect=upload))
+    monkeypatch.setattr(client, "_curl", AsyncMock(return_value=(503, "")))
     monkeypatch.setattr(client, "trigger_update", AsyncMock(side_effect=install))
     monkeypatch.setattr(client, "wait_for_reboot", AsyncMock(return_value=True))
     result = await driver.update_firmware(
@@ -202,6 +203,7 @@ async def test_upload_retries_recheck_current_readiness(
 
     monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
     monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=info))
+    monkeypatch.setattr(client, "_curl", AsyncMock(return_value=(503, "")))
     monkeypatch.setattr(client, "trigger_update", AsyncMock(return_value=True))
     monkeypatch.setattr(client, "wait_for_reboot", AsyncMock(return_value=True))
     monkeypatch.setattr("updater.vendors.tachyon.client._run_curl", run_curl)

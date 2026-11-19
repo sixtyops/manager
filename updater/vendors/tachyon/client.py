@@ -7,7 +7,7 @@ API Endpoints:
 - GET /cgi.lua/status?type=wireless,zones - Get connected peers (CPEs)
 - PUT /cgi.lua/update - Upload firmware (multipart: fw=binary, force=false)
 - POST /cgi.lua/update - Trigger firmware install (JSON: {reset:false, force:false})
-- POST /reboot - Reboot device
+- POST /cgi.lua/reboot - Reboot device (HTTP 200)
 
 Security Note:
     By default, SSL certificate verification is disabled (-k flag) because Tachyon
@@ -905,135 +905,113 @@ class TachyonClient:
             logger.info(f"Update triggered on {self.ip} (connection closed)")
             return True
 
+    @staticmethod
+    def _parse_uptime(body: str) -> Optional[float]:
+        """Read finite, nonnegative system uptime in seconds."""
+        value = TachyonClient._parse_system_status(body).get("uptime")
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            return None
+        return float(value)
+
+    @staticmethod
+    def _reboot_api_ready(status: int, body: str) -> bool:
+        """Require authenticated system data before declaring API return."""
+        try:
+            data = json.loads(body)
+        except (ValueError, TypeError):
+            return False
+        return (status == 200 and isinstance(data, dict)
+                and isinstance(data.get("system"), dict) and bool(data["system"])
+                and data.get("statusCode") not in (401, 403)
+                and "Authorization Failed" not in str(data))
+
     async def wait_for_reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
-        """Wait for device to come back online after reboot.
-
-        Two-phase approach:
-        1. Wait for ping response
-        2. Wait for web server to be ready
-        """
-        logger.info(f"Waiting for {self.ip} to reboot...")
+        """Require reboot evidence and API return within one absolute deadline."""
         loop = asyncio.get_running_loop()
-        self.last_reboot_deadline = loop.time() + timeout
-        # The initial wait is inside A4's absolute reboot deadline.
-        await asyncio.sleep(min(10, max(0, self.last_reboot_deadline - loop.time())))
-        ping_responded = False
-
-        while loop.time() < self.last_reboot_deadline:
-            if recovery_callback:
-                remaining = self.last_reboot_deadline - loop.time()
+        started, deadline, baseline = getattr(
+            self, "_reboot_observation", (loop.time(), loop.time() + timeout, None)
+        )
+        self.last_reboot_deadline = deadline
+        previous_read_deadline = self.read_deadline
+        self.read_deadline = min(deadline, previous_read_deadline or deadline)
+        dropped = False
+        recovered = not recovery_callback
+        reboot_proven = False
+        try:
+            while loop.time() < self.read_deadline:
+                status, body = 0, ""
                 try:
-                    if await asyncio.wait_for(
-                        recovery_callback(
-                            self.last_reboot_deadline,
-                            self.last_reboot_deadline - timeout,
-                        ), timeout=remaining
+                    status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+                    if status in (302, 401, 403) or (
+                        status == 200 and not self._reboot_api_ready(status, body)
                     ):
-                        return True
-                except asyncio.TimeoutError:
-                    raise RuntimeError("Recovery callback timed out")
-                except Exception as exc:
-                    logger.debug("Recovery callback for %s failed: %s", self.ip, exc)
-                    raise
-            if not ping_responded:
-                # Phase 1: Wait for device to respond to ping (or curl if ping unavailable)
-                responded = False
-                proc = None
-                use_curl_fallback = False
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        "ping", "-c", "1", "-W", "2", self.ip,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _, stderr = await proc.communicate()
-                    if proc.returncode == 0:
-                        responded = True
-                    elif b"Operation not permitted" in stderr or b"not permitted" in stderr:
-                        # ping failed due to missing capabilities, use curl instead
-                        use_curl_fallback = True
-                except FileNotFoundError:
-                    # ping not available (e.g., minimal Docker image), use curl instead
-                    use_curl_fallback = True
-
-                if use_curl_fallback:
+                        if await self.login() is True:
+                            status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+                except (RuntimeError, OSError, TimeoutError):
+                    dropped = True
+                uptime = self._parse_uptime(body) if status == 200 else None
+                reboot_proven = reboot_proven or dropped or (
+                    baseline is not None and uptime is not None and uptime < baseline
+                )
+                if (recovered and reboot_proven and status == 200
+                        and self._reboot_api_ready(status, body) and loop.time() < self.read_deadline):
+                    logger.info("%s reboot confirmed and API ready", self.ip)
+                    return True
+                # A drop at the old address is proof even if only a new address returns.
+                # Let recovery find that address before requiring authenticated readiness.
+                if recovery_callback and not recovered and reboot_proven:
+                    remaining = self.read_deadline - loop.time()
+                    if remaining <= 0:
+                        break
                     try:
-                        check_cmd = ["curl", "-s", "-m", "3"]
-                        if not VERIFY_SSL:
-                            check_cmd.append("-k")
-                        check_cmd.extend([
-                            "-o", "/dev/null", "-w", "%{http_code}",
-                            f"https://{self.ip}/"
-                        ])
-                        proc = await asyncio.create_subprocess_exec(
-                            *check_cmd,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.DEVNULL,
-                        )
-                        stdout, _ = await proc.communicate()
-                        if proc.returncode == 0:
-                            status = stdout.decode().strip()
-                            responded = status and status.isdigit() and int(status) > 0
-                    except Exception:
-                        if proc and proc.returncode is None:
-                            try:
-                                proc.kill()
-                                await proc.wait()
-                            except ProcessLookupError:
-                                pass
-
-                if responded:
-                    logger.info(f"{self.ip} responding, waiting for web server...")
-                    ping_responded = True
-                    # Wait for web services to initialize
-                    await asyncio.sleep(10)
-                    continue
-            else:
-                # Phase 2: Check if web server is up
-                check_cmd = ["curl", "-s", "-m", "5"]
-                if not VERIFY_SSL:
-                    check_cmd.append("-k")
-                check_cmd.extend([
-                    "-o", "/dev/null", "-w", "%{http_code}",
-                    f"https://{self.ip}/"
-                ])
-                proc = None
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *check_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    stdout, _ = await proc.communicate()
-
-                    if proc.returncode == 0:
-                        status = stdout.decode().strip()
-                        if status and status.isdigit() and int(status) > 0:
-                            if not recovery_callback:
-                                logger.info(f"{self.ip} web server is up, device ready")
-                                return True
-                except Exception:
-                    if proc and proc.returncode is None:
-                        try:
-                            proc.kill()
-                            await proc.wait()
-                        except ProcessLookupError:
-                            pass
-
-            await asyncio.sleep(3)
-
-        logger.error(f"{self.ip} did not come back online before its reboot deadline")
+                        recovered = bool(await asyncio.wait_for(
+                            recovery_callback(deadline, started),
+                            timeout=remaining,
+                        ))
+                    except asyncio.TimeoutError:
+                        raise RuntimeError("Recovery callback timed out") from None
+                    # Recovery can retarget the client. Read that address before success.
+                    if recovered:
+                        continue
+                remaining = self.read_deadline - loop.time()
+                if remaining > 0:
+                    await asyncio.sleep(min(3, remaining))
+        finally:
+            self.read_deadline = previous_read_deadline
+        logger.error("%s reboot was not confirmed before its deadline", self.ip)
         return False
 
-    async def reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
-        """Reboot the device and wait for it to come back online."""
-        logger.info(f"Rebooting {self.ip}...")
+    async def _read_reboot_baseline(self) -> Optional[float]:
+        """Read system uptime before requesting a reboot."""
         try:
-            await self._curl("POST", "/reboot")
-        except Exception:
-            # Connection may drop immediately during reboot
-            logger.info(f"Reboot triggered on {self.ip} (connection closed)")
-        return await self.wait_for_reboot(timeout=timeout, recovery_callback=recovery_callback)
+            status, body = await self._curl("GET", "/cgi.lua/status?type=system")
+        except (RuntimeError, OSError, TimeoutError):
+            return None
+        return self._parse_uptime(body) if status == 200 else None
+
+    async def reboot(self, timeout: int = 300, recovery_callback=None) -> bool:
+        """Request the UI reboot endpoint and prove the device restarted."""
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = min(started + timeout, self.read_deadline or started + timeout)
+        self.last_reboot_deadline = deadline
+        previous_read_deadline = self.read_deadline
+        self.read_deadline = deadline
+        try:
+            baseline = await self._read_reboot_baseline()
+            try:
+                status, _ = await self._curl("POST", "/cgi.lua/reboot")
+            except (RuntimeError, OSError, TimeoutError):
+                logger.error("Reboot request failed for %s", self.ip)
+                return False
+            if status != 200:
+                logger.error("Reboot request rejected by %s (HTTP %s)", self.ip, status)
+                return False
+            self._reboot_observation = (started, deadline, baseline)
+            return await self.wait_for_reboot(timeout=timeout, recovery_callback=recovery_callback)
+        finally:
+            self.read_deadline = previous_read_deadline
+            self.__dict__.pop("_reboot_observation", None)
 
     async def restart_wireless_or_reboot(self, timeout: int = 300) -> bool:
         """Reboot the device because no supported wireless restart API is known."""
@@ -1170,14 +1148,33 @@ class TachyonClient:
                     return await reconcile_readback(reason)
             if serial_check and not await serial_check("install"):
                 return await reconcile_readback("Expected serial did not match before install")
-            if not await self.trigger_update():
-                return await reconcile_readback("Failed to trigger update", allow_target_success=True)
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            previous_read_deadline = self.read_deadline
+            deadline = min(started + reboot_timeout, previous_read_deadline or math.inf)
+            self.read_deadline = deadline
+            try:
+                baseline = await self._read_reboot_baseline()
+                admitted, reason = admission_check() if admission_check else (True, "")
+                install_expired = loop.time() >= deadline
+                triggered = admitted and not install_expired and await self.trigger_update()
+                if triggered:
+                    progress("Rebooting...")
+                    self._reboot_observation = (started, deadline, baseline)
+                    rebooted = await self.wait_for_reboot(
+                        timeout=reboot_timeout, recovery_callback=recovery_callback
+                    )
+            finally:
+                self.read_deadline = previous_read_deadline
+                self.__dict__.pop("_reboot_observation", None)
 
-            # Wait for reboot
-            progress("Rebooting...")
-            if not await self.wait_for_reboot(
-                timeout=reboot_timeout, recovery_callback=recovery_callback
-            ):
+            if not admitted:
+                return await reconcile_readback(reason)
+            if install_expired:
+                return await reconcile_readback("Install deadline expired")
+            if not triggered:
+                return await reconcile_readback("Failed to trigger update", allow_target_success=True)
+            if not rebooted:
                 readback = await reconcile_readback("Device did not come back online")
                 target_version = _extract_version_from_firmware(firmware_path)
                 if (
@@ -1187,10 +1184,7 @@ class TachyonClient:
                     return readback
                 if not recovery_callback:
                     return readback
-                loop = asyncio.get_running_loop()
-                deadline = self.last_reboot_deadline or loop.time()
-                reboot_started = deadline - reboot_timeout
-                if not await recovery_callback(deadline, reboot_started):
+                if not await recovery_callback(deadline, started):
                     return readback
 
             # Re-login and verify

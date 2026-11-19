@@ -110,8 +110,8 @@ async def test_login_payload_and_cookie_cleanup(process, caplog, verify):
         ("POST", "/cgi.lua/config?dry_run=true"),
     ]),
     ("trigger_update", {}, [("POST", "/cgi.lua/update")]),
-    ("reboot", {}, [("POST", "/reboot")]),
-    ("restart_wireless_or_reboot", {}, [("POST", "/reboot")]),
+    ("reboot", {}, [("GET", "/cgi.lua/status?type=system"), ("POST", "/cgi.lua/reboot")]),
+    ("restart_wireless_or_reboot", {}, [("GET", "/cgi.lua/status?type=system"), ("POST", "/cgi.lua/reboot")]),
 ])
 @pytest.mark.parametrize("verify", [False, True])
 async def test_authenticated_request_paths_keep_secrets_in_stdin(
@@ -138,33 +138,22 @@ async def test_authenticated_request_paths_keep_secrets_in_stdin(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verify", [False, True])
-@pytest.mark.parametrize("ping_available", [False, True])
-async def test_reboot_probes_keep_stored_credentials_out_of_arguments(ping_available, verify):
+async def test_reboot_probes_keep_stored_credentials_out_of_arguments(verify):
     client = transport.TachyonClient("192.0.2.1", SECRET, SECRET)
     client._token = SECRET
-    ping = AsyncMock(returncode=0)
-    ping.communicate.return_value = (b"", b"")
     probe = AsyncMock(returncode=0)
-    probe.communicate.return_value = (b"200", b"")
-
-    async def spawn(*args, **kwargs):
-        if args[0] == "ping":
-            if not ping_available:
-                raise FileNotFoundError("synthetic missing ping")
-            return ping
-        return probe
-
-    with patch.object(transport, "VERIFY_SSL", verify), patch("asyncio.create_subprocess_exec", AsyncMock(side_effect=spawn)) as execute, patch(
-        "asyncio.sleep", AsyncMock()
-    ):
+    probe.communicate.return_value = (b'{"system":{"uptime":2}}\n200', b"")
+    offline = AsyncMock(returncode=7)
+    offline.communicate.return_value = (b"", b"")
+    with patch.object(transport, "VERIFY_SSL", verify), patch(
+        "asyncio.create_subprocess_exec", AsyncMock(side_effect=[offline, probe])
+    ) as execute, patch("asyncio.sleep", AsyncMock()):
         assert await client.wait_for_reboot() is True
-    curl_calls = [call for call in execute.call_args_list if call.args[0] == "curl"]
-    assert len(curl_calls) == (1 if ping_available else 2)
-    assert all(("-k" in call.args) is (not verify) for call in curl_calls)
-    for call in execute.call_args_list:
-        assert all(SECRET not in argument for argument in call.args)
-        assert "-H" not in call.args
-        assert "-d" not in call.args
+    assert_private(execute)
+    for call in probe.communicate.call_args_list:
+        config = call.args[0].decode()
+        assert ("insecure\n" in config) is (not verify)
+        assert "Cookie: token=" in config
 
 
 @pytest.mark.asyncio
