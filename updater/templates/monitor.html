@@ -7569,9 +7569,11 @@
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
+                return true;
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save';
                 statusEl.style.color = '#ef4444';
+                return false;
             }
         }
 
@@ -7582,7 +7584,7 @@
                 statusEl.style.color = '#f59e0b';
                 return;
             }
-            await saveSnmpSettings();
+            if (!await saveSnmpSettings()) return;
             statusEl.textContent = 'Sending test trap...';
             statusEl.style.color = '#6b7280';
             try {
@@ -8748,17 +8750,17 @@
         async function saveReleaseChannel() {
             const channel = document.getElementById('appReleaseChannel').value;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ release_channel: channel }),
                 });
-                const statusEl = document.getElementById('appUpdateStatus');
-                if (statusEl) {
-                    statusEl.textContent = 'Channel updated to ' + channel;
-                    setTimeout(() => loadAppUpdateStatus(), 1500);
-                }
-            } catch (e) {}
+                if (!resp.ok) throw new Error(await readSaveError(resp));
+                setAppUpdateStatusMessage('Channel updated to ' + channel, 'success');
+                setTimeout(() => loadAppUpdateStatus(), 1500);
+            } catch (e) {
+                setAppUpdateStatusMessage(e.message || 'Failed to save', 'error');
+            }
         }
 
         async function checkAppUpdate() {
@@ -11804,13 +11806,14 @@
             const hour = parseInt(value);
             if (isNaN(hour) || hour < 0 || hour > 23) return;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({config_enforce_hour: String(hour)}),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
             } catch (e) {
-                console.debug('Failed to update enforce hour:', e);
+                showToast(e.message || 'Failed to save the enforcement hour', 'error');
             }
         }
 
@@ -11818,13 +11821,14 @@
             const mins = parseInt(value);
             if (isNaN(mins) || mins < 1) return;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({config_enforce_cooldown_minutes: String(mins)}),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
             } catch (e) {
-                console.debug('Failed to update cooldown:', e);
+                showToast(e.message || 'Failed to save the enforcement cooldown', 'error');
             }
         }
 
