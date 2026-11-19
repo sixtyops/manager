@@ -858,6 +858,28 @@ Export device history as CSV download.
 
 - **Query**: `days` (1–365, default 30)
 
+## Read-only service token
+
+An administrator can manage one token for inventory sync.
+
+### `GET /api/service-token`
+Return whether a token exists and its creation and last-use times. Requires the admin role.
+
+### `POST /api/service-token`
+Create a token when none exists. Store the returned value securely; Manager shows it only once. Requires the admin role.
+
+### `DELETE /api/service-token`
+Revoke the token. Revoke the current token before creating a replacement. Requires the admin role.
+
+Send the token as `Authorization: Bearer <token>` to `GET /api/aps`,
+`GET /api/cpes`, or `GET /api/topology`. The token grants no other API access.
+The three inventory routes return `401` for an invalid or revoked token and
+`429` when a request limit is reached. The topology response uses Manager's
+current database snapshot and does not start a device poll.
+
+Keep the token in the Ops worker secret `sixtyops_readonly_token`. Do not put
+it in a URL or log it.
+
 ## Device Groups
 
 ### `GET /api/device-groups`

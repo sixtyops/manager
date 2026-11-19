@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import hmac
 import html as html_module
 import ipaddress
 import json
@@ -10,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import secrets
 import subprocess
 import threading
 import uuid
@@ -1146,6 +1148,72 @@ def _clear_rate_limit_bucket(bucket: str):
     _auth_rate_attempts.pop(bucket, None)
 
 
+SERVICE_TOKEN_KEY = "readonly_service_token"
+_INVENTORY_TOKEN_ROUTES = {("GET", "/api/aps"), ("GET", "/api/cpes"), ("GET", "/api/topology")}
+
+
+def _service_token_record(conn):
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,)).fetchone()
+    if not row:
+        return None
+    try:
+        value = json.loads(row[0])
+    except (TypeError, ValueError):
+        return {}
+    if (not isinstance(value, dict) or set(value) != {"sha256", "created_at", "created_by", "last_used_at"}
+            or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256", "")))
+            or not isinstance(value.get("created_at"), str)
+            or not isinstance(value.get("created_by"), str)
+            or value.get("last_used_at") is not None and not isinstance(value.get("last_used_at"), str)):
+        return {}
+    return value
+
+
+def _service_token_audit(conn, username, action, route, ip):
+    conn.execute(
+        "INSERT INTO audit_log (username, action, target_type, target_id, details, ip_address) VALUES (?, ?, ?, ?, ?, ?)",
+        (username, action, "service_token", route, None, ip),
+    )
+
+
+def _limited(bucket, limit, window):
+    if not _check_rate_limit(bucket, limit, window):
+        _record_rate_limit_event(bucket)
+        return
+    raise HTTPException(429, "Too many requests", headers={"Retry-After": str(window)})
+
+
+async def require_inventory_read(request: Request) -> dict:
+    authorization = request.headers.get("authorization")
+    if authorization is None:
+        return await require_auth(request)
+    ip = _client_ip(request)
+    _limited(f"service-token-attempt:{ip}", 60, 300)
+    match = re.fullmatch(r"Bearer (mgr_ro_[A-Za-z0-9_-]{43})", authorization)
+    if not match or (request.method.upper(), request.url.path) not in _INVENTORY_TOKEN_ROUTES:
+        raise HTTPException(401, "Not authenticated")
+    digest = hashlib.sha256(match.group(1).encode()).hexdigest()
+    try:
+        with db.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            record = _service_token_record(conn)
+            if not record or not hmac.compare_digest(bytes.fromhex(record["sha256"]), bytes.fromhex(digest)):
+                conn.rollback()
+                raise HTTPException(401, "Not authenticated")
+            _limited(f"service-token-authenticated:{record['sha256']}", 15, 60)
+            used_at = datetime.now(timezone.utc).isoformat()
+            updated = dict(record)
+            updated["last_used_at"] = used_at
+            conn.execute("UPDATE settings SET value = ? WHERE key = ?", (json.dumps(updated), SERVICE_TOKEN_KEY))
+            _service_token_audit(conn, "readonly-service", "service_token.use", request.url.path, ip)
+        return {"username": "readonly-service", "role": "viewer", "auth_method": "readonly_service_token"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Service token authentication database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Authentication service unavailable")
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     """Handle login form submission."""
@@ -1636,7 +1704,7 @@ def _include_backoff_state(devices: list[dict]) -> list[dict]:
 
 
 @app.get("/api/aps", tags=["devices"])
-async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
+async def list_aps(site_id: int = None, session: dict = Depends(require_inventory_read)):
     """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
     return {"aps": _include_backoff_state(_strip_credentials(aps))}
@@ -2028,7 +2096,7 @@ async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "op
 # ============================================================================
 
 @app.get("/api/topology", tags=["devices"])
-async def get_topology(session: dict = Depends(require_auth)):
+async def get_topology(request: Request, session: dict = Depends(require_inventory_read)):
     """Get current network topology."""
     # Warm the IP-location cache in the background. ipwho.is can hang for the
     # full 10 s curl timeout, and this endpoint is the dashboard's heartbeat —
@@ -2036,7 +2104,7 @@ async def get_topology(session: dict = Depends(require_auth)):
     # `get_topology()` falls back to the default zone until the task lands.
     try:
         import asyncio
-        if services._cache_get("ip_location") is None:
+        if session.get("auth_method") != "readonly_service_token" and services._cache_get("ip_location") is None:
             asyncio.create_task(services.get_default_rain_climate())
     except Exception:
         pass
@@ -2044,6 +2112,9 @@ async def get_topology(session: dict = Depends(require_auth)):
     poller = get_poller()
     if poller:
         return poller.get_topology()
+
+    if session.get("auth_method") == "readonly_service_token":
+        raise HTTPException(503, "Topology is unavailable")
 
     return {
         "sites": [],
@@ -2067,7 +2138,7 @@ async def refresh_topology(session: dict = Depends(require_role("admin", "operat
 
 
 @app.get("/api/cpes", tags=["devices"])
-async def get_all_cpes(session: dict = Depends(require_auth)):
+async def get_all_cpes(session: dict = Depends(require_inventory_read)):
     """Get all CPEs."""
     cpes = db.get_all_cpes()
     return {"cpes": cpes}
@@ -2360,6 +2431,7 @@ async def get_vendors(session: dict = Depends(require_auth)):
 async def get_settings(session: dict = Depends(require_auth)):
     """Get all settings. Sensitive values are redacted."""
     settings = db.get_all_settings()
+    settings.pop(SERVICE_TOKEN_KEY, None)
     for key in _SETTINGS_SENSITIVE:
         if key in settings and settings[key]:
             settings[key] = "********"
@@ -2401,6 +2473,55 @@ _SETTINGS_WRITABLE = {
     "email_smtp_username", "email_smtp_password", "email_smtp_tls",
     "email_from_address", "email_to_addresses",
 }
+
+
+@app.get("/api/service-token", tags=["auth"])
+async def get_service_token_status(session: dict = Depends(require_role("admin"))):
+    try:
+        with db.get_db() as conn:
+            record = _service_token_record(conn)
+        return {"configured": record is not None, "created_at": record.get("created_at") if record else None,
+                "created_by": record.get("created_by") if record else None,
+                "last_used_at": record.get("last_used_at") if record else None}
+    except Exception as exc:
+        logger.error("Service token status database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Service unavailable")
+
+
+@app.post("/api/service-token", tags=["auth"])
+async def create_service_token(request: Request, session: dict = Depends(require_role("admin"))):
+    token = "mgr_ro_" + secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc).isoformat()
+    record = {"sha256": hashlib.sha256(token.encode()).hexdigest(), "created_at": now,
+              "created_by": session["username"], "last_used_at": None}
+    try:
+        with db.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,)).fetchone():
+                raise HTTPException(409, "A service token already exists")
+            conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)",
+                         (SERVICE_TOKEN_KEY, json.dumps(record)))
+            _service_token_audit(conn, session["username"], "service_token.create", "/api/service-token", _client_ip(request))
+        return JSONResponse({"token": token, "created_at": now}, headers={"Cache-Control": "no-store"})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Service token creation database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Service unavailable")
+
+
+@app.delete("/api/service-token", tags=["auth"])
+async def revoke_service_token(request: Request, session: dict = Depends(require_role("admin"))):
+    try:
+        with db.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,)).fetchone():
+                conn.execute("DELETE FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,))
+            _service_token_audit(conn, session["username"], "service_token.revoke", "/api/service-token", _client_ip(request))
+        return {"revoked": True}
+    except Exception as exc:
+        logger.error("Service token revocation database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Service unavailable")
 
 
 def _parse_int_field(value, field: str) -> int:
