@@ -46,9 +46,10 @@ Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1
 **Detail:** The request, probes, authentication, and recovery callback share
 one deadline. Manager accepts a reachability drop followed by API return, or a
 lower `system.uptime` value than the authenticated read immediately before the
-request. A recovery callback alone does not prove a reboot. The real reboot
-and uptime-reset path passed exact-head lab proof on AP and CPE firmware
-1.12.3 and 1.15.x in [#842](https://github.com/sixtyops/manager/pull/842).
+request. A recovery callback alone does not prove a reboot. Exact-head lab
+proof in [#842](https://github.com/sixtyops/manager/pull/842) covered AP
+(TNA-301) firmware 1.12.3.55002 and 1.15.1.55177, and CPE (TNA-303X) firmware
+1.15.0.55151 and 1.15.1.55177. No CPE reboot was tested on 1.12.3.
 
 ## Status
 

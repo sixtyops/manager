@@ -54,9 +54,10 @@ return HTTP 200. Redirects and other statuses fail the call.
 **Detail:** Manager confirms a reachability drop followed by API return, or
 `system.uptime` lower than the value read immediately before the request.
 The baseline read, request, probes, reauthentication, and recovery callback
-share one deadline. A callback alone does not prove reboot. The real endpoint
-and uptime-reset path passed lab proof on AP and CPE firmware 1.12.3 and 1.15.x
-in [#842](https://github.com/sixtyops/manager/pull/842).
+share one deadline. A callback alone does not prove reboot. Exact-head lab
+proof in [#842](https://github.com/sixtyops/manager/pull/842) covered AP
+(TNA-301) firmware 1.12.3.55002 and 1.15.1.55177, and CPE (TNA-303X) firmware
+1.15.0.55151 and 1.15.1.55177. No CPE reboot was tested on 1.12.3.
 
 ## Management MAC and address after an update
 
