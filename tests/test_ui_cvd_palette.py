@@ -1,7 +1,6 @@
 from pathlib import Path
 import colorsys
 import re
-import subprocess
 
 import pytest
 
@@ -149,8 +148,8 @@ def test_cvd_palette_token_pairs_meet_text_contrast(path):
 
 
 def test_old_push_status_is_rejected():
-    old = subprocess.run(['git', 'show', '10ee812:updater/templates/monitor.html'],
-                         cwd=ROOT, check=True, text=True, capture_output=True).stdout
+    # Push-status line from monitor.html before #863 (10ee812).
+    old = "<script>\n    el.style.color = '#10b981';\n</script>\n"
     errors = _scan(old)
     assert any('assignment el.style.color' in error and '#10b981' in error for error in errors)
 
