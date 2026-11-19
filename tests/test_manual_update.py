@@ -290,6 +290,34 @@ class TestUpdateDevice:
         assert resp.json().get("job_id")
         spawn.assert_called_once()
 
+    def test_cpe_active_bank_exact_build_reports_already_current(
+        self, authed_client, mock_db, fw_dir,
+    ):
+        cpe_ip = "10.0.0.60"
+        _seed_303l_ap("1.5.0.54980")
+        db.upsert_cpe(AP_IP, {
+            "ip": cpe_ip, "model": MODEL_303L,
+            "firmware_version": "1.15.0.55151", "auth_status": "ok",
+        })
+        db.upsert_device(
+            cpe_ip, "cpe", "root", "pass", model=MODEL_303L,
+            firmware_version="1.15.0.55151",
+        )
+        db.update_device_status(
+            cpe_ip, active_bank=2,
+            bank1_version="1.15.0.55151", bank2_version="1.15.1.55177",
+        )
+
+        with patch("updater.app._spawn_update_job") as spawn:
+            resp = self._update_device(
+                authed_client, ip=cpe_ip,
+                firmware_file_303l=FW_303L_CPE_TARGET, bank_mode="one",
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "already_current", "version": "1.15.1.55177"}
+        spawn.assert_not_called()
+
     def test_cpe_cache_only_firmware_does_not_prove_exact_build(self, authed_client, mock_db, fw_dir):
         cpe_ip = "10.0.0.60"
         _seed_303l_ap("1.5.0.54980")
