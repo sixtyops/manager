@@ -6164,7 +6164,34 @@ async def update_single_device_endpoint(
                 # installed in the active bank.
                 exact_build_record = None
         if exact_build_record and _device_on_exact_build(exact_build_record, target_version, bank_mode):
-            return {"status": "already_current", "version": target_version}
+            # Stored banks only select a possible no-op. Prove it with a fresh
+            # live read before skipping admission and firmware work.
+            try:
+                vendor = device_record.get("vendor") or "tachyon"
+                if vendor == "tachyon":
+                    async with asyncio.timeout(10):
+                        live_driver = get_driver(vendor)(ip, *credentials[ip])
+                        if await live_driver.connect() is True:
+                            banks = await live_driver.get_bootbank_info()
+                            active = getattr(banks, "active_bank", None)
+                            bank1 = getattr(banks, "bank1_version", None)
+                            bank2 = getattr(banks, "bank2_version", None)
+                            if (
+                                not getattr(banks, "warning", True)
+                                and type(active) is int and active in (1, 2)
+                                and isinstance(bank1, str) and bank1.strip()
+                                and isinstance(bank2, str) and bank2.strip()
+                                and _device_on_exact_build({
+                                    "active_bank": active,
+                                    "bank1_version": bank1,
+                                    "bank2_version": bank2,
+                                }, target_version, bank_mode)
+                            ):
+                                return {"status": "already_current", "version": target_version}
+            except Exception:
+                # A failed proof grants no write authority. Existing admission
+                # and recovery checks still control the job path below.
+                pass
 
     _check_firmware_window_admission(window_key)
 
