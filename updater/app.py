@@ -1184,12 +1184,12 @@ def _limited(bucket, limit, window):
 
 
 async def require_inventory_read(request: Request) -> dict:
-    authorization = request.headers.get("authorization")
-    if authorization is None:
+    authorization = request.headers.getlist("authorization")
+    if not authorization:
         return await require_auth(request)
     ip = _client_ip(request)
     _limited(f"service-token-attempt:{ip}", 60, 300)
-    match = re.fullmatch(r"Bearer (mgr_ro_[A-Za-z0-9_-]{43})", authorization)
+    match = re.fullmatch(r"Bearer (mgr_ro_[A-Za-z0-9_-]{43})", authorization[0]) if len(authorization) == 1 else None
     if not match or (request.method.upper(), request.url.path) not in _INVENTORY_TOKEN_ROUTES:
         raise HTTPException(401, "Not authenticated")
     digest = hashlib.sha256(match.group(1).encode()).hexdigest()
@@ -2488,7 +2488,7 @@ async def get_service_token_status(session: dict = Depends(require_role("admin")
         raise HTTPException(503, "Service unavailable")
 
 
-@app.post("/api/service-token", tags=["auth"])
+@app.post("/api/service-token", tags=["auth"], status_code=201)
 async def create_service_token(request: Request, session: dict = Depends(require_role("admin"))):
     token = "mgr_ro_" + secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc).isoformat()
@@ -2502,7 +2502,7 @@ async def create_service_token(request: Request, session: dict = Depends(require
             conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)",
                          (SERVICE_TOKEN_KEY, json.dumps(record)))
             _service_token_audit(conn, session["username"], "service_token.create", "/api/service-token", _client_ip(request))
-        return JSONResponse({"token": token, "created_at": now}, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"token": token, "created_at": now}, status_code=201, headers={"Cache-Control": "no-store"})
     except HTTPException:
         raise
     except Exception as exc:
