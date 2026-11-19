@@ -191,11 +191,6 @@ def _migrate(db):
         row[1] for row in db.execute("PRAGMA table_info(active_jobs)").fetchall()
     }
     if "in_flight_device_ip" not in active_job_columns:
-        db.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) "
-            "VALUES ('scheduled_rollout_safety_ready', 'false', ?)",
-            (datetime.now().isoformat(),),
-        )
         db.execute("ALTER TABLE active_jobs ADD COLUMN in_flight_device_ip TEXT")
 
     # Check if auth_status column exists on cpe_cache
@@ -722,7 +717,6 @@ def init_db():
         # Insert default settings if not exists
         defaults = {
             "schedule_enabled": "false",
-            "scheduled_rollout_safety_ready": "false",
             "schedule_days": "tue,wed,thu",
             "schedule_start_hour": "3",
             "schedule_end_hour": "4",

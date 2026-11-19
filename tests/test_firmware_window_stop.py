@@ -413,7 +413,7 @@ def test_stopped_window_blocks_device_action_and_resolution_does_not_reopen_it(m
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cutoff_checks, expected_reboot", [((20, 0), False), ((20, 20, 0), True)])
 async def test_queue_cutoff_blocks_before_start_but_finishes_started_device(mock_db, monkeypatch, cutoff_checks, expected_reboot):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.fail_at = None
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: _DeviceClient)
@@ -463,7 +463,7 @@ async def test_resolved_failure_on_target_runs_read_only_recovery(smoke_failure,
     )
     old_stop = db.get_firmware_window_stop(("firmware", "2026-10-27"))
     db.resolve_firmware_window_stop(old_stop["id"], "admin", "Device is on target")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = "smoke" if smoke_failure else None
@@ -508,7 +508,7 @@ async def test_resolved_failure_recovery_requires_saved_serial(
         "Device did not return", expected_serial="SYNTHETIC-SERIAL",
     )
     db.resolve_firmware_window_stop(prior["id"], "admin", "Device is on target")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     monkeypatch.setattr(app_module, "_shutting_down", False)
@@ -774,10 +774,10 @@ def test_manual_fallback_admission_is_blocked_by_configured_window_stop(mock_db,
 
 
 @pytest.mark.asyncio
-async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
+async def test_manual_fallback_job_does_not_bypass_scheduled_queue_auto_update(
     mock_db, monkeypatch, utc_window_clock,
 ):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     db.set_setting("schedule_timezone", "UTC")
     settings = {
         "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
@@ -861,12 +861,12 @@ def test_window_key_stays_constant_across_midnight():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("boundary", ["pre_reboot", "flash"])
-@pytest.mark.parametrize("closure", ["readiness", "window"])
+@pytest.mark.parametrize("closure", ["auto_update", "window"])
 @pytest.mark.parametrize("scheduled", [True, False])
 async def test_current_admission_after_connect_blocks_scheduled_writes(
     mock_db, monkeypatch, boundary, closure, scheduled,
 ):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     state = {"closed": False}
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
@@ -876,8 +876,8 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
         async def connect(self):
             result = await super().connect()
             state["closed"] = True
-            if closure == "readiness":
-                db.set_setting("scheduled_rollout_safety_ready", "false")
+            if closure == "auto_update":
+                db.set_setting("schedule_enabled", "false")
             return result
 
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: ClosingClient)
@@ -911,18 +911,18 @@ async def test_current_admission_after_connect_blocks_scheduled_writes(
     assert (boundary in calls) is not scheduled
     assert ("flash" in calls) is not scheduled
     if scheduled:
-        assert job.devices["192.0.2.1"].status == ("cancelled" if closure == "readiness" else "pending")
-        assert job.cancelled is (closure == "readiness")
+        assert job.devices["192.0.2.1"].status == ("cancelled" if closure == "auto_update" else "pending")
+        assert job.cancelled is (closure == "auto_update")
     else:
         assert job.devices["192.0.2.1"].status == "success"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("closure", ["cutoff", "readiness", "window_stop"])
+@pytest.mark.parametrize("closure", ["cutoff", "auto_update", "window_stop"])
 async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_other_gates(
     mock_db, monkeypatch, closure,
 ):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     key = ("firmware", "2026-10-27")
     state = {"minutes_until_end": 60}
 
@@ -932,8 +932,8 @@ async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_o
             await asyncio.sleep(0)
             if closure == "cutoff":
                 state["minutes_until_end"] = 0
-            elif closure == "readiness":
-                db.set_setting("scheduled_rollout_safety_ready", "false")
+            elif closure == "auto_update":
+                db.set_setting("schedule_enabled", "false")
             else:
                 app_module._stop_firmware_window(
                     job, "192.0.2.2", "upload", "Another device failed",
@@ -986,7 +986,7 @@ async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_o
     else:
         assert "upload" not in calls
         assert "trigger" not in calls
-    if closure == "readiness":
+    if closure == "auto_update":
         assert job.devices["192.0.2.1"].status == "pending"
         assert job.devices["192.0.2.1"].error is None
         assert db.get_firmware_window_stop(key) is None
@@ -999,7 +999,7 @@ async def test_driver_login_keeps_active_device_running_past_cutoff_but_honors_o
 @pytest.mark.asyncio
 async def test_driver_login_device_failure_still_stops_window(mock_db, monkeypatch, utc_window_clock):
     key = ("firmware", "2026-10-27")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
 
     class FailedUpdateClient(_DeviceClient):
         async def update_firmware(self, _path, progress, **kwargs):
@@ -1054,7 +1054,7 @@ async def test_changed_management_settings_stop_firmware_window(
 ):
     db.upsert_device("192.0.2.1", "ap", "u", "p")
     key = ("firmware", "2026-10-27")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = None
@@ -1111,7 +1111,7 @@ async def test_changed_dhcp_address_without_recovery_callback_is_rejected(
 ):
     db.upsert_device("192.0.2.1", "ap", "u", "p")
     key = ("firmware", "2026-10-27")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = None
@@ -1160,7 +1160,7 @@ async def test_unreachable_ap_stop_records_pre_update_management_settings(
 ):
     db.upsert_device("192.0.2.1", "ap", "u", "p")
     key = ("firmware", "2026-10-27")
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     _DeviceClient.calls = {}
     _DeviceClient.connect_calls = {}
     _DeviceClient.fail_at = "recovery"

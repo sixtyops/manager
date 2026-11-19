@@ -700,7 +700,7 @@ class AutoUpdateScheduler:
             return
 
         # Count a target window only after the update runner has accepted the
-        # queue. A readiness block or rejected job must leave its ordinal alone.
+        # queue. An admission block or rejected job must leave its ordinal alone.
         try:
             for family, target_sha256, cutoff, encoded_key, ordinal in timing_admissions:
                 timing = db.record_firmware_window_admission(
@@ -724,12 +724,12 @@ class AutoUpdateScheduler:
         return
 
     def _scheduled_admission_allowed(self) -> bool:
-        """Check current readiness without yielding before admission."""
+        """Check Auto-Update without yielding before admission."""
         admitted, reason = rollout_gate.current_scheduled_admission_decision()
         if not admitted:
-            if self._state != "blocked_safety":
-                db.log_schedule_event("blocked_safety", reason)
-            self._state = "blocked_safety"
+            if self._state != "disabled":
+                db.log_schedule_event("disabled", reason)
+            self._state = "disabled"
             self._block_reason = reason
         return admitted
 
@@ -1333,7 +1333,6 @@ class AutoUpdateScheduler:
 
         return {
             "state": self._state,
-            "safety_block_reason": rollout_gate.scheduled_admission_decision(settings)[1],
             "block_reason": self._block_reason,
             "weather": self._weather_info,
             "last_run_result": self._last_run_result,

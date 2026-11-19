@@ -5,8 +5,7 @@
 ## Summary
 
 **Key points:** This document defines the serial firmware queue shipped in
-[PR #715](https://github.com/sixtyops/manager/pull/715). Scheduled admission
-stays closed until required safety proof passes.
+[PR #715](https://github.com/sixtyops/manager/pull/715). Auto-Update controls scheduled admission. All other admission gates still apply.
 
 **Detail:** The shipped queue uses Manager inventory and the device APIs it calls. It runs one ordered list of devices that need the selected firmware. It does not persist membership or calculate percentages.
 
@@ -271,7 +270,7 @@ the artifact id for each family it is rolling. Filenames are for display.
 - Order device roles as CPEs, APs, then switches.
 - Run one device write and recovery sequence at a time.
 - Firmware Hold, eligibility, schedule, freeze, weather, clock, artifact, and
-  readiness checks remain admission gates.
+  Auto-Update checks remain admission gates.
 - Persist the cutoff and first failure for each maintenance window.
 - Stop starting devices at cutoff. Finish active recovery and continue later.
 - A failed check stops the queue for that window. Resolve it before a later
@@ -283,7 +282,7 @@ This is the queue contract shipped in [PR #715](https://github.com/sixtyops/mana
 It derives each pending queue from current Manager inventory instead of saved
 rollout membership and percentage selection.
 
-Before admitting a device, check current readiness, Firmware Hold, schedule,
+Before admitting a device, check Auto-Update, Firmware Hold, schedule,
 freeze, clock, weather, artifact integrity, device identity, and eligibility.
 Keep each write and its recovery under one device sequence. Persist the device
 result before admitting another device. If the process restarts during a

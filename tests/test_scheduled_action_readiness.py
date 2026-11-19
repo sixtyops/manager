@@ -1,4 +1,4 @@
-"""Stop queued scheduled actions after readiness revocation; finish recovery."""
+"""Stop queued scheduled actions when Auto-Update turns off; finish recovery."""
 
 import asyncio
 from datetime import datetime
@@ -16,7 +16,7 @@ from tests.test_strict_smoke_canary import _make_job
 
 @pytest.fixture
 def runtime_mocks(mock_db, monkeypatch):
-    db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_enabled", "true")
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module, "get_scheduler", lambda: None)
     monkeypatch.setattr(app_module, "is_feature_enabled", lambda *a: False)
@@ -59,9 +59,9 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
 
         def get_reboot_timeout(self, role): return 5
         def get_update_timeout(self, role): return 5
-        def get_hardware_id(self, _model): return "readiness-test"
+        def get_hardware_id(self, _model): return "auto_update-test"
         async def connect(self): return True
-        async def get_config(self): return {"system": {"name": "readiness-test"}}
+        async def get_config(self): return {"system": {"name": "auto_update-test"}}
         async def get_connected_cpes(self): return []
         async def get_bridge_table(self): return []
         async def get_device_info(self):
@@ -99,7 +99,7 @@ async def test_queued_action_stops_while_submitted_action_recovers(runtime_mocks
     task = asyncio.create_task(app_module.run_update_job(job, concurrency=1))
     try:
         await asyncio.wait_for(started.wait(), 2)
-        db.set_setting("scheduled_rollout_safety_ready", "false")
+        db.set_setting("schedule_enabled", "false")
     finally:
         release.set()
         await asyncio.wait_for(task, 5)
@@ -118,7 +118,7 @@ async def test_revocation_during_reboot_login_prevents_reboot(runtime_mocks, mon
     job.pre_update_reboot = True
     client = MagicMock()
     async def connect():
-        db.set_setting("scheduled_rollout_safety_ready", "false")
+        db.set_setting("schedule_enabled", "false")
         return True
     client.connect = AsyncMock(side_effect=connect)
     client.reboot = AsyncMock(return_value=True)
@@ -140,14 +140,14 @@ async def test_driver_rechecks_before_upload_and_install(runtime_mocks, monkeypa
                            bank2_version="1.0.0", active_bank=1)
     async def get_info():
         if boundary == "info":
-            db.set_setting("scheduled_rollout_safety_ready", "false")
+            db.set_setting("schedule_enabled", "false")
         return info
     async def upload(*a, **kw):
         if boundary == "upload":
-            db.set_setting("scheduled_rollout_safety_ready", "false")
+            db.set_setting("schedule_enabled", "false")
         return True
     async def install():
-        db.set_setting("scheduled_rollout_safety_ready", "false")
+        db.set_setting("schedule_enabled", "false")
         return True
     monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
     monkeypatch.setattr(client, "get_device_info", AsyncMock(side_effect=get_info))
@@ -167,19 +167,19 @@ async def test_driver_rechecks_before_upload_and_install(runtime_mocks, monkeypa
 @pytest.mark.asyncio
 async def test_runtime_guard_rechecks_after_time_validation(runtime_mocks, monkeypatch):
     async def validate(*args):
-        db.set_setting("scheduled_rollout_safety_ready", "false")
+        db.set_setting("schedule_enabled", "false")
         return True, datetime(2026, 6, 2, 3, 15)
     monkeypatch.setattr(app_module.services, "validate_time_sources", validate)
     allowed, reason = await app_module._scheduled_job_guard(scheduled_job())
     assert not allowed
-    assert "safety qualification" in reason
+    assert "Auto-Update" in reason
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scheduled", [True, False])
 @pytest.mark.parametrize("revocation", ["result", "backoff"])
 @pytest.mark.parametrize("revoke_after", [1, 2])
-async def test_upload_retries_recheck_current_readiness(
+async def test_upload_retries_recheck_current_auto_update(
     runtime_mocks, monkeypatch, scheduled, revocation, revoke_after
 ):
     job = scheduled_job()
@@ -194,12 +194,12 @@ async def test_upload_retries_recheck_current_readiness(
         attempts.append(args)
         attempt = len(attempts)
         if revocation == "result" and attempt == revoke_after:
-            db.set_setting("scheduled_rollout_safety_ready", "false")
+            db.set_setting("schedule_enabled", "false")
         return (0 if attempt == 3 else 1), b"{}"
 
     async def backoff(delay):
         if revocation == "backoff" and len(attempts) == revoke_after:
-            db.set_setting("scheduled_rollout_safety_ready", "false")
+            db.set_setting("schedule_enabled", "false")
 
     monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
     monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=info))
@@ -212,7 +212,7 @@ async def test_upload_retries_recheck_current_readiness(
 
     result = await driver.update_firmware("/tmp/tna-30x-1.2.3.bin", **options)
 
-    assert db.get_setting("scheduled_rollout_safety_ready") == "false"
+    assert db.get_setting("schedule_enabled") == "false"
     assert len(attempts) == (revoke_after if scheduled else 3)
     assert result.success is (not scheduled)
     assert job.cancelled is scheduled
@@ -220,12 +220,12 @@ async def test_upload_retries_recheck_current_readiness(
 
 
 @pytest.mark.asyncio
-async def test_upload_checks_readiness_before_first_attempt(runtime_mocks, monkeypatch):
+async def test_upload_checks_auto_update_before_first_attempt(runtime_mocks, monkeypatch):
     job = scheduled_job()
     driver = TachyonDriver("192.0.2.1", "user", "pass")
     run_curl = AsyncMock()
     monkeypatch.setattr("updater.vendors.tachyon.client._run_curl", run_curl)
-    db.set_setting("scheduled_rollout_safety_ready", "false")
+    db.set_setting("schedule_enabled", "false")
     result = await driver._client.upload_firmware(
         "/tmp/tna-30x-1.2.3.bin", admission_check=lambda: app_module._scheduled_action_decision(job)
     )
@@ -251,7 +251,7 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
         client = driver._client
         driver_clients.append(client)
         monkeypatch.setattr(client, "login", AsyncMock(return_value=True))
-        monkeypatch.setattr(client, "get_config", AsyncMock(return_value={"system": {"name": "readiness-test"}}))
+        monkeypatch.setattr(client, "get_config", AsyncMock(return_value={"system": {"name": "auto_update-test"}}))
         monkeypatch.setattr(client, "get_device_info", AsyncMock(return_value=SimpleNamespace(
                 ip="192.0.2.1", model="TNA-301", serial="SERIAL-1", current_version="1.2.3.100",
             bank1_version="1.2.3", bank2_version="1.0.0", active_bank=1,
@@ -270,7 +270,7 @@ async def test_upload_admission_denial_after_progress_stays_pending(runtime_mock
                 progress_messages.append(message)
                 progress(ip, message)
                 if message == "Uploading firmware...":
-                    db.set_setting("scheduled_rollout_safety_ready", "false")
+                    db.set_setting("schedule_enabled", "false")
 
             return await original_update(path, revoke_after_upload_message, *args, **kwargs)
 

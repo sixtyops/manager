@@ -388,7 +388,6 @@ def test_manual_update_available_during_safety_and_firmware_holds(
     _seed_303l_ap("1.5.0.54970")
     db.set_settings({
         "schedule_enabled": "true",
-        "scheduled_rollout_safety_ready": "false",
         "firmware_canary_hold_days": "9999",
     })
     data = {
