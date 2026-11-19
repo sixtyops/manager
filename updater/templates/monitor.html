@@ -3038,14 +3038,13 @@
 
                     <div class="drawer-col">
                         <div class="drawer-section-title">Settings</div>
-                        <label for="drawerBankMode">Update Mode</label>
+                        <label for="drawerBankMode">Manual Update Bank Mode</label>
                         <select id="drawerBankMode" name="drawerBankMode" data-min-role-disable="operator">
                             <option value="one">Single bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
-                        <div style="margin-top:8px;">
-                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10" data-min-role-disable="operator">
-                        </div>
+                        <div class="u-text-xs-muted">Scheduled updates use one bank.</div>
+                        <div class="u-text-xs-muted">Updates run one device at a time.</div>
                     </div>
 
                     <div class="drawer-col-wide">
@@ -3065,6 +3064,7 @@
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
                             <span id="drawerWeatherTemp" class="u-text-sm-muted" style="margin-left:auto;"></span>
                         </div>
+                        <div id="drawerWeatherStatus" class="u-text-xs-muted" role="status" aria-live="polite"></div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerZipCode">Postal / Zip</label>
                             <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56" data-min-role-disable="operator">
@@ -8988,13 +8988,27 @@
             // Hide device count section when all current - badge already conveys this
             setHidden(countSection, state === 'blocked_all_current' || effectiveAllCurrent);
 
-            // Update weather temp in drawer and header
-            if (status.weather && status.weather.temperature_c !== null) {
+            // Show weather only while the guard is enabled and data is available.
+            const weatherEnabled = document.getElementById('drawerWeatherToggle')?.classList.contains('active');
+            const weatherStatus = document.getElementById('drawerWeatherStatus');
+            const weatherTemp = document.getElementById('drawerWeatherTemp');
+            const headerTemp = document.getElementById('headerTemp');
+            if (!weatherEnabled) {
+                if (weatherStatus) weatherStatus.textContent = '';
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else if (!status.weather || status.weather.temperature_c == null) {
+                if (weatherStatus) weatherStatus.textContent = 'Weather unavailable — guard not checked';
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else {
+                if (weatherStatus) weatherStatus.textContent = '';
                 const tempDisplay = displayTemp(status.weather.temperature_c);
                 const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
-                const el = document.getElementById('drawerWeatherTemp');
-                if (el) el.textContent = `(currently ${tempDisplay}${unit})`;
-                const headerTemp = document.getElementById('headerTemp');
+                const sampleTime = status.weather.fetched_at
+                    ? new Date(status.weather.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                    : '';
+                if (weatherTemp) weatherTemp.textContent = `(sampled ${sampleTime}: ${tempDisplay}${unit})`;
                 if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
             }
 
@@ -9633,10 +9647,6 @@
                 // Bank mode
                 document.getElementById('drawerBankMode').value = s.bank_mode || 'one';
 
-                // Parallel
-                document.getElementById('drawerParallel').value = s.parallel_updates || '2';
-
-
                 // Beta
                 drawerBetaEnabled = s.firmware_beta_enabled === 'true';
                 const betaToggle = document.getElementById('drawerBetaToggle');
@@ -9742,7 +9752,7 @@
         // Attach change listeners to drawer inputs
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
-             'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
+             'drawerMinTemp', 'drawerZipCode',
              'drawerCanaryHoldDays', 'drawerCooldownDays'].forEach(id => {
 
                 const el = document.getElementById(id);
@@ -9779,7 +9789,6 @@
                 schedule_start_hour: document.getElementById('drawerStartHour').value,
                 schedule_end_hour: document.getElementById('drawerEndHour').value,
                 bank_mode: document.getElementById('drawerBankMode').value,
-                parallel_updates: document.getElementById('drawerParallel').value,
                 schedule_scope: 'all',
                 min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
                 zip_code: document.getElementById('drawerZipCode').value,

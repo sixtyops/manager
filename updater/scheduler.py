@@ -329,6 +329,8 @@ class AutoUpdateScheduler:
             weather_ok, weather_data = await services.check_weather_ok(
                 zip_code if zip_code else None, min_temp_c
             )
+            if weather_data:
+                weather_data["fetched_at"] = datetime.now().isoformat()
             self._weather_info = weather_data
             self._weather_ok = weather_ok
             self._weather_checked_today = datetime.now().strftime("%Y-%m-%d")
@@ -475,6 +477,8 @@ class AutoUpdateScheduler:
                 weather_ok, weather_data = await services.check_weather_ok(
                     zip_code if zip_code else None, min_temp_c
                 )
+                if weather_data:
+                    weather_data["fetched_at"] = datetime.now().isoformat()
                 self._weather_info = weather_data
                 self._weather_ok = weather_ok
                 self._weather_checked_today = today_key
