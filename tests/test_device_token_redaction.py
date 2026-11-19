@@ -154,7 +154,7 @@ async def test_new_login_replaces_registration_without_token_history(login_stub,
         assert await token_owner.login() is True
         assert len(scrub._device_tokens) == 1
     assert list(scrub._device_tokens.values()) == [token_owner._token]
-    assert "synthetic-replacement-token-0000" not in scrub._pattern.pattern
+    assert "synthetic-replacement-token-0000" not in scrub._pattern
     driver.logger.warning("current=%s", token_owner._token)
     stream, _ = output
     assert "current=[REDACTED]" in stream.getvalue()
