@@ -2376,13 +2376,13 @@ _SETTINGS_WRITABLE = {
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "firmware_beta_enabled", "firmware_canary_hold_days",
+    "firmware_update_cooldown_days",
     "firmware_window_ramp_minutes",
     "slack_webhook_url",
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
     "snmp_trap_community", "snmp_trap_version",
     "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
-    "pre_update_reboot",
     "smoke_test_strict",
     # Webhook settings
     "webhook_enabled", "webhook_url", "webhook_method",
@@ -2453,7 +2453,7 @@ def _validate_settings(filtered: dict):
 
     bool_like = {
         "schedule_enabled", "allow_downgrade", "weather_check_enabled",
-        "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
+        "firmware_beta_enabled", "autoupdate_enabled",
         "snmp_traps_enabled",
     }
     for key in bool_like:
@@ -2480,6 +2480,10 @@ def _validate_settings(filtered: dict):
         hold_days = _parse_int_field(filtered["firmware_canary_hold_days"], "firmware_canary_hold_days")
         if hold_days < 6 or hold_days > 365:
             raise HTTPException(400, "firmware_canary_hold_days must be between 6 and 365")
+    if "firmware_update_cooldown_days" in filtered:
+        cooldown_days = _parse_int_field(filtered["firmware_update_cooldown_days"], "firmware_update_cooldown_days")
+        if cooldown_days < 0 or cooldown_days > 365:
+            raise HTTPException(400, "firmware_update_cooldown_days must be between 0 and 365")
     if "firmware_window_ramp_minutes" in filtered:
         try:
             ramp_minutes = json.loads(filtered["firmware_window_ramp_minutes"])
@@ -5778,8 +5782,6 @@ async def _start_scheduled_update(
     if not valid_aps and not valid_switches and not any(r == "cpe" for r in device_roles.values()):
         raise RuntimeError("No devices need updating — all are at the target firmware version")
 
-    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
-
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -5800,7 +5802,6 @@ async def _start_scheduled_update(
         end_hour=end_hour,
         schedule_days=list(schedule_days or []),
         schedule_timezone=schedule_timezone,
-        pre_update_reboot=pre_update_reboot,
         enforce_window_cutoff=enforce_window_cutoff,
         window_key=window_key,
         recovery_only_devices=recovery_only_ips,
@@ -6018,8 +6019,6 @@ async def start_update(
         # not a failure, so the UI doesn't show a scary error for a no-op.
         return {"status": "already_current"}
 
-    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
-
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -6034,7 +6033,6 @@ async def start_update(
         device_parent=device_parent,
         started_at=datetime.now(),
         status="running",
-        pre_update_reboot=pre_update_reboot,
         window_key=window_key,
     )
 
@@ -6227,8 +6225,6 @@ async def update_single_device_endpoint(
 
     _check_firmware_window_admission(window_key)
 
-    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
-
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -6243,7 +6239,6 @@ async def update_single_device_endpoint(
         device_parent=device_parent,
         started_at=datetime.now(),
         status="running",
-        pre_update_reboot=pre_update_reboot,
         window_key=window_key,
     )
 

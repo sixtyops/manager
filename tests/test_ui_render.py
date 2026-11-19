@@ -56,6 +56,14 @@ def test_monitor_weather_and_bank_labels_match_behavior(authed_client):
     assert "Updates run one device at a time." in html
 
 
+def test_monitor_page_does_not_render_pre_update_reboot_switch(authed_client):
+    html = authed_client.get("/").text
+    assert "Pre-update Reboot" not in html
+    assert "drawerPreRebootToggle" not in html
+    assert "toggleDrawerPreReboot" not in html
+    assert "Each device reboots before its firmware update." in html
+
+
 def test_monitor_static_references_resolve(authed_client):
     html = authed_client.get("/").text
     refs = set(STATIC_REF.findall(html))
