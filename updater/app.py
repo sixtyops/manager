@@ -2383,7 +2383,6 @@ _SETTINGS_WRITABLE = {
     "snmp_trap_community", "snmp_trap_version",
     "autoupdate_enabled", "release_channel",
     "selected_firmware_30x", "selected_firmware_303l", "selected_firmware_tns100",
-    "pre_update_reboot",
     "smoke_test_strict",
     # Webhook settings
     "webhook_enabled", "webhook_url", "webhook_method",
@@ -2454,7 +2453,7 @@ def _validate_settings(filtered: dict):
 
     bool_like = {
         "schedule_enabled", "allow_downgrade", "weather_check_enabled",
-        "firmware_beta_enabled", "autoupdate_enabled", "pre_update_reboot",
+        "firmware_beta_enabled", "autoupdate_enabled",
         "snmp_traps_enabled",
     }
     for key in bool_like:
@@ -5787,8 +5786,6 @@ async def _start_scheduled_update(
     if not valid_aps and not valid_switches and not any(r == "cpe" for r in device_roles.values()):
         raise RuntimeError("No devices need updating — all are at the target firmware version")
 
-    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
-
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -5809,7 +5806,6 @@ async def _start_scheduled_update(
         end_hour=end_hour,
         schedule_days=list(schedule_days or []),
         schedule_timezone=schedule_timezone,
-        pre_update_reboot=pre_update_reboot,
         enforce_window_cutoff=enforce_window_cutoff,
         window_key=window_key,
         recovery_only_devices=recovery_only_ips,
@@ -6027,8 +6023,6 @@ async def start_update(
         # not a failure, so the UI doesn't show a scary error for a no-op.
         return {"status": "already_current"}
 
-    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
-
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -6043,7 +6037,6 @@ async def start_update(
         device_parent=device_parent,
         started_at=datetime.now(),
         status="running",
-        pre_update_reboot=pre_update_reboot,
         window_key=window_key,
     )
 
@@ -6236,8 +6229,6 @@ async def update_single_device_endpoint(
 
     _check_firmware_window_admission(window_key)
 
-    pre_update_reboot = db.get_setting("pre_update_reboot", "true") == "true"
-
     job_id = str(uuid.uuid4())[:8]
     job = UpdateJob(
         job_id=job_id,
@@ -6252,7 +6243,6 @@ async def update_single_device_endpoint(
         device_parent=device_parent,
         started_at=datetime.now(),
         status="running",
-        pre_update_reboot=pre_update_reboot,
         window_key=window_key,
     )
 

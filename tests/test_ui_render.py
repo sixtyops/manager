@@ -45,6 +45,14 @@ def test_monitor_page_renders_with_seeded_data(authed_client, mock_db):
         assert f'id="{element_id}"' in html, f"missing element id {element_id}"
 
 
+def test_monitor_page_does_not_render_pre_update_reboot_switch(authed_client):
+    html = authed_client.get("/").text
+    assert "Pre-update Reboot" not in html
+    assert "drawerPreRebootToggle" not in html
+    assert "toggleDrawerPreReboot" not in html
+    assert "Each device reboots before its firmware update." in html
+
+
 def test_monitor_static_references_resolve(authed_client):
     html = authed_client.get("/").text
     refs = set(STATIC_REF.findall(html))

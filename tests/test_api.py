@@ -502,26 +502,6 @@ class TestSettingsAPI:
         mock_fetcher.reselect.assert_called_once_with(True)
         mock_scheduler.force_check.assert_awaited_once()
 
-    def test_save_pre_update_reboot_setting(self, authed_client):
-        with patch("updater.app.get_fetcher", return_value=None), \
-             patch("updater.app.get_scheduler", return_value=None):
-            resp = authed_client.post("/api/settings/save", json={
-                "pre_update_reboot": "false",
-            })
-        assert resp.status_code == 200
-        resp = authed_client.get("/api/settings")
-        assert resp.json()["settings"]["pre_update_reboot"] == "false"
-
-        # Toggle back on
-        with patch("updater.app.get_fetcher", return_value=None), \
-             patch("updater.app.get_scheduler", return_value=None):
-            resp = authed_client.post("/api/settings/save", json={
-                "pre_update_reboot": "true",
-            })
-        assert resp.status_code == 200
-        resp = authed_client.get("/api/settings")
-        assert resp.json()["settings"]["pre_update_reboot"] == "true"
-
 
 class TestRolloutAPI:
     def test_manual_canary_trigger_endpoint_is_gone(self, authed_client):
@@ -790,8 +770,26 @@ class TestStartUpdateAPI:
         )
         mock_db.commit()
 
-    def test_start_update_creates_job(self, authed_client, mock_db, tmp_path):
-        """POST with valid AP IP creates a job that includes AP + CPEs."""
+    def test_start_update_creates_job_with_legacy_reboot_setting(
+        self, authed_client, mock_db, tmp_path
+    ):
+        from updater.app import db
+
+        db.set_setting("pre_update_reboot", "false")
+        resp = authed_client.get("/api/settings")
+        assert resp.status_code == 200
+        assert resp.json()["settings"]["pre_update_reboot"] == "false"
+
+        with patch("updater.app.get_fetcher", return_value=None), \
+             patch("updater.app.get_scheduler", return_value=None):
+            resp = authed_client.post("/api/settings/save", json={
+                "schedule_days": "mon,fri",
+                "pre_update_reboot": "ignored",
+            })
+        assert resp.status_code == 200
+        assert db.get_setting("schedule_days") == "mon,fri"
+        assert db.get_setting("pre_update_reboot") == "false"
+
         self._seed_ap_and_cpes(mock_db)
         fw_30x = "tna-30x-1.12.3-r55002.bin"
         fw_303l = "tna-303l-1.12.3-r7782.bin"
@@ -816,6 +814,7 @@ class TestStartUpdateAPI:
         # AP (1) + 2 authenticated CPEs = 3 devices
         assert data["device_count"] == 3
         assert mock_spawn.call_args.args[0].bank_mode == "both"
+        assert mock_spawn.call_args.args[0].pre_update_reboot is True
 
     def test_start_update_defaults_to_single_bank(self, authed_client, mock_db, tmp_path):
         """Omitting bank_mode starts a single-bank job."""

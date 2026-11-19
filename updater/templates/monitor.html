@@ -3050,10 +3050,7 @@
 
                     <div class="drawer-col-wide">
                         <div class="drawer-section-title">Options</div>
-                        <div class="toggle-sm-row">
-                            <button class="toggle-sm active" id="drawerPreRebootToggle" type="button" aria-label="Toggle pre-update reboot" aria-pressed="true" onclick="toggleDrawerPreReboot()" data-min-role-disable="operator"></button>
-                            <span class="toggle-sm-label">Pre-update Reboot</span>
-                        </div>
+                        <div class="toggle-sm-row u-text-sm-muted">Each device reboots before its firmware update.</div>
                         <div class="toggle-sm-row">
                             <button class="toggle-sm" id="drawerDowngradeToggle" type="button" aria-label="Toggle allow downgrade" aria-pressed="false" onclick="toggleDrawerDowngrade()" data-min-role-disable="operator"></button>
                             <span class="toggle-sm-label">Allow Downgrade</span>
@@ -9664,10 +9661,6 @@
                 const betaToggle = document.getElementById('drawerBetaToggle');
                 setToggleActive(betaToggle, drawerBetaEnabled);
 
-                // Pre-update Reboot
-                const preRebootToggle = document.getElementById('drawerPreRebootToggle');
-                setToggleActive(preRebootToggle, s.pre_update_reboot !== 'false');
-
                 // Downgrade
                 const downgradeToggle = document.getElementById('drawerDowngradeToggle');
                 setToggleActive(downgradeToggle, s.allow_downgrade === 'true');
@@ -9743,12 +9736,6 @@
             markDrawerDirty();
         }
 
-        function toggleDrawerPreReboot() {
-            const toggle = document.getElementById('drawerPreRebootToggle');
-            setToggleActive(toggle, !toggle.classList.contains('active'));
-            markDrawerDirty();
-        }
-
         function toggleDrawerDowngrade() {
             const toggle = document.getElementById('drawerDowngradeToggle');
             setToggleActive(toggle, !toggle.classList.contains('active'));
@@ -9809,7 +9796,6 @@
                 firmware_beta_enabled: drawerBetaEnabled ? 'true' : 'false',
                 allow_downgrade: document.getElementById('drawerDowngradeToggle').classList.contains('active') ? 'true' : 'false',
                 weather_check_enabled: document.getElementById('drawerWeatherToggle').classList.contains('active') ? 'true' : 'false',
-                pre_update_reboot: document.getElementById('drawerPreRebootToggle').classList.contains('active') ? 'true' : 'false',
             };
 
             // Empty selection = "Latest" (auto-track). Send the 'auto' sentinel so
