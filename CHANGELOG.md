@@ -124,6 +124,62 @@ All notable changes to this project are documented in this file.
 - Remove the unused address qualification matrix and lab plan inputs.
 - Firmware updates use the serial-confirmed recovery checks already in place.
 
+## 1.4.1-dev8 - 2026-11-19
+
+### Added
+- Polling records a Tachyon device's authenticated serial as its stable identity.
+- Competing serial claims create an identity conflict and do not promote the claim.
+- Write a memory report when Manager receives `SIGUSR2`.
+- Store the report in the data directory with mode `0600`.
+
+### Changed
+- The read-only bench wrapper accepts separate Manager and AP access files.
+- It keeps the legacy single-file input and validates each source before use.
+
+### Fixed
+- The dev release script can trust successful CI on the nearest earlier commit when the main head changes only ignored paths.
+- The script keeps git output from opening a pager.
+- Cut long release notes at a line boundary and link to the full release page.
+- Settings > Updates shows the host steps directly when this install cannot apply updates from the app, and it no longer shows an Update Now button there. Each step lists one command per line with a Copy button. Image installs get separate Docker Compose and docker run options and a link to the deployment guide on GitHub.
+- The release notes box always shows its first line, and a "Show all release notes" button appears when more text follows.
+- Update CPEs on the existing (ap_ip, ip) key; fill missing MACs and retain known MACs during incomplete polls.
+- Hold all observations for an IP when one poll reports conflicting MACs. Preserve held CPE data while other peers continue. Run migrations only during explicit initialization.
+- Manager records AP management settings before firmware updates.
+- The queue stops if those settings change or the AP does not return on its management address.
+- Keep active firmware job recovery data aligned when an AP address changes.
+- Update the saved recovery locator and device list with the new address.
+- Reboot Tachyon devices through the web UI endpoint. Use a reachability drop or uptime reset to confirm reboots, including firmware install reboots.
+- Find the device after a reboot changes its address. Keep recovery within the original reboot deadline.
+- Allow DHCP management addresses to change after firmware updates on the same VLAN when the expected serial is authenticated at the new address.
+- Stop the update when management VLAN, IP mode, or address data is unavailable.
+- Add a read-only bench mode to check a stopped firmware window against its AP.
+- The mode prints fixed status fields and does not resolve the stop.
+- Save AP recovery identity and selected CPE credential sources before an update.
+- Persist the AP reboot deadline immediately before reboot or firmware install.
+- Allow firmware window stop resolution outside window hours on a later local day.
+- Keep the stopped window closed, including its overnight tail.
+- Re-find an AP after its DHCP address changes during an update. Verify its identity and recovery checks before continuing the queue.
+- Wait for the AP to report its management VLAN and IP mode before accepting its address.
+- After a restart during AP recovery, Manager can record the verified AP address within the saved recovery limits.
+- The interrupted job stays failed and requires operator action. Startup does not move inventory or write to a device.
+- Use the scheduler timezone for firmware maintenance window identity.
+- Hold automatic window identity until the timezone is resolved.
+- Use unified CPE bank data to confirm an exact firmware build before skipping a manual update.
+- Start the update when only cached CPE firmware data is available.
+- The AP locator now accepts multiple verified addresses for one AP.
+- It still stops when any candidate has a conflicting identity.
+- Use the scheduler timezone for manual-day firmware stops and their resolution.
+- Block manual firmware writes when the timezone is unavailable.
+- Manual single CPE updates use the CPE role and recovery path.
+- Single AP updates still require saved AP recovery intent.
+- Require AP and switch roles before the device portal uses stored credentials.
+- Reject CPE rows returned by AP lookups and use CPE parent credentials instead.
+- Explicit device updates now confirm live firmware banks before reporting already current.
+- Stale stored banks no longer prevent the requested update from starting.
+
+### Security
+- Pin bundled nginx to 1.31.9 to fix CVE-2026-123007 and four related CVEs.
+
 ## Unreleased
 
 ### Added
