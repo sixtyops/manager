@@ -3527,7 +3527,7 @@
                             </div>
                             <div>
                                 <label style="font-size:0.7rem;color:#9ca3af;" for="webhookSecret">Secret (HMAC)</label>
-                                <input type="password" id="webhookSecret" name="webhookSecret" placeholder="Optional" class="u-input-compact">
+                                <input type="password" id="webhookSecret" name="webhookSecret" placeholder="Set / unchanged" class="u-input-compact">
                             </div>
                             <div style="grid-column:1/-1;">
                                 <label style="font-size:0.7rem;color:#9ca3af;" for="webhookHeaders">Custom Headers (JSON)</label>
@@ -7341,7 +7341,8 @@
                 document.getElementById('webhookEnabled').checked = data.settings.webhook_enabled === 'true';
                 document.getElementById('webhookUrl').value = data.settings.webhook_url || '';
                 document.getElementById('webhookMethod').value = data.settings.webhook_method || 'POST';
-                document.getElementById('webhookSecret').value = data.settings.webhook_secret || '';
+                document.getElementById('webhookSecret').value = '';
+                document.getElementById('webhookSecret').placeholder = data.settings.webhook_secret ? 'Set / unchanged' : 'Optional';
                 document.getElementById('webhookHeaders').value = data.settings.webhook_headers || '';
                 const events = (data.settings.webhook_events || 'job_completed,job_failed,device_offline,device_recovered').split(',');
                 document.getElementById('webhookEvtJobCompleted').checked = events.includes('job_completed');
@@ -7445,16 +7446,19 @@
             const url = document.getElementById('notifSlackWebhook').value.trim();
             const statusEl = document.getElementById('notifStatus');
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ slack_webhook_url: url }),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
+                return true;
             } catch (e) {
                 statusEl.textContent = 'Failed to save: ' + e.message;
                 statusEl.style.color = '#ef4444';
+                return false;
             }
         }
         async function testSlackWebhookModal() {
@@ -7466,7 +7470,7 @@
                 return;
             }
             // Save first, then test
-            await saveSlackWebhook();
+            if (!await saveSlackWebhook()) return;
             statusEl.textContent = 'Sending test...';
             statusEl.style.color = '#6b7280';
             try {
@@ -7505,22 +7509,25 @@
             const pw = document.getElementById('emailSmtpPassword').value;
             if (pw) settings.email_smtp_password = pw;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(settings),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
+                return true;
             } catch (e) {
                 statusEl.textContent = 'Failed to save: ' + e.message;
                 statusEl.style.color = '#ef4444';
+                return false;
             }
         }
 
         async function testEmail() {
             const statusEl = document.getElementById('emailStatus');
-            await saveEmailSettings();
+            if (!await saveEmailSettings()) return;
             statusEl.textContent = 'Sending test email...';
             statusEl.style.color = '#6b7280';
             try {
@@ -7562,9 +7569,11 @@
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
+                return true;
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save';
                 statusEl.style.color = '#ef4444';
+                return false;
             }
         }
 
@@ -7575,7 +7584,7 @@
                 statusEl.style.color = '#f59e0b';
                 return;
             }
-            await saveSnmpSettings();
+            if (!await saveSnmpSettings()) return;
             statusEl.textContent = 'Sending test trap...';
             statusEl.style.color = '#6b7280';
             try {
@@ -7619,10 +7628,11 @@
                 webhook_enabled: document.getElementById('webhookEnabled').checked ? 'true' : 'false',
                 webhook_url: document.getElementById('webhookUrl').value.trim(),
                 webhook_method: document.getElementById('webhookMethod').value,
-                webhook_secret: document.getElementById('webhookSecret').value,
                 webhook_headers: headers || '{}',
                 webhook_events: events.join(','),
             };
+            const secret = document.getElementById('webhookSecret').value;
+            if (secret) settings.webhook_secret = secret;
             try {
                 const resp = await fetch('/api/settings', {
                     method: 'PUT',
@@ -7632,9 +7642,11 @@
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
                 statusEl.style.color = '#10b981';
+                return true;
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save';
                 statusEl.style.color = '#ef4444';
+                return false;
             }
         }
 
@@ -7650,7 +7662,7 @@
                 statusEl.style.color = '#f59e0b';
                 return;
             }
-            await saveWebhookSettings();
+            if (!await saveWebhookSettings()) return;
             statusEl.textContent = 'Sending test webhook...';
             statusEl.style.color = '#6b7280';
             try {
@@ -8713,36 +8725,42 @@
 
         async function toggleAppAutoUpdate() {
             const toggle = document.getElementById('appAutoUpdateToggle');
-            setToggleActive(toggle, !toggle.classList.contains('active'));
+            const oldState = toggle.classList.contains('active');
+            setToggleActive(toggle, !oldState);
             const enabled = toggle.classList.contains('active') ? 'true' : 'false';
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ autoupdate_enabled: enabled }),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 const statusEl = document.getElementById('appUpdateStatus');
                 if (statusEl) {
                     statusEl.textContent = 'Saved';
                     setTimeout(() => loadAppUpdateStatus(), 1500);
                 }
-            } catch (e) {}
+            } catch (e) {
+                setToggleActive(toggle, oldState);
+                const statusEl = document.getElementById('appUpdateStatus');
+                if (statusEl) statusEl.textContent = e.message || 'Failed to save';
+            }
         }
 
         async function saveReleaseChannel() {
             const channel = document.getElementById('appReleaseChannel').value;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ release_channel: channel }),
                 });
-                const statusEl = document.getElementById('appUpdateStatus');
-                if (statusEl) {
-                    statusEl.textContent = 'Channel updated to ' + channel;
-                    setTimeout(() => loadAppUpdateStatus(), 1500);
-                }
-            } catch (e) {}
+                if (!resp.ok) throw new Error(await readSaveError(resp));
+                setAppUpdateStatusMessage('Channel updated to ' + channel, 'success');
+                setTimeout(() => loadAppUpdateStatus(), 1500);
+            } catch (e) {
+                setAppUpdateStatusMessage(e.message || 'Failed to save', 'error');
+            }
         }
 
         async function checkAppUpdate() {
@@ -9049,13 +9067,17 @@
             const newState = !toggle.classList.contains('active');
             setToggleActive(toggle, newState);
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ schedule_enabled: newState ? 'true' : 'false' }),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
                 showSavedIndicator();
-            } catch (e) {}
+            } catch (e) {
+                setToggleActive(toggle, !newState);
+                showToast(e.message || 'Failed to save', 'error');
+            }
         }
 
         // ── Column Mode (firmware / config) ──
@@ -9668,7 +9690,7 @@
 
                 // Firmware Hold & per-device cooldown
                 document.getElementById('drawerCanaryHoldDays').value = s.firmware_canary_hold_days || '6';
-                document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days || '30';
+                document.getElementById('drawerCooldownDays').value = s.firmware_update_cooldown_days ?? '30';
 
                 drawerSettingsLoaded = true;
             } catch (e) {}
@@ -9780,8 +9802,7 @@
                 schedule_end_hour: document.getElementById('drawerEndHour').value,
                 bank_mode: document.getElementById('drawerBankMode').value,
                 parallel_updates: document.getElementById('drawerParallel').value,
-                schedule_scope: 'all',
-                min_temperature_c: String(storageTemp(parseFloat(document.getElementById('drawerMinTemp').value) || 14)),
+                min_temperature_c: String(storageTemp(Number.isFinite(parseFloat(document.getElementById('drawerMinTemp').value)) ? parseFloat(document.getElementById('drawerMinTemp').value) : 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
                 firmware_canary_hold_days: document.getElementById('drawerCanaryHoldDays').value,
                 firmware_update_cooldown_days: document.getElementById('drawerCooldownDays').value,
@@ -11785,13 +11806,14 @@
             const hour = parseInt(value);
             if (isNaN(hour) || hour < 0 || hour > 23) return;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({config_enforce_hour: String(hour)}),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
             } catch (e) {
-                console.debug('Failed to update enforce hour:', e);
+                showToast(e.message || 'Failed to save the enforcement hour', 'error');
             }
         }
 
@@ -11799,13 +11821,14 @@
             const mins = parseInt(value);
             if (isNaN(mins) || mins < 1) return;
             try {
-                await fetch('/api/settings', {
+                const resp = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({config_enforce_cooldown_minutes: String(mins)}),
                 });
+                if (!resp.ok) throw new Error(await readSaveError(resp));
             } catch (e) {
-                console.debug('Failed to update cooldown:', e);
+                showToast(e.message || 'Failed to save the enforcement cooldown', 'error');
             }
         }
 

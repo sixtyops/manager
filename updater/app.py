@@ -2376,6 +2376,7 @@ _SETTINGS_WRITABLE = {
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
     "firmware_beta_enabled", "firmware_canary_hold_days",
+    "firmware_update_cooldown_days",
     "firmware_window_ramp_minutes",
     "slack_webhook_url",
     "snmp_traps_enabled", "snmp_trap_host", "snmp_trap_port",
@@ -2484,6 +2485,10 @@ def _validate_settings(filtered: dict):
         hold_days = _parse_int_field(filtered["firmware_canary_hold_days"], "firmware_canary_hold_days")
         if hold_days < 6 or hold_days > 365:
             raise HTTPException(400, "firmware_canary_hold_days must be between 6 and 365")
+    if "firmware_update_cooldown_days" in filtered:
+        cooldown_days = _parse_int_field(filtered["firmware_update_cooldown_days"], "firmware_update_cooldown_days")
+        if cooldown_days < 0 or cooldown_days > 365:
+            raise HTTPException(400, "firmware_update_cooldown_days must be between 0 and 365")
     if "firmware_window_ramp_minutes" in filtered:
         try:
             ramp_minutes = json.loads(filtered["firmware_window_ramp_minutes"])
