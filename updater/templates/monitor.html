@@ -37,6 +37,11 @@
             --success-light: #34d399;
             --success-text: #065f46;
             --success-bg: #d1fae5;
+            --state-neutral-bg: #F3F4F6;
+            --state-neutral-text: #374151;
+            --warning-border: #B45309;
+            --danger-fill: #B91C1C;
+            --danger-fill-text: #FFFFFF;
             --warning: #f59e0b;
             --warning-hover: #d97706;
             --warning-text: #92400e;
@@ -55,7 +60,7 @@
             --info-bg: #dbeafe;
             --info-bg-subtle: #eff6ff;
             --info-border: #bfdbfe;
-            --toggle-off: #d1d5db;
+            --toggle-off: #FFFFFF;
             --bg-subtle: #f9fafb;
             --overlay: rgba(17, 24, 39, 0.5);
             --shadow-pop: 0 8px 24px rgba(0,0,0,.10);
@@ -362,7 +367,7 @@
             border: none;
             padding: 0;
         }
-        .toggle.active { background: var(--primary); }
+        .toggle.active { background: var(--primary-fill); border-color: var(--primary-fill); }
         .toggle::after {
             content: '';
             position: absolute;
@@ -370,7 +375,7 @@
             left: 2px;
             width: 16px;
             height: 16px;
-            background: white;
+            background: #6B7280;
             border-radius: 50%;
             transition: transform var(--tr-base);
         }
@@ -378,6 +383,7 @@
 
         /* Toggle switch — compact (28x16) */
         .toggle-sm {
+            border: 1.5px solid #6B7280;
             position: relative;
             width: 28px;
             height: 16px;
@@ -389,7 +395,7 @@
             border: none;
             padding: 0;
         }
-        .toggle-sm.active { background: var(--primary); }
+        .toggle-sm.active { background: var(--primary-fill); border-color: var(--primary-fill); }
         .toggle-sm::after {
             content: '';
             position: absolute;
@@ -397,7 +403,7 @@
             left: 2px;
             width: 12px;
             height: 12px;
-            background: white;
+            background: #6B7280;
             border-radius: 50%;
             transition: transform var(--tr-base);
         }
@@ -539,7 +545,7 @@
             font-weight: 600;
             text-transform: uppercase;
         }
-        .history-status-badge.success { background: #dcfce7; color: #16a34a; }
+        .history-status-badge.success { background: #dcfce7; color: var(--state-neutral-text); }
         .history-status-badge.failed { background: #fef2f2; color: #dc2626; }
         .history-status-badge.skipped { background: #f3f4f6; color: #6b7280; }
         .history-status-badge.cancelled { background: #fef3c7; color: #d97706; }
@@ -552,7 +558,7 @@
             border-radius: var(--radius-sm);
             margin-right: 3px;
         }
-        .history-stage-pill.ok { background: #dcfce7; color: #16a34a; }
+        .history-stage-pill.ok { background: #dcfce7; color: var(--state-neutral-text); }
         .history-stage-pill.fail { background: #fef2f2; color: #dc2626; }
 
         .history-detail-row td {
@@ -620,7 +626,7 @@
         .users-table .user-btn:hover { background:#e5e7eb; color:var(--text,#111827); }
         .users-table .user-btn-danger { color:#fff; background:#ef4444; }
         .users-table .user-btn-danger:hover { background:#dc2626; color:#fff; }
-        .user-status-active { color:#16a34a; font-weight:500; }
+        .user-status-active { color: var(--state-neutral-text); font-weight:500; }
         .user-status-disabled { color:#dc2626; font-weight:500; }
         .users-table .user-btn[disabled],
         .users-table .user-btn[disabled]:hover { opacity:0.45; cursor:not-allowed; background:var(--bg,#f3f4f6); color:var(--text-muted,#6b7280); }
@@ -1764,7 +1770,13 @@
             margin-bottom: 6px;
         }
         .config-compliance-ok { color: #10b981; }
-        .config-compliance-warn { color: #f59e0b; }
+        .msg-warn { color: var(--warning-text); font-weight: 600; }
+        .msg-warn::before { content: "⚠ "; }
+        .msg-ok { color: var(--state-neutral-text); font-weight: 600; }
+        .msg-ok::before { content: "✓ "; }
+        .msg-err { color: var(--danger-fill); font-weight: 600; }
+        .msg-err::before { content: "✕ "; }
+        .config-compliance-warn { color: var(--warning-text); }
         .config-compliance-unknown { color: #9ca3af; }
 
         .drawer-settings-grid {
@@ -1832,9 +1844,11 @@
         }
 
         .drawer-day-btn.active {
-            background: var(--primary-bg);
-            color: var(--primary-text);
-            border-color: var(--primary);
+            background: var(--primary-fill);
+            color: #FFFFFF;
+            border-color: var(--primary-fill);
+            font-size: var(--text-sm);
+            padding: 4px 8px;
         }
 
         .toggle-sm-row {
@@ -1954,12 +1968,14 @@
         }
 
         .drawer-fw-chip.active:hover {
-            background: var(--primary-bg-hover);
+            background: var(--primary-fill-hover);
         }
 
+        .drawer-fw-chip.active::before { content: "✓"; font-family: var(--font-sans); }
         .drawer-fw-chip.active {
-            background: var(--primary-bg);
-            color: var(--primary-text);
+            background: var(--primary-fill);
+            color: #FFFFFF;
+            border: 1px solid var(--primary-fill);
             font-weight: 600;
         }
 
@@ -2122,8 +2138,8 @@
         .status-bar-badge.idle { background: var(--border-light); color: var(--text-muted); }
         .status-bar-badge.waiting { background: var(--warning-bg); color: var(--warning-text); }
         .status-bar-badge.running { background: var(--info-bg); color: var(--info-text); }
-        .status-bar-badge.blocked { background: var(--danger-bg); color: var(--danger-text); }
-        .status-bar-badge.current { background: var(--success-bg); color: var(--success-text); }
+        .status-bar-badge.blocked { background: var(--danger-fill); color: var(--danger-fill-text); }
+        .status-bar-badge.current { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
 
         .status-icon {
             width: 12px;
@@ -2355,13 +2371,13 @@
         }
         .fleet-chip .gl { font-size: var(--text-md); line-height: 1; }
         .fleet-chip .n { font-weight: 800; color: var(--text-subtle); }
-        .fleet-chip.s-cur .gl { color: var(--success); }
+        .fleet-chip.s-cur .gl { color: var(--state-neutral-text); }
         .fleet-chip.s-beh .gl { color: var(--warning); }
         .fleet-chip.s-off .gl { color: var(--danger-bright); }
         .fleet-chip:hover:not(.disabled) { background: var(--border-light); }
-        .fleet-chip.active.s-cur { background: var(--success-bg); border-color: var(--success-light); color: var(--success-text); }
-        .fleet-chip.active.s-beh { background: var(--warning-bg); border-color: var(--warning-light); color: var(--warning-text); }
-        .fleet-chip.active.s-off { background: var(--danger-bg); border-color: var(--danger-bright); color: var(--danger-text); }
+        .fleet-chip.active.s-cur { background: var(--state-neutral-bg); border-color: transparent; color: var(--state-neutral-text); }
+        .fleet-chip.active.s-beh { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); }
+        .fleet-chip.active.s-off { background: var(--danger-fill); border-color: transparent; color: var(--danger-fill-text); }
         .fleet-chip.active .n { color: inherit; }
         .fleet-chip.disabled { opacity: 0.4; cursor: default; }
 
@@ -4514,7 +4530,7 @@
                     if (el) {
                         if (message.failed > 0) {
                             el.textContent = `Push complete: ${message.succeeded} succeeded, ${message.failed} failed out of ${message.total}`;
-                            el.style.color = '#f59e0b';
+                            el.classList.add('msg-warn');
                         } else {
                             el.textContent = `Push complete: ${message.succeeded}/${message.total} devices updated`;
                             el.style.color = '#10b981';
@@ -7463,7 +7479,7 @@
             const statusEl = document.getElementById('notifStatus');
             if (!url) {
                 statusEl.textContent = 'Enter a webhook URL first';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
             // Save first, then test
@@ -7578,7 +7594,7 @@
             const statusEl = document.getElementById('snmpStatus');
             if (!document.getElementById('snmpTrapsEnabled').checked) {
                 statusEl.textContent = 'Enable SNMP traps first';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
             if (!await saveSnmpSettings()) return;
@@ -7651,12 +7667,12 @@
             const statusEl = document.getElementById('webhookStatus');
             if (!document.getElementById('webhookEnabled').checked) {
                 statusEl.textContent = 'Enable webhooks first';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
             if (!document.getElementById('webhookUrl').value.trim()) {
                 statusEl.textContent = 'Enter a webhook URL first';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
             if (!await saveWebhookSettings()) return;
@@ -8071,7 +8087,7 @@
         async function pushRadiusToDevices() {
             const statusEl = document.getElementById('radiusStatus');
             const addr = document.getElementById('authRadiusHost').value.trim();
-            if (!addr) { statusEl.textContent = 'Enter an advertised address first'; statusEl.style.color = '#f59e0b'; return; }
+            if (!addr) { statusEl.textContent = 'Enter an advertised address first'; statusEl.classList.add('msg-warn'); return; }
             statusEl.textContent = 'Pushing RADIUS config to devices...';
             statusEl.style.color = '#6b7280';
             try {
@@ -8139,7 +8155,7 @@
 
             if (enabled && !secret && !secretAlreadySet) {
                 statusEl.textContent = 'Shared secret required when RADIUS is enabled';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
 
@@ -8291,12 +8307,12 @@
 
             if (!username || !password) {
                 statusEl.textContent = 'Username and password are required';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
             if (password.length < 12) {
                 statusEl.textContent = 'Password must be at least 12 characters';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
 
@@ -8328,7 +8344,7 @@
 
             if (!client_spec) {
                 statusEl.textContent = 'Client IP or CIDR is required';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
 
@@ -8452,7 +8468,7 @@
 
             if (enabled && (!provider_url || !client_id || (!client_secret && !secretAlreadySet))) {
                 statusEl.textContent = 'Provider URL, Client ID, and Client Secret required when enabled';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
 
@@ -8508,7 +8524,7 @@
 
             if (enabled && (!username || (!password && !passwordAlreadySet))) {
                 statusEl.textContent = 'Username and password required when enabled';
-                statusEl.style.color = '#f59e0b';
+                statusEl.classList.add('msg-warn');
                 return;
             }
 
@@ -9503,7 +9519,7 @@
                         <td class="u-history-cell-time">${escapeHtml(timeStr)}</td>
                         <td class="u-history-cell-mono">${escapeHtml(job.job_id || '-')}</td>
                         <td class="u-history-cell">${durStr}</td>
-                        <td class="u-history-cell" style="color:#16a34a;">${job.success_count || 0}</td>
+                        <td class="u-history-cell" class="msg-ok">${job.success_count || 0}</td>
                         <td class="u-history-cell" style="color:${job.failed_count ? '#dc2626' : 'inherit'};">${job.failed_count || 0}</td>
                         <td class="u-history-cell">${job.skipped_count || 0}</td>
                         <td class="u-history-cell">${escapeHtml(job.bank_mode || '-')}</td>
@@ -9712,7 +9728,7 @@
             const dot = document.getElementById('drawerUnsavedDot');
             if (dot) dot.classList.add('visible');
             const status = document.getElementById('drawerSaveStatus');
-            if (status) { status.textContent = 'Unsaved changes'; status.style.color = '#f59e0b'; }
+            if (status) { status.textContent = 'Unsaved changes'; status.classList.add('msg-warn'); }
         }
 
         function clearDrawerDirty() {
@@ -10108,7 +10124,7 @@
                         el.style.color = '';
                     } else {
                         el.textContent = 'Stale (' + diffDays + ' days)';
-                        el.style.color = '#f59e0b';
+                        el.classList.add('msg-warn');
                     }
                 }
             } catch (e) {}
@@ -10432,7 +10448,7 @@
                 a.remove();
                 URL.revokeObjectURL(url);
                 status.textContent = 'CSV exported successfully';
-                status.style.color = '#16a34a';
+                status.classList.add('msg-ok');
                 document.getElementById('exportPassphrase').value = '';
             } catch (e) {
                 status.textContent = 'Export error: ' + e.message;
@@ -10494,7 +10510,7 @@
                 }
                 const totalFailures = failures + (ru.failed || 0);
                 status.textContent = summary;
-                status.style.color = totalFailures ? '#dc2626' : '#16a34a';
+                status.style.color = totalFailures ? 'var(--danger-fill)' : 'var(--state-neutral-text)';
 
                 document.getElementById('importPassphrase').value = '';
                 fileInput.value = '';
