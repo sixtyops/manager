@@ -6,12 +6,14 @@ chosen device through the fleet "needs update?" heuristic and dropped it when
 the heuristic guessed no update was needed. Manual updates must push the chosen
 firmware unless the device is provably already on that exact build.
 """
-from unittest.mock import patch
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from updater import database as db
 from updater import app as app_module
+from updater.vendors.tachyon.client import BootBankRead
 
 # Clean vendor filenames (no "beta" token — the channel is decided elsewhere).
 FW_30X = "tna-30x-1.15.0-r55142-20260521-tn-110-prs-squashfs-sysupgrade.bin"
@@ -20,6 +22,14 @@ FW_303L_CPE_TARGET = "tna-303l-1.15.1-r55177-20260521-sysupgrade.bin"
 
 AP_IP = "10.0.0.50"
 MODEL_303L = "TNA-303L-65"
+
+
+@pytest.fixture(autouse=True)
+def live_banks():
+    with patch("updater.vendors.tachyon.TachyonDriver.connect", new_callable=AsyncMock, return_value=True), \
+         patch("updater.vendors.tachyon.TachyonDriver.get_bootbank_info", new_callable=AsyncMock) as read:
+        read.return_value = BootBankRead("1.5.0.54980", "1.5.0.54970", 1)
+        yield read
 
 
 @pytest.fixture
@@ -291,8 +301,9 @@ class TestUpdateDevice:
         spawn.assert_called_once()
 
     def test_cpe_active_bank_exact_build_reports_already_current(
-        self, authed_client, mock_db, fw_dir,
+        self, authed_client, mock_db, fw_dir, live_banks,
     ):
+        live_banks.return_value = BootBankRead("1.15.0.55151", "1.15.1.55177", 2)
         cpe_ip = "10.0.0.60"
         _seed_303l_ap("1.5.0.54980")
         db.upsert_cpe(AP_IP, {
@@ -388,3 +399,147 @@ def test_manual_update_available_during_safety_and_firmware_holds(
     assert response.status_code == 200, response.text
     assert response.json()["job_id"]
     spawn.assert_called_once()
+
+
+class TestLiveExactBuild:
+    TARGET = "1.5.0.54980"
+    OLD = "1.5.0.54970"
+    SWITCH_FW = "tns-100-1.5.0-r54980-sysupgrade.bin"
+
+    def _request(self, client, fw_dir, role="ap", bank_mode="one"):
+        _seed_303l_ap(self.TARGET)
+        ip = AP_IP
+        extra = {}
+        if role == "cpe":
+            ip = "10.0.0.60"
+            db.upsert_cpe(AP_IP, {
+                "ip": ip, "model": MODEL_303L,
+                "firmware_version": self.TARGET, "auth_status": "ok",
+            })
+            db.upsert_device(ip, "cpe", "unused", "unused", model=MODEL_303L)
+        elif role == "switch":
+            ip = "10.0.0.70"
+            db.upsert_device(ip, "switch", "root", "pass", model="TNS-100")
+            (fw_dir / self.SWITCH_FW).write_bytes(b"x")
+            extra["firmware_file_tns100"] = self.SWITCH_FW
+        db.update_device_status(ip, active_bank=2,
+                                bank1_version=self.TARGET, bank2_version=self.TARGET)
+        return TestUpdateDevice()._update_device(client, ip=ip, bank_mode=bank_mode, **extra)
+
+    @pytest.mark.parametrize("role", ["ap", "cpe", "switch"])
+    def test_stale_stored_active_bank_starts_job(
+        self, authed_client, mock_db, fw_dir, live_banks, role,
+    ):
+        live_banks.return_value = BootBankRead(self.OLD, self.TARGET, 1)
+        with patch("updater.app._spawn_update_job") as spawn:
+            response = self._request(authed_client, fw_dir, role)
+        assert response.status_code == 200, response.text
+        assert response.json()["job_id"]
+        spawn.assert_called_once()
+        live_banks.assert_awaited_once()
+
+    @pytest.mark.parametrize("role", ["ap", "cpe", "switch"])
+    @pytest.mark.parametrize("mode,inactive,noop", [
+        ("one", OLD, True), ("both", TARGET, True),
+        ("both", OLD, False), ("both", None, False),
+    ])
+    def test_live_match_and_both_bank_rules(
+        self, authed_client, mock_db, fw_dir, live_banks, role, mode, inactive, noop,
+    ):
+        live_banks.return_value = BootBankRead(inactive, "1.5.0.r54980", 2)
+        with patch("updater.app._spawn_update_job") as spawn:
+            response = self._request(authed_client, fw_dir, role, mode)
+        assert response.status_code == 200, response.text
+        if noop:
+            assert response.json() == {"status": "already_current", "version": self.TARGET}
+            spawn.assert_not_called()
+        else:
+            assert response.json()["job_id"]
+            spawn.assert_called_once()
+
+    @pytest.mark.parametrize("banks", [
+        BootBankRead(TARGET, TARGET, 1, "warning"),
+        BootBankRead(TARGET, TARGET, 0), BootBankRead(TARGET, TARGET, True),
+        BootBankRead(TARGET, TARGET, "1"), BootBankRead(TARGET, TARGET, None),
+        BootBankRead(None, TARGET, 1), BootBankRead(TARGET, None, 2),
+        BootBankRead("", TARGET, 1), BootBankRead(123, TARGET, 1),
+        None, {}, object(),
+    ])
+    def test_incomplete_or_malformed_read_cannot_use_stored_banks(
+        self, authed_client, mock_db, fw_dir, live_banks, banks,
+    ):
+        live_banks.return_value = banks
+        with patch("updater.app._spawn_update_job") as spawn:
+            response = self._request(authed_client, fw_dir)
+        assert response.status_code == 200, response.text
+        assert response.json()["job_id"]
+        spawn.assert_called_once()
+
+    @pytest.mark.parametrize("failure", ["login", "read", "connect-timeout", "read-timeout"])
+    @pytest.mark.parametrize("stopped", [False, True])
+    def test_failed_proof_uses_existing_admission(
+        self, authed_client, mock_db, fw_dir, live_banks, failure, stopped,
+    ):
+        if stopped:
+            db.stop_firmware_window(app_module._manual_firmware_window_key(),
+                                    "stopped-job", AP_IP, "flash", "Upload failed")
+        connect = AsyncMock(return_value=True)
+        if failure == "login":
+            connect.return_value = False
+        elif failure == "connect-timeout":
+            connect.side_effect = TimeoutError
+        else:
+            live_banks.side_effect = TimeoutError if failure == "read-timeout" else RuntimeError
+        with patch("updater.vendors.tachyon.TachyonDriver.connect", connect), \
+             patch("updater.app._spawn_update_job") as spawn:
+            response = self._request(authed_client, fw_dir)
+        if stopped:
+            assert response.status_code == 409
+            spawn.assert_not_called()
+        else:
+            assert response.status_code == 200, response.text
+            assert response.json()["job_id"]
+            spawn.assert_called_once()
+        if failure in ("login", "connect-timeout"):
+            live_banks.assert_not_awaited()
+
+    def test_connect_and_read_share_one_deadline(
+        self, authed_client, mock_db, fw_dir, live_banks,
+    ):
+        real_timeout = asyncio.timeout
+
+        async def connect():
+            await asyncio.sleep(0.01)
+            return True
+
+        async def read():
+            await asyncio.Event().wait()
+
+        live_banks.side_effect = read
+        with patch("updater.vendors.tachyon.TachyonDriver.connect", side_effect=connect), \
+             patch("updater.app.asyncio.timeout", side_effect=lambda seconds: real_timeout(0.03)) as budget, \
+             patch("updater.app._spawn_update_job") as spawn:
+            response = self._request(authed_client, fw_dir)
+        budget.assert_called_once_with(10)
+        live_banks.assert_awaited_once()
+        assert response.json()["job_id"]
+        spawn.assert_called_once()
+
+    @pytest.mark.parametrize("role", ["ap", "cpe", "switch"])
+    def test_each_request_uses_fresh_driver_and_resolved_credentials(
+        self, authed_client, mock_db, fw_dir, live_banks, role,
+    ):
+        from updater.vendors.tachyon import TachyonDriver
+
+        original_init = TachyonDriver.__init__
+        with patch.object(TachyonDriver, "__init__", autospec=True,
+                          side_effect=original_init) as create:
+            for _ in range(2):
+                response = self._request(authed_client, fw_dir, role)
+                assert response.json()["status"] == "already_current"
+        assert create.call_count == 2
+        first, second = create.call_args_list
+        assert first.args[0] is not second.args[0]
+        expected_ip = {"ap": AP_IP, "cpe": "10.0.0.60", "switch": "10.0.0.70"}[role]
+        assert first.args[1:] == second.args[1:] == (expected_ip, "root", "pass")
+        assert live_banks.await_count == 2
