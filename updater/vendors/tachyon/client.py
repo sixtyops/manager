@@ -936,6 +936,7 @@ class TachyonClient:
         self.read_deadline = min(deadline, previous_read_deadline or deadline)
         dropped = False
         recovered = not recovery_callback
+        reboot_proven = False
         try:
             while loop.time() < self.read_deadline:
                 status, body = 0, ""
@@ -949,16 +950,23 @@ class TachyonClient:
                 except (RuntimeError, OSError, TimeoutError):
                     dropped = True
                 uptime = self._parse_uptime(body) if status == 200 else None
-                proof = dropped or (baseline is not None and uptime is not None and uptime < baseline)
-                if (recovered and proof and status == 200
+                reboot_proven = reboot_proven or dropped or (
+                    baseline is not None and uptime is not None and uptime < baseline
+                )
+                if (recovered and reboot_proven and status == 200
                         and self._reboot_api_ready(status, body) and loop.time() < self.read_deadline):
                     logger.info("%s reboot confirmed and API ready", self.ip)
                     return True
-                if recovery_callback and not recovered:
+                # A drop at the old address is proof even if only a new address returns.
+                # Let recovery find that address before requiring authenticated readiness.
+                if recovery_callback and not recovered and reboot_proven:
+                    remaining = self.read_deadline - loop.time()
+                    if remaining <= 0:
+                        break
                     try:
                         recovered = bool(await asyncio.wait_for(
                             recovery_callback(deadline, started),
-                            timeout=self.read_deadline - loop.time(),
+                            timeout=remaining,
                         ))
                     except asyncio.TimeoutError:
                         raise RuntimeError("Recovery callback timed out") from None

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from updater.vendors.tachyon.client import TachyonClient
+from updater.vendors.tachyon.client import DeviceInfo, TachyonClient
 
 
 def system(uptime):
@@ -73,7 +73,7 @@ async def test_callback_success_does_not_replace_reboot_proof(clock):
     client._curl = AsyncMock(side_effect=[system(1000), (200, ""), *[system(1001)] * 4])
     callback = AsyncMock(return_value=True)
     assert not await client.reboot(timeout=7, recovery_callback=callback)
-    callback.assert_awaited_once()
+    callback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_reboot_transport_error_fails_without_wait():
 @pytest.mark.asyncio
 async def test_recovery_retarget_requires_uptime_read_at_new_address(clock):
     client = TachyonClient("192.0.2.1", "synthetic", "synthetic")
-    client._curl = AsyncMock(side_effect=[system(1000), (200, ""), system(1001), system(2)])
+    client._curl = AsyncMock(side_effect=[system(1000), (200, ""), system(2), system(3)])
 
     async def recover(deadline, started):
         assert deadline == started + 7
@@ -156,3 +156,77 @@ async def test_reboot_reauthenticates_after_drop(clock, expired):
 @pytest.mark.parametrize("uptime", [None, True, "2", -1, float("nan"), float("inf")])
 def test_invalid_uptime_cannot_prove_reset(uptime):
     assert TachyonClient._parse_uptime(json.dumps({"system": {"uptime": uptime}})) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["pre-update", "install"])
+async def test_reboot_recovery_finds_device_only_at_new_address(clock, stage):
+    client = TachyonClient("192.0.2.1", "synthetic", "synthetic")
+    started = clock[0]
+    observations = []
+    installed = False
+    dropped = False
+    recovered = False
+
+    async def request(method, endpoint):
+        nonlocal dropped
+        observations.append((client.ip, method, endpoint))
+        assert client.read_deadline == started + 7
+        if method == "POST":
+            return 200, ""
+        if stage == "pre-update" and len(observations) == 1:
+            return system(1000)
+        if not dropped:
+            # The old API can still answer before the actual reboot starts.
+            if len(observations) == (3 if stage == "pre-update" else 1):
+                return system(1001)
+            dropped = True
+            raise RuntimeError("old address is unreachable")
+        assert recovered, "recovery must run immediately after the drop"
+        assert client.ip == "192.0.2.2"
+        return system(2)
+
+    async def recover(deadline, reboot_started):
+        nonlocal recovered
+        assert dropped
+        assert deadline == started + 7
+        assert reboot_started == started
+        client.ip = "192.0.2.2"
+        client._base_url = "https://192.0.2.2"
+        recovered = True
+        return True
+
+    async def login():
+        assert client.ip == ("192.0.2.2" if recovered else "192.0.2.1")
+        assert not dropped or recovered, "never require login at the unreachable old address"
+        return True
+
+    async def info():
+        return DeviceInfo(ip=client.ip, model="TNA-301", current_version=(
+            "1.15.0.55142" if installed else "1.12.3.54970"
+        ))
+
+    async def install():
+        nonlocal installed
+        installed = True
+        return True
+
+    client._curl = AsyncMock(side_effect=request)
+    client.login = AsyncMock(side_effect=login)
+    callback = AsyncMock(side_effect=recover)
+    if stage == "pre-update":
+        assert await client.reboot(timeout=7, recovery_callback=callback)
+    else:
+        client.get_device_info = AsyncMock(side_effect=info)
+        client.upload_firmware = AsyncMock(return_value=True)
+        client.trigger_update = AsyncMock(side_effect=install)
+        result = await client.update_firmware(
+            "/tmp/tna-30x-1.15.0-r55142.bin", reboot_timeout=7,
+            recovery_callback=callback,
+        )
+        assert result.success, result.error
+        assert result.new_version == "1.15.0.55142"
+    callback.assert_awaited_once()
+    assert client.ip == "192.0.2.2"
+    assert client.read_deadline is None
+    assert client.last_reboot_deadline == started + 7
