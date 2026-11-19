@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -379,6 +379,7 @@ class AutoUpdateScheduler:
         """Start the scheduler check loop."""
         if self._running:
             return
+        self._restore_deferral()
         self._running = True
         self._task = asyncio.create_task(self._check_loop())
         logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")
@@ -387,6 +388,53 @@ class AutoUpdateScheduler:
         # can outlive the scheduler (e.g. in tests, leaving "Task was destroyed but
         # it is pending" warnings at loop teardown).
         self._weather_task = asyncio.create_task(self._fetch_weather_initial())
+
+    def _restore_deferral(self):
+        saved = db.get_latest_scheduled_deferral()
+        if not saved or saved["failed_count"] != 0 or saved["cancelled_count"] != 0:
+            return
+        try:
+            summary, encoded_key = saved["completion_details"].rsplit(" | window_key=", 1)
+            window_key = json.loads(encoded_key)
+            if (not summary.strip() or not isinstance(window_key, list) or len(window_key) != 2
+                    or window_key[0] != "firmware"
+                    or date.fromisoformat(window_key[1]).isoformat() != window_key[1]):
+                return
+            zone = ZoneInfo(saved["timezone"])
+            datetime.fromisoformat(saved["completed_at"])
+            devices = json.loads(saved["devices_json"])
+            if not isinstance(devices, dict) or not all(isinstance(device, dict) for device in devices.values()):
+                return
+            reasons = {}
+            for ip, device in devices.items():
+                reason = device.get("deferral_reason")
+                message = device.get("deferral_message")
+                if reason is None and message is None:
+                    continue
+                if (reason not in ("cutoff_reached", "timing_unavailable", "window_closed")
+                        or not isinstance(message, str) or not message.strip()):
+                    return
+                reasons[ip] = reason
+            success_count = saved["success_count"]
+            if not reasons or not isinstance(success_count, int) or success_count < 0:
+                return
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            return
+
+        settings = db.get_all_settings() | {"timezone": zone.key}
+        start = _as_int(settings.get("schedule_start_hour", "3"), 3)
+        end = _as_int(settings.get("schedule_end_hour", "4"), 4)
+        next_start = next_window_start_after(window_key, settings.get("schedule_days", ""), start, end, zone.key)
+        if next_start and datetime.now(zone) >= next_start:
+            return
+
+        report = _deferral_report(len(reasons), reasons, success_count, settings, window_key)
+        self._deferral_window_key = tuple(window_key)
+        self._deferral_timezone = zone.key
+        self._last_run_time = saved["completed_at"]
+        self._last_run_result = report
+        self._block_reason = report
+        self._state = "waiting"
 
     async def _fetch_weather_initial(self):
         """Fetch weather on startup so the UI shows temperature immediately."""
@@ -1196,7 +1244,10 @@ class AutoUpdateScheduler:
             )
             self._deferral_window_key = window_key
             self._deferral_timezone = queue_context.get("timezone")
-            db.log_schedule_event("job_deferred", self._last_run_result, job_id=job_id)
+            db.log_schedule_event(
+                "job_deferred", f"{self._last_run_result} | window_key={json.dumps(window_key)}",
+                job_id=job_id,
+            )
         else:
             self._last_run_result = f"Queue job completed ({success_count} device(s))"
             db.log_schedule_event("job_completed", self._last_run_result, job_id=job_id)

@@ -70,7 +70,7 @@ class TestNextWindowAfterExhaustedWindow:
 
 
 class TestDeferredCompletionReport:
-    def _complete(self, mock_db, *, success, failed=0, deferred, reasons, settings=None):
+    def _complete(self, mock_db, *, success, failed=0, deferred, reasons, settings=None, cancel_reason=None):
         if settings:
             db.set_settings(settings)
         scheduler = _make_scheduler()
@@ -86,6 +86,7 @@ class TestDeferredCompletionReport:
             scheduler.on_job_completed(
                 "job-1", success, failed, deferred_count=deferred,
                 deferral_reasons=reasons,
+                cancel_reason=cancel_reason,
                 device_statuses={"192.0.2.1": "failed"} if failed else {},
             )
         return scheduler
@@ -122,6 +123,14 @@ class TestDeferredCompletionReport:
             reasons={"192.0.2.1": "cutoff_reached"},
         )
         assert scheduler._last_run_result.startswith("Firmware queue stopped:")
+
+    def test_cancellation_keeps_priority_over_deferral(self, mock_db):
+        scheduler = self._complete(
+            mock_db, success=0, deferred=1,
+            reasons={"192.0.2.1": "cutoff_reached"}, cancel_reason="Auto-Update was turned off.",
+        )
+        assert scheduler._block_reason == scheduler._last_run_result == "Auto-Update was turned off."
+        assert scheduler._deferral_window_key is None
 
     def test_empty_when_no_schedule_days(self):
         now = datetime(2026, 5, 19, 12, 0)

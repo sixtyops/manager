@@ -1,6 +1,6 @@
 """Scheduler admission and completion for the derived firmware queue."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
@@ -77,6 +77,66 @@ async def test_duplicate_tick_reuses_job_and_timing(mock_db):
     assert timing["cutoff_utc"] == "2026-06-23T08:30:00+00:00"
     assert start.await_args.kwargs["concurrency"] == 1
     assert [entry["role"] for entry in start.await_args.kwargs["device_entries"]] == ["ap", "switch"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", [None, "devices", "window", "completion"])
+async def test_restart_restores_deferral_until_next_window(mock_db, monkeypatch, damage):
+    now = _queue_fixture(mock_db)
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="deferred-job"))
+    await _admit(scheduler, db.get_all_settings(), now, scheduler.start_update_func)
+    reasons = dict.fromkeys(("10.0.0.1", "10.0.1.1"), "cutoff_reached")
+    devices = {
+        ip: {
+            "status": "pending", "deferral_reason": reason,
+            "deferral_message": "Deferred: the firmware admission cutoff for this target has passed.",
+        }
+        for ip, reason in reasons.items()
+    }
+    db.save_job_history(
+        "deferred-job", now.isoformat(), now.isoformat(), 0, "one", 0, 0, 0, 0,
+        devices, {}, {}, timezone=ZONE.key,
+    )
+    scheduler.on_job_completed("deferred-job", 0, 0, deferred_count=2, deferral_reasons=reasons)
+    if damage == "devices":
+        mock_db.execute("UPDATE job_history SET devices_json = 'invalid'")
+    elif damage == "window":
+        mock_db.execute("UPDATE schedule_log SET details = 'Deferred | window_key=invalid' WHERE event = 'job_deferred'")
+    elif damage == "completion":
+        mock_db.execute("DELETE FROM schedule_log WHERE event = 'job_deferred'")
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr("updater.scheduler.datetime", FixedClock)
+    reloaded = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+    await reloaded.start()
+    try:
+        status = reloaded.get_status()
+        if damage:
+            assert status["block_reason"] is None
+            assert status["last_run_result"] is None
+        else:
+            expected = (
+                "No devices updated. All 2 devices deferred: the firmware admission cutoff for this "
+                "target has passed. Changing window hours does not reset it. "
+                "Next scheduled window: 24 Jun 2026, 03:00 America/Chicago."
+            )
+            assert status["block_reason"] == status["last_run_result"] == expected
+            assert status["next_window_iso"] == "2026-06-24T03:00:00-05:00"
+    finally:
+        await reloaded.stop()
+
+    if damage is None:
+        now = now.replace(minute=0) + timedelta(days=1)
+        reloaded = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+        await reloaded.start()
+        try:
+            assert reloaded.get_status()["last_run_result"] is None
+        finally:
+            await reloaded.stop()
 
 
 @pytest.mark.asyncio
