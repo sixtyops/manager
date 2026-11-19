@@ -6086,7 +6086,7 @@ async def update_single_device_endpoint(
     device_firmware_map = {}
     device_record = None  # track which device dict we found
 
-    if ap:
+    if ap and ap.get("role") == "ap":
         # It's an AP - update just this AP (no CPEs). Fail clearly when no
         # firmware matches its model instead of silently flashing the wrong
         # family (which the device would reject at flash time).
@@ -6105,7 +6105,7 @@ async def update_single_device_endpoint(
     else:
         # Check if it's a switch
         sw = db.get_switch(ip)
-        if sw:
+        if sw and sw.get("role") == "switch":
             device_record = sw
             credentials[ip] = (sw["username"], sw["password"])
             device_roles[ip] = "switch"
@@ -6127,7 +6127,7 @@ async def update_single_device_endpoint(
 
             # Get parent AP credentials
             parent_ap = db.get_access_point(cpe["ap_ip"])
-            if not parent_ap:
+            if not parent_ap or parent_ap.get("role") != "ap":
                 raise HTTPException(400, f"Parent AP {cpe['ap_ip']} not found for CPE {ip}")
 
             credentials[ip] = (parent_ap["username"], parent_ap["password"])
