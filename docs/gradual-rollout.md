@@ -2,13 +2,13 @@
 
 **Key points:** Scheduled work uses the serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715). It derives pending devices from current Manager inventory and does not save wave membership. Auto-Update controls scheduled admission.
 
-**Detail:** The queue runs CPEs, then APs, then switches. It runs one device write and recovery sequence at a time. New and returning devices join when they need the selected firmware. Update Mode defaults to **Single bank (recommended)**. The operator can select **Both banks**. Manual per-device updates bypass Firmware Hold and do not advance scheduled timing.
+**Detail:** The queue runs CPEs, then APs, then switches. The update runner is serial: one device completes its reboot, write, and recovery sequence before the next device starts. New and returning devices join when they need the selected firmware. Update Mode defaults to **Single bank (recommended)**. The operator can select **Both banks**. Manual per-device updates bypass Firmware Hold and do not advance scheduled timing.
 
 The first used maintenance windows for a new firmware family or artifact use `firmware_window_ramp_minutes`, configured from 30 to 120 minutes in settings. Later windows use the normal schedule. Scheduler status shows the persisted cutoff and ramp window ordinal. The cutoff stops new starts and lets active recovery finish. Remaining devices wait for a later eligible window. A failed check stops the queue. After resume, Manager checks the failed device first. It does not flash again when that device already runs the target version; it verifies recovery first.
 
 The serial queue ignores legacy wave rollouts during admission. Manager keeps legacy wave rows as history and excludes them from current scheduler status. Startup migration resolves duplicate legacy CPE rows by mapping a newer observation to the existing migrated CPE; AP and switch IP conflicts remain errors.
 
-Firmware Hold remains in force for scheduled queue work. The scheduler checks Auto-Update and the other admission gates before it starts work.
+Firmware Hold remains in force for scheduled queue work. The scheduler checks Auto-Update and the other admission gates before it starts work. The Updates drawer shows whether weather data is available and when it was sampled. If weather or location data is unavailable, it says that Weather Guard did not run.
 
 ## Recovery
 
@@ -22,7 +22,7 @@ After an AP update, Manager checks saved CPE peers and their required link state
 
 **Key points:** Auto-Update (`schedule_enabled`) is the one switch for scheduled updates.
 
-**Detail:** Turn Auto-Update on to admit scheduled work within the maintenance window. Turn it off to stop new scheduled writes and let active recovery finish. Manager ignores an old stored `scheduled_rollout_safety_ready` value. Serial order, Firmware Hold, cutoff, first-failure stop, unresolved stops, and window identity still apply.
+**Detail:** Turn Auto-Update on to admit scheduled work within the maintenance window. Turn it off to stop new scheduled writes and let active recovery finish. There is no separate readiness switch. Serial order, Firmware Hold, cutoff, first-failure stop, unresolved stops, and window identity still apply.
 
 The live single-bank firmware test passed in dev host run 26 on 2026-11-03.
 Scheduled serial queue testing passed on the dev host in run 28c on 2026-11-04.

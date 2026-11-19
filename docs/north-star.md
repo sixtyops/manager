@@ -42,13 +42,13 @@ require an outside system that the operator may not run.
 
 **Key points:** These rules describe the target contract. Shipped behavior is listed first; the remaining items are targets. Operators cannot disable a safety gate or resume a failed queue in the same maintenance window.
 
-**Detail:** Shipped queue behavior: Manager processes one device at a time, CPEs before APs and switches; applies a 30-120 minute ramp to the first used windows for each new family or artifact; persists the cutoff; finishes active recovery; and stops after the first failure. After resume, it checks that device first. Update Mode defaults to one bank; the operator can select both banks. Wave membership and predictions were removed. See [gradual-rollout.md](gradual-rollout.md). The list below describes target rules unless stated as shipped.
+**Detail:** Shipped queue behavior: Auto-Update controls scheduled admission. Manager processes one device at a time, CPEs before APs and switches; reboots each device before its firmware write; applies a 30-120 minute ramp to the first used windows for each new family or artifact; persists the cutoff; finishes active recovery; and stops after the first failure. After resume, it checks that device first. Update Mode defaults to one bank; the operator can select both banks. Wave membership and predictions were removed. See [gradual-rollout.md](gradual-rollout.md). The list below describes target rules unless stated as shipped.
 
 - **Firmware Hold** — target queue work waits for the configured release-date period, per model family, unless a device in that family passes a clean smoke test first.
 - **Weather Guard** — queue admission stops below the minimum temperature.
 - **NTP drift block** — queue admission stops when the clock has drifted.
 - **Pre-update config snapshot** — commit a fresh snapshot before the pre-update reboot and before every device write. A failed snapshot stops new writes for the whole window.
-- **Pre-update reboot** — run only after the snapshot passes. It proves the device recovers before a firmware write.
+- **Pre-update reboot** — shipped. Manager reboots each device and checks recovery before its firmware write.
 - **Smoke test** — version match, CPE re-association, and RSSI sanity after every update.
 - **Halt on failure** — any failed gate or device check stops new writes for the whole window. Do not resume in that window. A pre-start gate block is a hold, not an outage.
 - **Serial queue** — process eligible devices in CPE, AP, then switch order, one write and recovery sequence at a time. Persist the cutoff. Stop new starts at cutoff and continue remaining work in a later window.
@@ -56,7 +56,7 @@ require an outside system that the operator may not run.
 - **One active device sequence** — do not start another device write or recovery sequence until the previous device passes every recovery check.
 - **Single-bank updates** — the vendor recommendation; there is no bank-mode setting.
 
-The serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715), with ramp, cutoff, recovery, and stop behavior in follow-up work. The remaining gates above are targets. Scheduled admission stays closed until its required proof passes.
+The serial queue shipped in [#715](https://github.com/sixtyops/manager/pull/715), with ramp, cutoff, recovery, and stop behavior in follow-up work. Auto-Update controls scheduled admission. The remaining gates above are targets.
 
 ---
 

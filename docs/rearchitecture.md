@@ -106,7 +106,7 @@ and reported CPE `eth0` link-up when that link was up before reboot. It does
 not treat bridge learning or byte deltas as proof of customer traffic. Missing
 required recovery evidence stops the queue.
 
-Remaining target work includes the specified readiness and recovery gates that are not yet complete. Auto-Update controls scheduled admission; all other admission gates still apply. See [gradual-rollout.md](gradual-rollout.md) for shipped behavior and [rollout-logic.md](rollout-logic.md) for queue rules.
+Remaining target work includes the specified recovery gates that are not yet complete. Auto-Update controls scheduled admission; the scheduler applies the other shipped admission gates. See [gradual-rollout.md](gradual-rollout.md) for shipped behavior and [rollout-logic.md](rollout-logic.md) for queue rules.
 
 ## Shipped layout
 
@@ -114,7 +114,7 @@ The scheduler derives the queue from current Manager inventory and uses one upda
 
 ## Historical delivery plan
 
-The earlier staged rollout plan is superseded. Track current queue proof in [epic #604](https://github.com/sixtyops/manager/issues/604). Scheduled admission stays closed until the required proof passes.
+The earlier staged rollout plan is superseded. Track current queue proof in [epic #604](https://github.com/sixtyops/manager/issues/604). Auto-Update is the switch for scheduled admission.
 
 ## Open follow-ups
 
