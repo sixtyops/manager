@@ -13,11 +13,10 @@ from updater.scheduler import AutoUpdateScheduler
 FIRMWARE = "tna-30x-2.0.0-r200.bin"
 
 
-def _configure_preview(mock_db, *, schedule_enabled="true", safety_ready="true"):
+def _configure_preview(mock_db, *, schedule_enabled="true"):
     db.set_settings({
         "schedule_enabled": schedule_enabled,
         "weather_check_enabled": "false",
-        "scheduled_rollout_safety_ready": safety_ready,
         "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
         "schedule_start_hour": "3",
         "schedule_end_hour": "6",
@@ -66,7 +65,6 @@ def test_preview_is_read_only_and_omits_credentials(viewer_client, mock_db, monk
     assert payload["window_end"]
     assert payload["cutoff_utc"]
     assert payload["ramp_limit_minutes"] == 30
-    assert payload["safety_ready"] is True
     assert payload["schedule_enabled"] is True
     assert payload["auto_update_enabled"] is True
     assert [(device["role"], device["ip"]) for device in payload["devices"]] == [
@@ -82,19 +80,19 @@ def test_preview_is_read_only_and_omits_credentials(viewer_client, mock_db, monk
 
 
 @pytest.mark.parametrize(
-    ("schedule_enabled", "safety_ready", "scheduler_available", "expected_reason"),
+    ("schedule_enabled", "scheduler_available", "expected_reason"),
     [
-        ("true", "false", True, "Scheduled firmware updates are paused for safety qualification."),
-        ("true", "true", False, "Scheduler is not initialized"),
-        ("false", "true", True, "Auto-update is off"),
+        ("true", True, ""),
+        ("true", False, "Scheduler is not initialized"),
+        ("false", True, "Auto-update is off"),
     ],
 )
 def test_preview_reports_global_hold_reasons(
     viewer_client, mock_db, monkeypatch,
-    schedule_enabled, safety_ready, scheduler_available, expected_reason,
+    schedule_enabled, scheduler_available, expected_reason,
 ):
     _configure_preview(
-        mock_db, schedule_enabled=schedule_enabled, safety_ready=safety_ready,
+        mock_db, schedule_enabled=schedule_enabled,
     )
     _set_scheduler(monkeypatch, scheduler_available)
 
@@ -103,8 +101,13 @@ def test_preview_reports_global_hold_reasons(
     assert response.status_code == 200
     payload = response.json()
     device = payload["devices"][0]
-    assert device["held"] is True
-    assert device["hold_reason"].startswith(expected_reason)
+    if expected_reason:
+        assert device["held"] is True
+        assert device["hold_reason"].startswith(expected_reason)
+    else:
+        assert "safety_ready" not in payload
+        assert "safety_reason" not in payload
+        assert "qualification" not in str(payload).lower()
     if not scheduler_available:
         assert payload["scheduler_enabled"] is False
     if schedule_enabled == "false":

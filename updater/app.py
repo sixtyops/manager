@@ -5625,7 +5625,7 @@ async def _start_scheduled_update(
     if bank_mode not in ("one", "both"):
         raise RuntimeError("bank_mode must be 'one' or 'both'")
     if concurrency < 1:
-        raise RuntimeError("parallel_updates must be >= 1")
+        raise RuntimeError("concurrency must be >= 1")
 
     window_key = window_key or rollout_gate.firmware_window_key({
         "schedule_days": ",".join(schedule_days or []),

@@ -1615,7 +1615,6 @@ class AutoUpdateScheduler:
         """Build a read-only view of the next serial scheduled firmware window."""
         schedule_enabled = settings.get("schedule_enabled") == "true"
         manager_auto_updates_enabled = settings.get("autoupdate_enabled") == "true"
-        safety_ready, safety_reason = rollout_gate.scheduled_admission_decision(settings)
         auto_update_enabled = schedule_enabled
         timing_error = None
         ramp_minutes = [30, 120]
@@ -1647,8 +1646,6 @@ class AutoUpdateScheduler:
             global_hold_reason = "Scheduler is not initialized"
         elif not schedule_enabled:
             global_hold_reason = "Auto-update is off"
-        elif not safety_ready:
-            global_hold_reason = safety_reason
 
         recovery_ip = None
         if window_key:
@@ -1840,8 +1837,6 @@ class AutoUpdateScheduler:
             "scope": scope_type,
             "scope_label": scope_label,
             "scope_names": scope_names,
-            "safety_ready": safety_ready,
-            "safety_reason": safety_reason,
             "scheduler_enabled": scheduler_enabled,
             "schedule_enabled": schedule_enabled,
             "auto_update_enabled": auto_update_enabled,
