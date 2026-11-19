@@ -37,6 +37,11 @@
             --success-light: #34d399;
             --success-text: #065f46;
             --success-bg: #d1fae5;
+            --state-neutral-bg: #F3F4F6;
+            --state-neutral-text: #374151;
+            --warning-border: #B45309;
+            --danger-fill: #B91C1C;
+            --danger-fill-text: #FFFFFF;
             --warning: #f59e0b;
             --warning-hover: #d97706;
             --warning-text: #92400e;
@@ -55,7 +60,7 @@
             --info-bg: #dbeafe;
             --info-bg-subtle: #eff6ff;
             --info-border: #bfdbfe;
-            --toggle-off: #d1d5db;
+            --toggle-off: #FFFFFF;
             --bg-subtle: #f9fafb;
             --overlay: rgba(17, 24, 39, 0.5);
             --shadow-pop: 0 8px 24px rgba(0,0,0,.10);
@@ -184,11 +189,11 @@
             padding: 2px 8px;
             border-radius: var(--radius-full);
             background: var(--border);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
-        .role-badge[data-role="admin"] { background: var(--primary-bg); color: var(--primary-text); }
-        .role-badge[data-role="operator"] { background: #d1fae5; color: #047857; }
-        .role-badge[data-role="viewer"] { background: var(--border); color: var(--text-muted); }
+        .role-badge[data-role="admin"] { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .role-badge[data-role="operator"] { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .role-badge[data-role="viewer"] { background: var(--border); color: var(--state-neutral-text); }
 
         .viewer-locked {
             cursor: not-allowed;
@@ -360,9 +365,10 @@
             transition: background var(--tr-base);
             flex-shrink: 0;
             border: none;
+            box-shadow: inset 0 0 0 1.5px #6B7280;
             padding: 0;
         }
-        .toggle.active { background: var(--primary); }
+        .toggle.active { background: var(--primary-fill); border-color: var(--primary-fill); box-shadow: inset 0 0 0 1.5px var(--primary-fill); }
         .toggle::after {
             content: '';
             position: absolute;
@@ -370,11 +376,11 @@
             left: 2px;
             width: 16px;
             height: 16px;
-            background: white;
+            background: #6B7280;
             border-radius: 50%;
             transition: transform var(--tr-base);
         }
-        .toggle.active::after { transform: translateX(16px); }
+        .toggle.active::after { transform: translateX(16px); background: #FFFFFF; }
 
         /* Toggle switch — compact (28x16) */
         .toggle-sm {
@@ -387,9 +393,10 @@
             transition: background var(--tr-base);
             flex-shrink: 0;
             border: none;
+            box-shadow: inset 0 0 0 1.5px #6B7280;
             padding: 0;
         }
-        .toggle-sm.active { background: var(--primary); }
+        .toggle-sm.active { background: var(--primary-fill); border-color: var(--primary-fill); box-shadow: inset 0 0 0 1.5px var(--primary-fill); }
         .toggle-sm::after {
             content: '';
             position: absolute;
@@ -397,11 +404,11 @@
             left: 2px;
             width: 12px;
             height: 12px;
-            background: white;
+            background: #6B7280;
             border-radius: 50%;
             transition: transform var(--tr-base);
         }
-        .toggle-sm.active::after { transform: translateX(12px); }
+        .toggle-sm.active::after { transform: translateX(12px); background: #FFFFFF; }
 
         /* Settings tabs */
         .app-settings-modal {
@@ -480,7 +487,7 @@
 
         .auth-status-badge {
             font-size: var(--text-xs); font-weight:600; padding:1px 7px; border-radius: var(--radius-full);
-            background:#e5e7eb; color:#6b7280;
+            background:#e5e7eb; color: var(--state-neutral-text);
         }
         .auth-stats-grid {
             display: grid; grid-template-columns: repeat(4,1fr); gap:6px; margin-top:10px;
@@ -528,7 +535,7 @@
         .history-table tr:last-child td { border-bottom:none; }
         .history-table .cell-time { font-size:var(--text-sm); color:var(--text-dim); white-space:nowrap; }
         .history-table .cell-mono { font-family:var(--font-mono); font-size:var(--text-sm); }
-        .history-table .cell-error { color:#dc2626; }
+        .history-table .cell-error { color:var(--danger-fill); }
 
         /* History table styles */
         .history-status-badge {
@@ -539,10 +546,15 @@
             font-weight: 600;
             text-transform: uppercase;
         }
-        .history-status-badge.success { background: #dcfce7; color: #16a34a; }
-        .history-status-badge.failed { background: #fef2f2; color: #dc2626; }
-        .history-status-badge.skipped { background: #f3f4f6; color: #6b7280; }
-        .history-status-badge.cancelled { background: #fef3c7; color: #d97706; }
+        .history-status-badge.success::before { content: "✓ "; }
+        .history-status-badge.success { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .history-status-badge.failed::before { content: "✕ "; }
+        .history-status-badge.failed { background: var(--danger-fill); color: var(--danger-fill-text); }
+        .history-status-badge.skipped::before { content: "○ "; }
+        .history-status-badge.skipped { background: #f3f4f6; color: var(--state-neutral-text); }
+        .history-status-badge.cancelled::before { content: "Ⅱ "; }
+        .history-status-badge.cancelled { background: #fef3c7; color: var(--warning-text); }
+        .history-status-badge.deferred::before { content: "◷ "; }
         .history-status-badge.deferred { background: var(--info-bg); color: var(--info-text); }
 
         .history-stage-pill {
@@ -552,8 +564,10 @@
             border-radius: var(--radius-sm);
             margin-right: 3px;
         }
-        .history-stage-pill.ok { background: #dcfce7; color: #16a34a; }
-        .history-stage-pill.fail { background: #fef2f2; color: #dc2626; }
+        .history-stage-pill.ok::before { content: "✓ "; }
+        .history-stage-pill.ok { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .history-stage-pill.fail::before { content: "✕ "; }
+        .history-stage-pill.fail { background: var(--danger-fill); color: var(--danger-fill-text); }
 
         .history-detail-row td {
             padding: 8px 12px;
@@ -565,8 +579,8 @@
         .u-history-row:hover td { background: var(--bg-subtle); }
         .u-history-cell-mono { font-family: var(--font-mono); font-size: var(--text-base); }
         .u-history-cell-time { font-size: var(--text-sm); color: var(--text-dim); white-space: nowrap; }
-        .u-history-cell-failed.error { color: #dc2626; }
-        .u-history-error { color: #dc2626; font-size: var(--text-base); margin-top: 4px; word-break: break-word; }
+        .u-history-cell-failed.error { color: var(--danger-fill); }
+        .u-history-error { color: var(--danger-fill); font-size: var(--text-base); margin-top: 4px; word-break: break-word; }
         .u-history-pass { font-size: var(--text-sm); color: var(--text-dim); margin-left: 8px; }
 
         .settings-panel {
@@ -620,8 +634,10 @@
         .users-table .user-btn:hover { background:#e5e7eb; color:var(--text,#111827); }
         .users-table .user-btn-danger { color:#fff; background:#ef4444; }
         .users-table .user-btn-danger:hover { background:#dc2626; color:#fff; }
-        .user-status-active { color:#16a34a; font-weight:500; }
-        .user-status-disabled { color:#dc2626; font-weight:500; }
+        .user-status-active::before { content: "✓ "; }
+        .user-status-active { color: var(--state-neutral-text); font-weight:500; }
+        .user-status-disabled::before { content: "○ "; }
+        .user-status-disabled { color:var(--danger-fill); font-weight:500; }
         .users-table .user-btn[disabled],
         .users-table .user-btn[disabled]:hover { opacity:0.45; cursor:not-allowed; background:var(--bg,#f3f4f6); color:var(--text-muted,#6b7280); }
         .users-table .user-btn-danger[disabled],
@@ -639,12 +655,12 @@
         .updates-banner { margin-top:12px; padding:12px 14px; background:var(--info-bg); border-radius: var(--radius-lg); }
         .updates-banner-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
         .updates-banner-title { font-weight:600; font-size:var(--text-md); color:var(--info-text); }
-        .updates-banner-link { font-size:var(--text-sm); color:var(--info-strong); text-decoration:none; }
+        .updates-banner-link { font-size:var(--text-sm); color: var(--info-text); text-decoration:none; }
         .updates-banner-link:hover { text-decoration:underline; }
-        .updates-banner-meta { margin-top: 8px; font-size: var(--text-xs); color: var(--info-strong); }
+        .updates-banner-meta { margin-top: 8px; font-size: var(--text-xs); color: var(--info-text); }
         .updates-banner-feedback { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid transparent; background: rgba(255,255,255,0.72); }
         .updates-banner-feedback.info { border-color: rgba(14,116,144,0.16); color: #0f172a; }
-        .updates-banner-feedback.success { border-color: rgba(5,150,105,0.2); color: #065f46; }
+        .updates-banner-feedback.success { border-color: var(--state-neutral-text); color: var(--state-neutral-text); }
         .updates-banner-feedback.error { border-color: rgba(185,28,28,0.18); color: #991b1b; background: rgba(255,255,255,0.88); }
         .updates-banner-feedback-message { font-size: var(--text-sm); line-height: 1.5; }
         .updates-banner-code {
@@ -702,7 +718,7 @@
         .updates-banner-btn {
             margin-top: 10px;
             padding: 8px 16px;
-            background: var(--success);
+            background: var(--state-neutral-text);
             color: #fff;
             border: none;
             border-radius: var(--radius-md);
@@ -713,8 +729,8 @@
             -webkit-appearance: none;
             appearance: none;
         }
-        .updates-banner-btn:hover { background: var(--success-hover); }
-        .updates-banner-btn:active { background: #047857; }
+        .updates-banner-btn:hover { background: var(--state-neutral-text); }
+        .updates-banner-btn:active { background: var(--state-neutral-text); }
         .updates-banner-btn:disabled { background: #9ca3af; color: #f3f4f6; cursor: not-allowed; }
 
         /* About panel */
@@ -918,11 +934,11 @@
             border-color: var(--danger-hover);
         }
         .btn-success {
-            background: var(--success);
+            background: var(--state-neutral-text);
             color: white;
-            border-color: var(--success);
+            border-color: var(--state-neutral-text);
         }
-        .btn-success:hover { background: var(--success-hover); border-color: var(--success-hover); }
+        .btn-success:hover { background: var(--state-neutral-text); border-color: var(--state-neutral-text); }
         .btn-secondary {
             background: var(--border-light);
             color: var(--text-muted);
@@ -965,10 +981,10 @@
             border-radius: 50%;
         }
 
-        .dot.success { background: var(--success); }
+        .dot.success { background: var(--state-neutral-text); }
         .dot.warning { background: var(--warning); }
         .dot.danger { background: var(--danger-bright); }
-        .dot.primary { background: var(--primary); }
+        .dot.primary { background: var(--primary-fill); }
 
         /* Chart */
         .chart-card {
@@ -1134,6 +1150,7 @@
         }
 
         .device-icon {
+            background: var(--state-neutral-text);
             width: 18px;
             height: 18px;
             border-radius: var(--radius-sm);
@@ -1147,22 +1164,22 @@
         }
 
         .device-icon.site { background: var(--text-muted); }
-        .device-icon.ap { background: var(--primary); }
+        .device-icon.ap { background: var(--primary-fill); }
         .device-icon.cpe {
             border-radius: 50%;
             width: 14px;
             height: 14px;
         }
-        .device-icon.cpe.green { background: var(--success); }
-        .device-icon.cpe.yellow { background: var(--warning); }
-        .device-icon.cpe.red { background: var(--danger-bright); }
+        .device-icon.cpe.green { background: var(--state-neutral-text); }
+        .device-icon.cpe.yellow { background: var(--warning-bg); color: var(--warning-text); }
+        .device-icon.cpe.red { background: var(--danger-fill); color: var(--danger-fill-text); }
 
         .tree-badge {
             font-size: var(--text-sm);
             padding: 1px 6px;
             background: var(--border);
             border-radius: var(--radius-full);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             margin-left: 4px;
         }
 
@@ -1178,22 +1195,22 @@
         .name-static { color: var(--text); }
 
         .no-location-tag {
-            color: var(--warning);
+            color: var(--warning-text);
             font-size: var(--text-sm);
             font-weight: normal;
         }
 
         /* Signal colors */
-        .signal-good { color: var(--success); }
-        .signal-low { color: var(--warning); }
-        .signal-critical { color: var(--danger-bright); }
+        .signal-good { color: var(--state-neutral-text); }
+        .signal-low { color: var(--warning-text); }
+        .signal-critical { color: var(--danger-fill); }
         .sh-sig-margin {
             font-size: var(--text-2xs); margin-left: var(--space-3);
             font-variant-numeric: tabular-nums; font-weight: 600;
         }
-        .sh-sig-margin.up { color: var(--success); }
-        .sh-sig-margin.down { color: var(--danger-bright); }
-        .sh-sig-margin.flat { color: var(--text-dim); }
+        .sh-sig-margin.up { color: var(--state-neutral-text); }
+        .sh-sig-margin.down { color: var(--danger-fill); }
+        .sh-sig-margin.flat { color: var(--state-neutral-text); }
         .row-cpe { cursor: pointer; }
         .cpe-sig-cell { cursor: help; }
         /* Amber "Can't sign in" pill — a client we reach but can't log into
@@ -1213,7 +1230,7 @@
             display: inline-block; width: 9px; height: 9px; border-radius: 50%;
             margin-right: 6px; vertical-align: middle; flex: 0 0 auto;
         }
-        .row-status-dot.green   { background: var(--success); }
+        .row-status-dot.green   { background: var(--state-neutral-text); }
         .row-status-dot.yellow  { background: var(--warning); }
         .row-status-dot.red     { background: var(--danger-bright); }
         .row-status-dot.offline { background: var(--text-dim); }
@@ -1231,7 +1248,7 @@
         .col-filter-dropdown label .opt-dot {
             width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
         }
-        .col-filter-dropdown label .opt-dot.green   { background: var(--success); }
+        .col-filter-dropdown label .opt-dot.green   { background: var(--state-neutral-text); }
         .col-filter-dropdown label .opt-dot.yellow  { background: var(--warning); }
         .col-filter-dropdown label .opt-dot.red     { background: var(--danger-bright); }
         .col-filter-dropdown label .opt-dot.signal  { background: var(--text-dim); }
@@ -1257,15 +1274,15 @@
         }
 
         /* Status column */
-        .status-online { color: var(--success); }
-        .status-offline { color: var(--danger-bright); font-weight: 500; }
-        .status-current { color: var(--success); font-weight: 500; }
-        .status-behind { color: var(--warning); font-weight: 500; }
-        .status-scheduled { color: var(--info); font-weight: 600; font-size: var(--text-md); }
+        .status-online { color: var(--state-neutral-text); }
+        .status-offline { color: var(--danger-fill); font-weight: 500; }
+        .status-current { color: var(--state-neutral-text); font-weight: 500; }
+        .status-behind { color: var(--warning-text); font-weight: 500; }
+        .status-scheduled { color: var(--info-text); font-weight: 600; font-size: var(--text-md); }
         .update-clickable { cursor: pointer; text-decoration: none; }
         .update-clickable:hover { opacity: 0.7; }
         .status-label { font-size: var(--text-base); }
-        .status-sep { color: var(--toggle-off); margin: 0 4px; }
+        .status-sep { color: var(--state-neutral-text); margin: 0 4px; }
 
         /* Status icon cells */
         .status-icon-cell {
@@ -1275,7 +1292,7 @@
             border-radius: 50%;
             cursor: default;
         }
-        .status-icon-cell.online { background: var(--success); }
+        .status-icon-cell.online { background: var(--state-neutral-text); }
         .status-icon-cell.offline { background: var(--danger-bright); }
         .status-icon-cell.warning { background: var(--warning); }
         .status-icon-cell.critical { background: var(--danger-bright); }
@@ -1288,7 +1305,7 @@
 
         /* Updating indicator */
         .updating-text {
-            color: var(--info);
+            color: var(--info-text);
             font-size: var(--text-sm);
             font-weight: 500;
         }
@@ -1323,7 +1340,7 @@
         }
         .update-stage {
             font-size: var(--text-sm);
-            color: var(--info);
+            color: var(--info-text);
             font-variant-numeric: tabular-nums;
         }
 
@@ -1412,10 +1429,10 @@
         .update-action {
             background: none; border: none; cursor: pointer;
             font-size: var(--text-xl); padding: 2px 6px; border-radius: var(--radius-sm);
-            color: var(--warning); transition: background var(--tr-fast); line-height: 1;
+            color: var(--warning-text); transition: background var(--tr-fast); line-height: 1;
         }
         .update-action:hover { background: var(--warning-bg); }
-        .update-action.scheduled { color: var(--info); }
+        .update-action.scheduled { color: var(--info-text); }
         .update-action.scheduled:hover { background: var(--info-bg); }
 
         /* Connection status */
@@ -1427,15 +1444,12 @@
             padding: 8px 16px;
             border-radius: var(--radius-full);
             font-size: var(--text-sm);
-            background: var(--success);
+            background: var(--state-neutral-text);
             color: white;
             z-index: 100;
         }
 
-        .connection-status.disconnected {
-            display: block;
-            background: var(--danger-bright);
-        }
+        .connection-status.disconnected { display: block; background: var(--danger-fill); color: var(--danger-fill-text); }
 
         /* System update overlay */
         .system-update-overlay {
@@ -1683,7 +1697,7 @@
             border-top: 1px solid var(--border);
         }
 
-        .diff-line-add { background: #dcfce7; color: #166534; }
+        .diff-line-add { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
         .diff-line-del { background: #fee2e2; color: #991b1b; }
         .diff-line-hunk { color: #6b7280; font-style: italic; }
         .diff-line-meta { color: #6b7280; font-weight: 600; }
@@ -1727,8 +1741,8 @@
             color: var(--text-muted);
             cursor: pointer;
         }
-        .cfg-save-btn:hover:not(.saved) { background: var(--primary); color: #fff; border-color: var(--primary); }
-        .cfg-save-btn.saved { opacity: 0.5; cursor: default; }
+        .cfg-save-btn:hover:not(.saved) { background: var(--primary-fill); color: #fff; border-color: var(--primary); }
+        .cfg-save-btn.saved { color: var(--state-neutral-text); background: var(--state-neutral-bg); cursor: default; }
         .config-section-body {
             padding: 6px 0 8px;
             font-size: var(--text-sm);
@@ -1750,9 +1764,9 @@
             padding: 1px 6px;
             border-radius: var(--radius-lg);
             background: var(--border-light);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
-        .config-section-status.saved { background: var(--primary-bg); color: var(--primary-text); }
+        .config-section-status.saved { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
         .config-section-status.enforced { background: var(--info-bg); color: var(--info-text); }
         .config-section.enforced {
             border: 2px solid var(--primary) !important;
@@ -1767,9 +1781,17 @@
             align-items: end;
             margin-bottom: 6px;
         }
-        .config-compliance-ok { color: #10b981; }
-        .config-compliance-warn { color: #f59e0b; }
-        .config-compliance-unknown { color: #9ca3af; }
+        .config-compliance-ok { color: var(--state-neutral-text); }
+        .msg-info { color: var(--info-text) !important; }
+        .msg-info::before { content: "◷ "; }
+        .msg-warn { color: var(--warning-text) !important; font-weight: 600; }
+        .msg-warn::before { content: "⚠ "; }
+        .msg-ok { color: var(--state-neutral-text) !important; font-weight: 600; }
+        .msg-ok::before { content: "✓ "; }
+        .msg-err { color: var(--danger-fill) !important; font-weight: 600; }
+        .msg-err::before { content: "✕ "; }
+        .config-compliance-warn { color: var(--warning-text); }
+        .config-compliance-unknown { color: var(--state-neutral-text); }
 
         .drawer-settings-grid {
             display: flex;
@@ -1836,9 +1858,11 @@
         }
 
         .drawer-day-btn.active {
-            background: var(--primary-bg);
-            color: var(--primary-text);
-            border-color: var(--primary);
+            background: var(--primary-fill);
+            color: #FFFFFF;
+            border-color: var(--primary-fill);
+            font-size: var(--text-sm);
+            padding: 4px 8px;
         }
 
         .toggle-sm-row {
@@ -1935,7 +1959,7 @@
             font-family: var(--font-sans);
             font-weight: 700;
             line-height: 1;
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             opacity: 0;
             transition: opacity var(--tr-fast), color var(--tr-fast);
         }
@@ -1958,12 +1982,14 @@
         }
 
         .drawer-fw-chip.active:hover {
-            background: var(--primary-bg-hover);
+            background: var(--primary-fill-hover);
         }
 
+        .drawer-fw-chip.active::before { content: "✓"; font-family: var(--font-sans); }
         .drawer-fw-chip.active {
-            background: var(--primary-bg);
-            color: var(--primary-text);
+            background: var(--primary-fill);
+            color: #FFFFFF;
+            border: 1px solid var(--primary-fill);
             font-weight: 600;
         }
 
@@ -2054,7 +2080,7 @@
 
         .drawer-upload-status {
             font-size: var(--text-xs);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
 
         .bar-save-cluster {
@@ -2078,14 +2104,20 @@
             white-space: normal;
             overflow-wrap: anywhere;
             background: var(--warning-bg);
-            color: var(--text);
-            border-left: 4px solid var(--warning-text);
+            color: var(--warning-text);
+            border-left: 4px solid var(--warning-border);
         }
-        .status-bar-notice.info {
-            background: var(--info-bg-subtle);
-            border-left-color: var(--info-strong);
+        .status-bar-notice.msg-info {
+            background: var(--info-bg);
+            color: var(--info-text);
+            border-left-color: var(--info-text);
         }
         #drawerSaveStatus { white-space: normal; }
+        #drawerSaveStatus.msg-err {
+            background: var(--danger-fill);
+            color: var(--danger-fill-text) !important;
+        }
+        #drawerSaveStatus::before, .status-bar-notice.msg-info::before { content: none; }
         #firmwareStopDialog {
             max-width: min(32rem, 90vw);
             background: var(--bg-card);
@@ -2134,13 +2166,12 @@
             font-weight: 600;
             text-transform: none;
             background: var(--border-light);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
         }
-        .status-bar-badge.idle { background: var(--border-light); color: var(--text-muted); }
+        .status-bar-badge.idle { background: var(--border-light); color: var(--state-neutral-text); }
         .status-bar-badge.waiting { background: var(--warning-bg); color: var(--warning-text); }
         .status-bar-badge.running { background: var(--info-bg); color: var(--info-text); }
-        .status-bar-badge.blocked { background: var(--danger-bg); color: var(--danger-text); }
-        .status-bar-badge.current { background: var(--success-bg); color: var(--success-text); }
+        .status-bar-badge.current { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
 
         .status-icon {
             width: 12px;
@@ -2166,7 +2197,7 @@
         }
 
         .status-bar-reason {
-            color: var(--text-dim);
+            color: var(--state-neutral-text);
             font-size: var(--text-sm);
             max-width: 320px;
             overflow: hidden;
@@ -2191,13 +2222,13 @@
         }
 
         .status-bar-muted {
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             white-space: nowrap;
         }
 
         .status-bar-count {
             font-variant-numeric: tabular-nums;
-            color: var(--text);
+            color: var(--state-neutral-text);
             font-weight: 600;
             white-space: nowrap;
         }
@@ -2215,7 +2246,7 @@
         }
 
         .status-bar-queue-item {
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             font-size: var(--text-sm);
             white-space: normal;
             overflow-wrap: anywhere;
@@ -2252,7 +2283,7 @@
             align-items: center;
             font-size: var(--text-2xs);
             font-weight: 700;
-            color: #d97706;
+            color: var(--warning-text);
             background: #fffbeb;
             padding: 1px 5px;
             border-radius: var(--radius-sm);
@@ -2271,7 +2302,7 @@
         .u-ml-auto { margin-left: auto; }
         .u-overflow-x-auto { overflow-x: auto; }
         .u-dot-neutral { background: var(--text-dim); }
-        .u-saved-indicator { font-size: var(--text-sm); color: var(--success); opacity: 0; }
+        .u-saved-indicator { font-size: var(--text-sm); color: var(--state-neutral-text); opacity: 0; }
         .u-transition-opacity { transition: opacity var(--tr-slow); }
         .u-status-note { font-size: var(--text-sm); }
 
@@ -2368,18 +2399,18 @@
             display: inline-flex; align-items: center; gap: 5px;
             padding: 3px 9px; border-radius: var(--radius-md); border: 1px solid transparent;
             background: transparent; cursor: pointer; font-family: inherit;
-            font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); line-height: 1;
+            font-size: var(--text-sm); font-weight: 600; color: var(--state-neutral-text); line-height: 1;
             transition: background var(--tr-fast), border-color var(--tr-fast);
         }
         .fleet-chip .gl { font-size: var(--text-md); line-height: 1; }
         .fleet-chip .n { font-weight: 800; color: var(--text-subtle); }
-        .fleet-chip.s-cur .gl { color: var(--success); }
-        .fleet-chip.s-beh .gl { color: var(--warning); }
-        .fleet-chip.s-off .gl { color: var(--danger-bright); }
+        .fleet-chip.s-cur .gl { color: var(--state-neutral-text); }
+        .fleet-chip.s-beh .gl { color: var(--warning-text); }
+        .fleet-chip.s-off .gl { color: var(--danger-fill); }
         .fleet-chip:hover:not(.disabled) { background: var(--border-light); }
-        .fleet-chip.active.s-cur { background: var(--success-bg); border-color: var(--success-light); color: var(--success-text); }
-        .fleet-chip.active.s-beh { background: var(--warning-bg); border-color: var(--warning-light); color: var(--warning-text); }
-        .fleet-chip.active.s-off { background: var(--danger-bg); border-color: var(--danger-bright); color: var(--danger-text); }
+        .fleet-chip.active.s-cur { background: var(--state-neutral-bg); border-color: transparent; color: var(--state-neutral-text); }
+        .fleet-chip.active.s-beh { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); }
+        .fleet-chip.active.s-off { background: var(--danger-fill); border-color: transparent; color: var(--danger-fill-text); }
         .fleet-chip.active .n { color: inherit; }
         .fleet-chip.disabled { opacity: 0.4; cursor: default; }
 
@@ -2411,7 +2442,7 @@
             border-radius: var(--radius-full);
             background: var(--border-light);
             border: 1px solid var(--border);
-            color: var(--text-muted);
+            color: var(--state-neutral-text);
             font-size: var(--text-2xs);
             font-weight: 600;
             letter-spacing: 0.02em;
@@ -2446,11 +2477,11 @@
             word-wrap: break-word;
         }
         .toast.info    { border-left-color: var(--info-strong); }
-        .toast.success { border-left-color: var(--success-hover); }
-        .toast.warn    { border-left-color: #d97706; }
-        .toast.error   { border-left-color: #dc2626; }
+        .toast.success { border-left-color: var(--state-neutral-text); }
+        .toast.warn    { border-left-color: var(--warning-text); }
+        .toast.error   { border-left-color: var(--danger-fill); }
         @keyframes toastSlideIn {
-            from { opacity: 0; transform: translateX(12px); }
+            from { opacity: 0; transform: translateX(12px); background: #FFFFFF; }
             to   { opacity: 1; transform: translateX(0); }
         }
 
@@ -2534,7 +2565,7 @@
 
         /* Edit login dialog */
         .device-login-fields { display: grid; gap: var(--space-5); margin-top: var(--space-6); }
-        .device-login-status { font-size: var(--text-base); line-height: 1.5; margin-top: var(--space-5); color: var(--text-muted); }
+        .device-login-status { font-size: var(--text-base); line-height: 1.5; margin-top: var(--space-5); color: var(--state-neutral-text); }
         .device-login-status:empty { display: none; }
         .device-login-status.error { color: var(--danger-text); }
 
@@ -2631,7 +2662,7 @@
         .opt-badge {
             display: inline-flex; align-items: center; gap: 4px;
             font-size: var(--text-2xs); font-weight: 700; color: #fff;
-            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+            background: var(--primary-fill);
             padding: 2px 7px 2px 5px; border-radius: var(--radius-full);
             letter-spacing: .06em; white-space: nowrap;
             box-shadow: 0 1px 2px rgba(13,148,136,.35); line-height: 1.3;
@@ -2730,22 +2761,23 @@
             transition: opacity var(--tr-fast) ease; display: none;
         }
         .cpop.show { display: block; opacity: 1; }
-        .cpop.h-green  { border-color: var(--success); }
+        .cpop.h-green  { border-color: var(--state-neutral-text); }
         .cpop.h-yellow { border-color: var(--warning); }
-        .cpop.h-red    { border-color: var(--danger-bright); }
+        .cpop.h-red    { border-color: var(--danger-fill); }
         .cpop-badge {
+            background: var(--state-neutral-bg);
             position: absolute; top: -9px; right: 10px;
             padding: 2px 8px; border-radius: var(--radius-full);
-            font-size: var(--text-2xs); font-weight: 600; color: #fff;
+            font-size: var(--text-2xs); font-weight: 600; color: var(--state-neutral-text);
             letter-spacing: .02em; line-height: 1.4;
             text-transform: uppercase; box-shadow: 0 1px 2px rgba(0,0,0,.08);
         }
-        .cpop.h-green  .cpop-badge { background: var(--success); }
-        .cpop.h-yellow .cpop-badge { background: var(--warning); }
-        .cpop.h-red    .cpop-badge { background: var(--danger-bright); }
+        .cpop.h-green  .cpop-badge { background: var(--state-neutral-bg); color: var(--state-neutral-text); }
+        .cpop.h-yellow .cpop-badge { background: var(--warning-bg); color: var(--warning-text); }
+        .cpop.h-red    .cpop-badge { background: var(--danger-fill); color: var(--danger-fill-text); }
         .cpop-head { margin-bottom: 10px; }
         .cpop-name { font-size: var(--text-base); font-weight: 600; color: var(--text); line-height: 1.2; }
-        .cpop-meta { color: var(--text-muted); margin-top: 1px; font-size: var(--text-2xs); }
+        .cpop-meta { color: var(--state-neutral-text); margin-top: 1px; font-size: var(--text-2xs); }
         .cpop-gauge { margin-top: 8px; }
         .cpop-gauge:first-of-type { margin-top: 0; }
         .cpop-gauge-label {
@@ -2753,7 +2785,7 @@
             margin-bottom: 3px;
         }
         .cpop-gauge-label .lbl {
-            font-size: var(--text-2xs); color: var(--text-muted);
+            font-size: var(--text-2xs); color: var(--state-neutral-text);
             text-transform: uppercase; letter-spacing: .06em; font-weight: 500;
         }
         .cpop-gauge-label .val {
@@ -2764,9 +2796,9 @@
             font-variant-numeric: tabular-nums; font-weight: 600;
             font-size: var(--text-2xs); margin-left: 6px;
         }
-        .cpop-gauge-label .delta.up   { color: var(--success); }
-        .cpop-gauge-label .delta.down { color: var(--danger-bright); }
-        .cpop-gauge-label .delta.flat { color: var(--text-dim); }
+        .cpop-gauge-label .delta.up   { color: var(--state-neutral-text); }
+        .cpop-gauge-label .delta.down { color: var(--danger-fill); }
+        .cpop-gauge-label .delta.flat { color: var(--state-neutral-text); }
         .cpop-bar {
             position: relative; height: 5px;
             background: #eef0f3; border-radius: var(--radius-sm);
@@ -2775,7 +2807,7 @@
             position: absolute; left: 0; top: 0; bottom: 0;
             border-radius: var(--radius-sm); transition: width var(--tr-fast);
         }
-        .cpop-bar-fill.green  { background: var(--success); }
+        .cpop-bar-fill.green  { background: var(--state-neutral-text); }
         .cpop-bar-fill.yellow { background: var(--warning); }
         .cpop-bar-fill.red    { background: var(--danger-bright); }
         .cpop-bar-tick {
@@ -2811,14 +2843,14 @@
             <div class="update-spinner-large"></div>
             <h3>System Updating</h3>
             <p id="systemUpdateMessage">Applying update and restarting...</p>
-            <p id="systemUpdateElapsed" style="font-size:0.75rem;color:var(--text-dim);margin-top:8px;"></p>
+            <p id="systemUpdateElapsed" style="font-size:0.75rem;color:var(--state-neutral-text);margin-top:8px;"></p>
         </div>
     </div>
 
     <div class="header">
-        <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:var(--primary);border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:var(--primary);">Ops</span></h1>
+        <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:var(--primary-fill);border-radius:4px;margin-right:6px;vertical-align:baseline;position:relative;top:-1px;"><svg width="14" height="14" viewBox="0 0 28 28" fill="none"><rect x="3" y="8" width="2.5" height="12" rx="1" fill="white" opacity="0.9"/><rect x="7.5" y="6" width="2.5" height="16" rx="1" fill="white"/><rect x="12" y="4" width="2.5" height="20" rx="1" fill="white"/><path d="M17 10 L25 6" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/><path d="M17 14 L26 14" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/><path d="M17 18 L25 22" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></svg></span>Sixty<span style="color:var(--primary-text);">Ops</span></h1>
         <div class="header-right">
-            <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--text-dim);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
+            <span class="header-clock"><span id="currentTime">--:--</span> <span id="currentTz" style="font-size:0.7rem;color:var(--state-neutral-text);"></span> · <span id="currentDate">Loading...</span><span id="headerTemp" style="color:var(--text-muted);"></span></span>
             <button class="header-icon-btn" onclick="openHistoryModal()" title="Job History">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -2851,7 +2883,7 @@
         <div class="top-section">
             <div class="card" data-min-role="operator">
                 <h2>Add APs &amp; Switches</h2>
-                <p style="font-size:0.75rem;color:var(--text-dim);margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
+                <p style="font-size:0.75rem;color:var(--state-neutral-text);margin-bottom:8px;">Devices are auto-classified as APs or switches based on model (TNA&nbsp;=&nbsp;AP, TNS&nbsp;=&nbsp;switch) and assigned to tower sites by their &ldquo;location&rdquo; field.</p>
                 <div class="discovery-form">
                     <textarea id="deviceIps" name="deviceIps" placeholder="Device IPs (one per line)&#10;192.168.1.1&#10;192.168.1.2&#10;https://192.168.1.23/" aria-label="Device IPs"></textarea>
                     <div class="cred-row">
@@ -3238,7 +3270,7 @@
                                     <div><label for="cfgRadiusPort">Port</label><input type="number" id="cfgRadiusPort" name="cfgRadiusPort" value="1812" style="width:100%;"></div>
                                     <div><label for="cfgRadiusSecret">Secret</label><input type="password" id="cfgRadiusSecret" name="cfgRadiusSecret" placeholder="shared secret" autocomplete="off" data-1p-ignore style="width:100%;"></div>
                                 </div>
-                                <div style="margin-top:6px;font-size:var(--text-xs);color:var(--text-dim);">
+                                <div style="margin-top:6px;font-size:var(--text-xs);color:var(--state-neutral-text);">
                                     <a class="action-link" onclick="prefillBuiltinRadiusConfig();event.stopPropagation();">Use this appliance's RADIUS</a>
                                 </div>
                             </div>
@@ -3299,7 +3331,7 @@
         <div class="backup-modal app-settings-modal" id="appSettingsDialog" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle" tabindex="-1">
             <div class="app-settings-header">
                 <span id="appSettingsTitle" style="font-size:0.9rem;font-weight:600;">App Settings</span>
-                <button id="appSettingsClose" type="button" aria-label="Close App Settings" onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:var(--text-xl);line-height:1;padding:var(--space-2);min-width:var(--space-8);min-height:var(--space-8);">&times;</button>
+                <button id="appSettingsClose" type="button" aria-label="Close App Settings" onclick="closeAppSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:var(--text-xl);line-height:1;padding:var(--space-2);min-width:var(--space-8);min-height:var(--space-8);">&times;</button>
             </div>
 
             <!-- Tabs -->
@@ -3381,7 +3413,7 @@
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;">
-                        <button class="backup-btn" style="background:var(--primary);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
+                        <button class="backup-btn" style="background:var(--primary-fill);color:#fff;font-weight:500;" onclick="configureSsl()">Configure HTTPS</button>
                         <span id="sslStatus" class="u-text-xs-muted"></span>
                     </div>
                     <p class="u-note-inline" style="margin-top:10px;">
@@ -3437,7 +3469,7 @@
 
                 <!-- Slack sub-panel -->
                 <div class="notif-subpanel active" id="notifSub-slack" data-min-role-disable-tree="operator">
-                    <label for="notifSlackWebhook">Slack Webhook <a href="https://api.slack.com/messaging/webhooks" target="_blank" title="How to create an Incoming Webhook in Slack" style="color:var(--primary);font-size:0.7rem;text-decoration:none;font-weight:400;">?</a></label>
+                    <label for="notifSlackWebhook">Slack Webhook <a href="https://api.slack.com/messaging/webhooks" target="_blank" title="How to create an Incoming Webhook in Slack" style="color:var(--primary-text);font-size:0.7rem;text-decoration:none;font-weight:400;">?</a></label>
                     <div class="u-flex-col-gap8">
                         <input type="text" id="notifSlackWebhook" name="notifSlackWebhook" placeholder="https://hooks.slack.com/services/..." class="u-input-compact">
                         <div class="u-flex-center-gap6">
@@ -3542,26 +3574,26 @@
                         </label>
                         <div id="webhookFields" style="display:grid;grid-template-columns:1fr 100px;gap:8px;">
                             <div style="grid-column:1/-1;">
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookUrl">Webhook URL</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookUrl">Webhook URL</label>
                                 <input type="text" id="webhookUrl" name="webhookUrl" placeholder="https://example.com/webhook" class="u-input-compact">
                             </div>
                             <div>
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookMethod">Method</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookMethod">Method</label>
                                 <select id="webhookMethod" name="webhookMethod" class="u-input-compact">
                                     <option value="POST">POST</option>
                                     <option value="PUT">PUT</option>
                                 </select>
                             </div>
                             <div>
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookSecret">Secret (HMAC)</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookSecret">Secret (HMAC)</label>
                                 <input type="password" id="webhookSecret" name="webhookSecret" placeholder="Set / unchanged" class="u-input-compact">
                             </div>
                             <div style="grid-column:1/-1;">
-                                <label style="font-size:0.7rem;color:#9ca3af;" for="webhookHeaders">Custom Headers (JSON)</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);" for="webhookHeaders">Custom Headers (JSON)</label>
                                 <input type="text" id="webhookHeaders" name="webhookHeaders" placeholder='{"Authorization": "Bearer ..."}' class="u-input-compact">
                             </div>
                             <div style="grid-column:1/-1;">
-                                <label style="font-size:0.7rem;color:#9ca3af;">Events</label>
+                                <label style="font-size:0.7rem;color:var(--state-neutral-text);">Events</label>
                                 <div style="display:flex;gap:12px;flex-wrap:wrap;">
                                     <label style="display:flex;align-items:center;gap:4px;font-size:0.72rem;color:#6b7280;cursor:pointer;">
                                         <input type="checkbox" id="webhookEvtJobCompleted" name="webhookEvtJobCompleted" checked> job_completed
@@ -3762,7 +3794,7 @@
                                 <label class="u-label-xs" for="authRadiusSecret">Shared Secret</label>
                                 <div style="position:relative;">
                                     <input type="password" id="authRadiusSecret" name="authRadiusSecret" placeholder="Enter secret" class="u-input-compact" style="padding-right:28px;">
-                                    <button type="button" onclick="const i=document.getElementById('authRadiusSecret');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'\u{1F441}':'\u{1F648}';" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.7rem;padding:2px;line-height:1;color:var(--text-dim);">&#x1F441;</button>
+                                    <button type="button" onclick="const i=document.getElementById('authRadiusSecret');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'\u{1F441}':'\u{1F648}';" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.7rem;padding:2px;line-height:1;color:var(--state-neutral-text);">&#x1F441;</button>
                                 </div>
                             </div>
                             <div>
@@ -3822,7 +3854,7 @@
                     </div>
 
                     <div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;">
-                        <button class="backup-btn" style="background:var(--primary);color:#fff;font-weight:500;" onclick="saveRadiusConfig()">Save</button>
+                        <button class="backup-btn" style="background:var(--primary-fill);color:#fff;font-weight:500;" onclick="saveRadiusConfig()">Save</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="testRadiusConfig()">Test</button>
                         <button class="backup-btn u-bg-muted-cta" onclick="pushRadiusToDevices()">Push to Devices</button>
                         <span style="flex:1;"></span>
@@ -4544,10 +4576,10 @@
                     if (el) {
                         if (message.failed > 0) {
                             el.textContent = `Push complete: ${message.succeeded} succeeded, ${message.failed} failed out of ${message.total}`;
-                            el.style.color = '#f59e0b';
+                            setStatusTone(el, 'msg-warn');
                         } else {
                             el.textContent = `Push complete: ${message.succeeded}/${message.total} devices updated`;
-                            el.style.color = '#10b981';
+                            setStatusTone(el, 'var(--state-neutral-text)');
                         }
                     }
                     refreshRadiusData();
@@ -4555,6 +4587,18 @@
                     handleDeviceUpdate(message);
                 }
             };
+        }
+
+        function setStatusTone(element, tone) {
+            element.classList.remove('msg-ok', 'msg-warn', 'msg-err', 'msg-info');
+            element.style.color = '';
+            const tones = {
+                'var(--state-neutral-text)': 'msg-ok',
+                'var(--warning-text)': 'msg-warn',
+                'var(--danger-fill)': 'msg-err',
+                'var(--info-text)': 'msg-info',
+            };
+            if (tone) element.classList.add(tones[tone] || tone);
         }
 
         function inlineFormat(text) {
@@ -5564,7 +5608,7 @@
             const vs = versionStatus(ip);
             const addressHold = holdInfo(ip);
             if (addressHold?.code === 'address_change_hold') {
-                return `<span class="status-icon-cell" tabindex="0" aria-label="${escapeHtml(addressHold.reason)}" title="${escapeHtml(addressHold.reason)}" style="color:var(--warning);">&#9201;</span>`;
+                return `<span class="status-icon-cell" tabindex="0" aria-label="${escapeHtml(addressHold.reason)}" title="${escapeHtml(addressHold.reason)}" style="color: var(--warning-text);">&#9201;</span>`;
             }
             if (vs === 'current') {
                 return '<span class="status-current" title="Current">&#10003;</span>';
@@ -5644,7 +5688,7 @@
                         ${apHealthDot}<span class="device-icon ap">AP</span>
                         <span>
                         ${deviceNameHtml(ap.ip, apName)}
-                        ${ap.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
+                        ${ap.notes ? `<div style="font-size:10px;color:var(--state-neutral-text);margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(ap.notes)}">${escapeHtml(ap.notes)}</div>` : ''}
                         </span>
                         ${portBadge}
                         ${noLocation ? '<span class="no-location-tag">(no location)</span>' : ''}
@@ -5959,7 +6003,7 @@
                                 ${swHealthDot}<span class="device-icon ap">SW</span>
                                 <span>
                                 ${deviceNameHtml(sw.ip, swName)}
-                                ${sw.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
+                                ${sw.notes ? `<div style="font-size:10px;color:var(--state-neutral-text);margin-top:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(sw.notes)}">${escapeHtml(sw.notes)}</div>` : ''}
                                 </span>
                             </div>
                         </td>
@@ -6175,7 +6219,7 @@
         // Fixed y-axis box width so the rain and distance charts share the same
         // plot-area left edge — the graph doesn't shift when toggling views.
         const SH_Y_AXIS_W = 72;
-        const shColorFor  = h => h === 'green' ? '#10b981' : h === 'yellow' ? '#f59e0b' : '#ef4444';
+        const shColorFor  = h => h === 'green' ? '#374151' : h === 'yellow' ? '#92400e' : '#b91c1c';
         const shBorderFor = h => h === 'green' ? '#34d399' : h === 'yellow' ? '#fbbf24' : '#f87171';
         const shClamp01 = v => Math.max(0, Math.min(1, v));
         const shActiveClimate = () => SH_CLIMATES[shSelectedZone] || SH_CLIMATES[SH_DEFAULT_ZONE];
@@ -6435,7 +6479,7 @@
                 mark9999: {
                     type: 'line', yMin: z.r9999, yMax: z.r9999,
                     borderColor: 'rgba(16,185,129,0.7)', borderWidth: 1.5, borderDash: [3,3],
-                    label: { display: true, content: '99.99% storm: ' + z.r9999 + ' mm/hr', color: '#047857',
+                    label: { display: true, content: '99.99% storm: ' + z.r9999 + ' mm/hr', color: 'var(--state-neutral-text)',
                              position: 'end', backgroundColor: 'rgba(255,255,255,.92)', font: { size: 10 }, padding: 4, yAdjust: 8 },
                 },
             };
@@ -6468,12 +6512,12 @@
                     },
                     scales: {
                         x: { type: 'linear', min: 0,
-                             title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
-                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
+                             title: { display: true, text: 'Distance (m)', color: 'var(--state-neutral-text)', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                         y: { type: 'linear', min: 0, max: SH_Y_MAX_RAIN,
                              afterFit: s => { s.width = SH_Y_AXIS_W; },
-                             title: { display: true, text: 'Survives rain up to (mm/hr)', color: '#6b7280', font: { size: 11 } },
-                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 50 } },
+                             title: { display: true, text: 'Survives rain up to (mm/hr)', color: 'var(--state-neutral-text)', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                     },
                     plugins: {
                         legend: { display: false },
@@ -6530,11 +6574,11 @@
                     },
                     scales: {
                         x: { type: 'linear', min: 0,
-                             title: { display: true, text: 'Distance (m)', color: '#6b7280', font: { size: 11 } },
-                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 } } },
+                             title: { display: true, text: 'Distance (m)', color: 'var(--state-neutral-text)', font: { size: 11 } },
+                             grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                         y: { min: SH_SIG_MIN, max: SH_SIG_MAX,
                              afterFit: s => { s.width = SH_Y_AXIS_W; },
-                             title: { display: true, text: 'Signal (dBm)', color: '#6b7280', font: { size: 11 } },
+                             title: { display: true, text: 'Signal (dBm)', color: 'var(--state-neutral-text)', font: { size: 11 } },
                              grid: { color: '#eef0f3' }, ticks: { color: '#6b7280', font: { size: 11 }, stepSize: 5 } },
                     },
                     plugins: {
@@ -6544,7 +6588,7 @@
                                 floor: {
                                     type: 'line', yMin: SH_MCS1_FLOOR, yMax: SH_MCS1_FLOOR,
                                     borderColor: '#9ca3af', borderWidth: 1.5, borderDash: [4,4],
-                                    label: { display: true, content: 'MCS1 floor', color: '#6b7280', position: 'start',
+                                    label: { display: true, content: 'MCS1 floor', color: 'var(--state-neutral-text)', position: 'start',
                                              backgroundColor: 'rgba(255,255,255,.9)', font: { size: 10 }, padding: 4 },
                                 },
                             },
@@ -6584,7 +6628,7 @@
             const stat = (color, n, label) =>
                 '<span class="item"><span class="dot" style="background:' + color + '"></span><strong>' + n + '</strong> ' + label + '</span>';
             el.innerHTML =
-                stat('var(--success)', cnt.green, HEALTH_LABEL.green)
+                stat('var(--state-neutral-text)', cnt.green, HEALTH_LABEL.green)
               + stat('var(--warning)', cnt.yellow, HEALTH_LABEL.yellow)
               + stat('var(--danger-bright)', cnt.red, HEALTH_LABEL.red)
               + (cnt.signal ? stat('var(--text-dim)', cnt.signal, HEALTH_LABEL.signal) : '')
@@ -7459,14 +7503,14 @@
                 refreshRadiusData();
             } catch (e) {
                 document.getElementById('oidcStatus').textContent = 'Failed to load config';
-                document.getElementById('oidcStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('oidcStatus'), 'var(--danger-fill)');
             }
 
             try {
                 await refreshRadiusData();
             } catch (e) {
                 document.getElementById('radiusStatus').textContent = 'Failed to load built-in RADIUS data';
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--danger-fill)');
             }
         }
         async function saveSlackWebhook() {
@@ -7480,11 +7524,11 @@
                 });
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 return true;
             } catch (e) {
                 statusEl.textContent = 'Failed to save: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
                 return false;
             }
         }
@@ -7493,26 +7537,26 @@
             const statusEl = document.getElementById('notifStatus');
             if (!url) {
                 statusEl.textContent = 'Enter a webhook URL first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             // Save first, then test
             if (!await saveSlackWebhook()) return;
             statusEl.textContent = 'Sending test...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/slack/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = 'Test sent! Check your Slack channel.';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7543,11 +7587,11 @@
                 });
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 return true;
             } catch (e) {
                 statusEl.textContent = 'Failed to save: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
                 return false;
             }
         }
@@ -7556,20 +7600,20 @@
             const statusEl = document.getElementById('emailStatus');
             if (!await saveEmailSettings()) return;
             statusEl.textContent = 'Sending test email...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/email/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = 'Test email sent! Check your inbox.';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test email';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7595,11 +7639,11 @@
                 });
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 return true;
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
                 return false;
             }
         }
@@ -7608,25 +7652,25 @@
             const statusEl = document.getElementById('snmpStatus');
             if (!document.getElementById('snmpTrapsEnabled').checked) {
                 statusEl.textContent = 'Enable SNMP traps first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             if (!await saveSnmpSettings()) return;
             statusEl.textContent = 'Sending test trap...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/snmp/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = data.message || 'Test trap sent!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test trap';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7647,7 +7691,7 @@
             if (headers) {
                 try { JSON.parse(headers); } catch (e) {
                     statusEl.textContent = 'Invalid JSON in custom headers';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                     return;
                 }
             }
@@ -7668,11 +7712,11 @@
                 });
                 if (!resp.ok) throw new Error(await readSaveError(resp));
                 statusEl.textContent = 'Saved!';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 return true;
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
                 return false;
             }
         }
@@ -7681,30 +7725,30 @@
             const statusEl = document.getElementById('webhookStatus');
             if (!document.getElementById('webhookEnabled').checked) {
                 statusEl.textContent = 'Enable webhooks first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             if (!document.getElementById('webhookUrl').value.trim()) {
                 statusEl.textContent = 'Enter a webhook URL first';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             if (!await saveWebhookSettings()) return;
             statusEl.textContent = 'Sending test webhook...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/webhooks/test', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = data.message || 'Test webhook sent!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'Failed to send test webhook';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -7713,8 +7757,8 @@
             if (!badge) return;
             if (radius?.running && radius?.healthy !== false) {
                 badge.textContent = 'Active';
-                badge.style.background = '#d1fae5';
-                badge.style.color = '#065f46';
+                badge.style.background = 'var(--state-neutral-bg)';
+                badge.style.color = 'var(--state-neutral-text)';
             } else if (radius?.running) {
                 badge.textContent = 'Degraded';
                 badge.style.background = '#fee2e2';
@@ -7795,7 +7839,7 @@
             const container = document.getElementById('radiusUsersList');
             if (!container) return;
             if (!users || users.length === 0) {
-                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No RADIUS admin accounts configured.</div>';
+                container.innerHTML = '<div style="font-size:0.75rem;color:var(--state-neutral-text);padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No RADIUS admin accounts configured.</div>';
                 return;
             }
 
@@ -7804,11 +7848,11 @@
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <strong style="font-size:0.82rem;">${escapeHtml(user.username)}</strong>
-                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${user.enabled ? '#d1fae5' : '#fee2e2'};color:${user.enabled ? '#065f46' : '#991b1b'};">
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${user.enabled ? 'var(--state-neutral-bg)' : '#fee2e2'};color:${user.enabled ? 'var(--state-neutral-text)' : '#991b1b'};">
                                 ${user.enabled ? 'Enabled' : 'Disabled'}
                             </span>
                         </div>
-                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                        <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">
                             Last auth: ${user.last_auth_at ? escapeHtml(formatDateTime(user.last_auth_at)) : 'Never'}
                         </div>
                     </div>
@@ -7824,7 +7868,7 @@
             const container = document.getElementById('radiusClientsList');
             if (!container) return;
             if (!clients || clients.length === 0) {
-                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No manual client overrides configured.</div>';
+                container.innerHTML = '<div style="font-size:0.75rem;color:var(--state-neutral-text);padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No manual client overrides configured.</div>';
                 return;
             }
 
@@ -7833,11 +7877,11 @@
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <strong style="font-size:0.82rem;">${escapeHtml(client.client_spec)}</strong>
-                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${client.enabled ? '#d1fae5' : '#fee2e2'};color:${client.enabled ? '#065f46' : '#991b1b'};">
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${client.enabled ? 'var(--state-neutral-bg)' : '#fee2e2'};color:${client.enabled ? 'var(--state-neutral-text)' : '#991b1b'};">
                                 ${client.enabled ? 'Enabled' : 'Disabled'}
                             </span>
                         </div>
-                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                        <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">
                             Short name: ${escapeHtml(client.shortname || '(auto)')}
                         </div>
                     </div>
@@ -7852,7 +7896,7 @@
         function renderRadiusRecentLogins(entries) {
             const container = document.getElementById('radiusRecentLogins');
             if (!entries || entries.length === 0) {
-                container.innerHTML = '<div style="font-size:0.75rem;color:#9ca3af;padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No admin login activity yet.</div>';
+                container.innerHTML = '<div style="font-size:0.75rem;color:var(--state-neutral-text);padding:10px;border:1px dashed #d1d5db;border-radius:8px;">No admin login activity yet.</div>';
                 return;
             }
 
@@ -7861,17 +7905,17 @@
                     <div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <strong style="font-size:0.82rem;">${escapeHtml(entry.username || '(unknown)')}</strong>
-                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${entry.outcome === 'accept' ? '#d1fae5' : '#fee2e2'};color:${entry.outcome === 'accept' ? '#065f46' : '#991b1b'};">
+                            <span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:999px;background:${entry.outcome === 'accept' ? 'var(--state-neutral-bg)' : '#fee2e2'};color:${entry.outcome === 'accept' ? 'var(--state-neutral-text)' : '#991b1b'};">
                                 ${entry.outcome === 'accept' ? 'Accept' : 'Reject'}
                             </span>
                         </div>
-                        <div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">
+                        <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">
                             ${escapeHtml(entry.client_name || entry.client_ip || 'Unknown device')}
                             ${entry.client_model ? ` · <span class="font-mono">${escapeHtml(entry.client_model)}</span>` : ''}
                             ${entry.reason ? ` · ${escapeHtml(entry.reason)}` : ''}
                         </div>
                     </div>
-                    <div style="font-size:0.72rem;color:#6b7280;text-align:right;white-space:nowrap;">
+                    <div style="font-size:0.72rem;color:var(--state-neutral-text);text-align:right;white-space:nowrap;">
                         ${entry.client_ip ? escapeHtml(entry.client_ip) + '<br>' : ''}
                         ${escapeHtml(formatDateTime(entry.occurred_at))}
                     </div>
@@ -7918,7 +7962,7 @@
             const progress = rollout.progress || {};
             summaryEl.textContent = `Phase ${rollout.phase} • ${rollout.status} • ${progress.updated || 0}/${progress.total || 0} updated${rollout.pause_reason ? ` • ${rollout.pause_reason}` : ''}`;
             statusEl.textContent = `Service account: ${escapeHtml(rollout.service_username || 'unknown')}`;
-            statusEl.style.color = rollout.status === 'paused' ? '#b45309' : (rollout.status === 'completed' ? '#10b981' : '#6b7280');
+            setStatusTone(statusEl, rollout.status === 'paused' ? 'var(--warning-text)' : (rollout.status === 'completed' ? 'var(--state-neutral-text)' : 'var(--state-neutral-text)'));
 
             const devices = rollout.devices || [];
             if (!devices.length) {
@@ -7940,11 +7984,11 @@
                         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
                             <div style="font-size:0.78rem;color:#111827;flex:1 1 auto;">
                                 <strong>${escapeHtml(device.ip)}</strong>
-                                <span style="color:#6b7280;"> • ${escapeHtml(device.device_type || 'device')} • ${escapeHtml(device.phase_assigned || 'pending')}</span>
-                                ${device.parent_ap_ip ? `<div style="font-size:0.72rem;color:#6b7280;margin-top:4px;">Parent AP: <span class="font-mono">${escapeHtml(device.parent_ap_ip)}</span></div>` : ''}
+                                <span style="color:var(--state-neutral-text);"> • ${escapeHtml(device.device_type || 'device')} • ${escapeHtml(device.phase_assigned || 'pending')}</span>
+                                ${device.parent_ap_ip ? `<div style="font-size:0.72rem;color:var(--state-neutral-text);margin-top:4px;">Parent AP: <span class="font-mono">${escapeHtml(device.parent_ap_ip)}</span></div>` : ''}
                             </div>
                             <div style="display:flex;align-items:flex-end;flex-direction:column;gap:6px;">
-                                <div style="font-size:0.72rem;color:${device.status === 'updated' ? '#065f46' : (device.status === 'failed' ? '#991b1b' : '#6b7280')};text-align:right;">
+                                <div style="font-size:0.72rem;color:${device.status === 'updated' ? 'var(--state-neutral-text)' : (device.status === 'failed' ? '#991b1b' : 'var(--state-neutral-text)')};text-align:right;">
                                     ${escapeHtml(device.status || 'pending')}
                                     ${device.error ? `<div style="margin-top:4px;max-width:280px;white-space:normal;">${escapeHtml(device.error)}</div>` : ''}
                                 </div>
@@ -7953,14 +7997,14 @@
                         </div>
                         ${repairOpen ? `
                             <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #d1d5db;">
-                                <div style="font-size:0.72rem;color:#6b7280;margin-bottom:6px;">Update AP ${escapeHtml(repairTarget)} credentials and reprobe attached CPEs before resuming the rollout.</div>
+                                <div style="font-size:0.72rem;color:var(--state-neutral-text);margin-bottom:6px;">Update AP ${escapeHtml(repairTarget)} credentials and reprobe attached CPEs before resuming the rollout.</div>
                                 <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:end;">
                                     <div>
-                                        <label style="font-size:0.68rem;color:#6b7280;">Username</label>
+                                        <label style="font-size:0.68rem;color:var(--state-neutral-text);">Username</label>
                                         <input id="radiusRepairUser-${repairKey}" type="text" placeholder="root" class="u-input-compact">
                                     </div>
                                     <div>
-                                        <label style="font-size:0.68rem;color:#6b7280;">Password</label>
+                                        <label style="font-size:0.68rem;color:var(--state-neutral-text);">Password</label>
                                         <input id="radiusRepairPass-${repairKey}" type="password" placeholder="Enter password" class="u-input-compact">
                                     </div>
                                     <div>
@@ -8003,13 +8047,13 @@
             renderRadiusRecentLogins(data.recent_logins || []);
             if (data.enabled && data.last_error) {
                 document.getElementById('radiusStatus').textContent = data.last_error;
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--danger-fill)');
             } else if (data.enabled && data.running && data.healthy === false) {
                 document.getElementById('radiusStatus').textContent = `RADIUS container is unhealthy (${data.health_status || 'unknown'})`;
-                document.getElementById('radiusStatus').style.color = '#ef4444';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--danger-fill)');
             } else if (data.enabled && data.running) {
                 document.getElementById('radiusStatus').textContent = `RADIUS listening on UDP ${data.port}`;
-                document.getElementById('radiusStatus').style.color = '#10b981';
+                setStatusTone(document.getElementById('radiusStatus'), 'var(--state-neutral-text)');
             }
         }
 
@@ -8018,13 +8062,13 @@
             if (!el) return;
             if (error) {
                 el.textContent = error;
-                el.style.color = '#ef4444';
+                setStatusTone(el, 'var(--danger-fill)');
             } else if (running) {
                 el.textContent = 'RADIUS running';
-                el.style.color = '#10b981';
+                setStatusTone(el, 'var(--state-neutral-text)');
             } else {
                 el.textContent = 'RADIUS stopped';
-                el.style.color = '#ef4444';
+                setStatusTone(el, 'var(--danger-fill)');
             }
         }
 
@@ -8050,7 +8094,7 @@
                 await Promise.all([loadRadiusUsers(), loadRadiusClients(), loadRadiusStats(), loadRadiusRollout()]);
             } catch (e) {
                 const statusEl = document.getElementById('radiusStatus');
-                if (statusEl) { statusEl.textContent = e.message || 'Failed to refresh RADIUS data'; statusEl.style.color = '#ef4444'; }
+                if (statusEl) { statusEl.textContent = e.message || 'Failed to refresh RADIUS data'; setStatusTone(statusEl, 'var(--danger-fill)'); }
                 // Don't leave a content area stuck on the loading placeholder if a
                 // loader threw before it could render.
                 for (const el of [clientsEl, loginsEl]) {
@@ -8064,21 +8108,21 @@
         async function restartRadiusServer() {
             const statusEl = document.getElementById('radiusStatus');
             statusEl.textContent = 'Restarting...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 await fetch('/api/auth/radius/restart', { method: 'POST' });
                 statusEl.textContent = 'Restart triggered';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
             } catch (e) {
                 statusEl.textContent = 'Restart failed';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
         async function testRadiusLdap() {
             const statusEl = document.getElementById('radiusLdapStatus');
             statusEl.textContent = 'Testing LDAP connection...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/auth/radius/test-ldap', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8091,19 +8135,19 @@
                 });
                 const data = await resp.json();
                 statusEl.textContent = data.success ? data.message : (data.error || 'Test failed');
-                statusEl.style.color = data.success ? '#10b981' : '#ef4444';
+                setStatusTone(statusEl, data.success ? 'var(--state-neutral-text)' : 'var(--danger-fill)');
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
         async function pushRadiusToDevices() {
             const statusEl = document.getElementById('radiusStatus');
             const addr = document.getElementById('authRadiusHost').value.trim();
-            if (!addr) { statusEl.textContent = 'Enter an advertised address first'; statusEl.style.color = '#f59e0b'; return; }
+            if (!addr) { statusEl.textContent = 'Enter an advertised address first'; setStatusTone(statusEl, 'msg-warn'); return; }
             statusEl.textContent = 'Pushing RADIUS config to devices...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/auth/radius/push-to-devices', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8112,15 +8156,15 @@
                 if (resp.ok) {
                     const data = await resp.json();
                     statusEl.textContent = data.message;
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     const err = await resp.json();
                     statusEl.textContent = extractDetail(err.detail);
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8138,22 +8182,22 @@
             const statusEl = document.getElementById('cfgStatus-radius');
             if (statusEl) {
                 statusEl.textContent = 'Server and port filled from this appliance. Enter the shared secret.';
-                statusEl.style.color = 'var(--primary)';
+                setStatusTone(statusEl, 'var(--info-text)');
             }
         }
 
         async function testRadiusConfig() {
             const statusEl = document.getElementById('radiusStatus');
             statusEl.innerHTML = '<span class="spinner-inline"></span> Testing...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/auth/radius/test', { method: 'POST' });
                 const data = await resp.json();
                 statusEl.textContent = data.message || (data.success ? 'RADIUS server is healthy' : 'RADIUS test failed');
-                statusEl.style.color = data.success ? '#10b981' : '#dc2626';
+                setStatusTone(statusEl, data.success ? 'var(--state-neutral-text)' : 'var(--danger-fill)');
             } catch (e) {
                 statusEl.textContent = 'Test failed: ' + e.message;
-                statusEl.style.color = '#dc2626';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8169,7 +8213,7 @@
 
             if (enabled && !secret && !secretAlreadySet) {
                 statusEl.textContent = 'Shared secret required when RADIUS is enabled';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8199,12 +8243,12 @@
                 if (!resp.ok) throw new Error(data.detail || 'Failed to save');
                 if (ldapPw) { ldapPw.value = ''; ldapPw.placeholder = '(unchanged)'; }
                 statusEl.textContent = 'RADIUS config saved';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await loadAuthSettings();
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to save RADIUS config';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8221,11 +8265,11 @@
                 renderRadiusSecretHealth(builtinRadiusSummary);
                 setRadiusBadge(builtinRadiusSummary);
                 statusEl.textContent = 'Secret review date recorded';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to mark secret reviewed';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8237,11 +8281,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to start Radius rollout');
                 statusEl.textContent = 'Radius rollout started';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to start Radius rollout';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8256,11 +8300,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to resume Radius rollout');
                 statusEl.textContent = 'Radius rollout resumed';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to resume Radius rollout';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8275,11 +8319,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to cancel Radius rollout');
                 statusEl.textContent = 'Radius rollout cancelled';
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to cancel Radius rollout';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8290,7 +8334,7 @@
             const password = document.getElementById(`radiusRepairPass-${key}`)?.value || '';
             if (!username || !password) {
                 statusEl.textContent = 'Enter both AP username and password to repair inherited CPE credentials.';
-                statusEl.style.color = '#b45309';
+                setStatusTone(statusEl, 'var(--warning-text)');
                 return;
             }
             try {
@@ -8305,11 +8349,11 @@
                 if (!resp.ok) throw new Error(data.detail || 'Failed to update AP credentials');
                 radiusRolloutRepairTarget = null;
                 statusEl.textContent = `AP ${ip} credentials updated and reprobed`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to update AP credentials';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8321,12 +8365,12 @@
 
             if (!username || !password) {
                 statusEl.textContent = 'Username and password are required';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
             if (password.length < 12) {
                 statusEl.textContent = 'Password must be at least 12 characters';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8342,11 +8386,11 @@
                 document.getElementById('radiusNewPassword').value = '';
                 document.getElementById('radiusNewEnabled').checked = true;
                 statusEl.textContent = `Added ${data.username}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to create user';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8358,7 +8402,7 @@
 
             if (!client_spec) {
                 statusEl.textContent = 'Client IP or CIDR is required';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8374,11 +8418,11 @@
                 document.getElementById('radiusClientShortname').value = '';
                 document.getElementById('radiusClientEnabled').checked = true;
                 statusEl.textContent = `Added ${data.client_spec}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to create client override';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8401,11 +8445,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to update user');
                 statusEl.textContent = `Updated ${data.username}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to update user';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8428,11 +8472,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to update client override');
                 statusEl.textContent = `Updated ${data.client_spec}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to update client override';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8444,11 +8488,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to delete user');
                 statusEl.textContent = `Deleted ${username}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to delete user';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8460,11 +8504,11 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed to delete client override');
                 statusEl.textContent = `Deleted ${clientSpec}`;
-                statusEl.style.color = '#10b981';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
                 await refreshRadiusData();
             } catch (e) {
                 statusEl.textContent = e.message || 'Failed to delete client override';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8482,7 +8526,7 @@
 
             if (enabled && (!provider_url || !client_id || (!client_secret && !secretAlreadySet))) {
                 statusEl.textContent = 'Provider URL, Client ID, and Client Secret required when enabled';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8494,20 +8538,20 @@
                 });
                 if (resp.ok) {
                     statusEl.textContent = 'SSO config saved!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     throw new Error('Failed to save');
                 }
             } catch (e) {
                 statusEl.textContent = 'Failed to save SSO config';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
         async function testOidcConfig() {
             const statusEl = document.getElementById('oidcStatus');
             statusEl.textContent = 'Testing OIDC discovery...';
-            statusEl.style.color = '#6b7280';
+            setStatusTone(statusEl, 'var(--state-neutral-text)');
 
             try {
                 const resp = await fetch('/api/auth/test-oidc', {
@@ -8517,14 +8561,14 @@
                 const data = await resp.json();
                 if (data.success) {
                     statusEl.textContent = data.message;
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     statusEl.textContent = data.message || 'OIDC test failed';
-                    statusEl.style.color = '#ef4444';
+                    setStatusTone(statusEl, 'var(--danger-fill)');
                 }
             } catch (e) {
                 statusEl.textContent = 'Error testing OIDC: ' + e.message;
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8538,7 +8582,7 @@
 
             if (enabled && (!username || (!password && !passwordAlreadySet))) {
                 statusEl.textContent = 'Username and password required when enabled';
-                statusEl.style.color = '#f59e0b';
+                setStatusTone(statusEl, 'msg-warn');
                 return;
             }
 
@@ -8550,13 +8594,13 @@
                 });
                 if (resp.ok) {
                     statusEl.textContent = 'Device credentials saved!';
-                    statusEl.style.color = '#10b981';
+                    setStatusTone(statusEl, 'var(--state-neutral-text)');
                 } else {
                     throw new Error('Failed to save');
                 }
             } catch (e) {
                 statusEl.textContent = 'Failed to save device credentials';
-                statusEl.style.color = '#ef4444';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             }
         }
 
@@ -8568,11 +8612,11 @@
             if (!statusEl) return;
             statusEl.textContent = message || '';
             if (tone === 'error') {
-                statusEl.style.color = '#b91c1c';
+                setStatusTone(statusEl, 'var(--danger-fill)');
             } else if (tone === 'success') {
-                statusEl.style.color = '#047857';
+                setStatusTone(statusEl, 'var(--state-neutral-text)');
             } else {
-                statusEl.style.color = '';
+                setStatusTone(statusEl, '');
             }
         }
 
@@ -9135,8 +9179,13 @@
                 subtitle = `${weatherNotice} Device monitoring continues. The scheduler retries at the next check.`;
             }
             if (status.hold_clear_reason) subtitle = [subtitle, status.hold_clear_reason].filter(Boolean).join(' ');
-            reason.textContent = subtitle ? (state === 'blocked_firmware_hold' || status.hold_clear_reason ? '◷ ' : 'Ⅱ ') + subtitle : '';
-            reason.classList.toggle('info', state === 'blocked_firmware_hold' || Boolean(status.hold_clear_reason));
+            const isInfoNotice = state === 'blocked_firmware_hold' || Boolean(status.hold_clear_reason);
+            reason.textContent = subtitle ? (isInfoNotice ? '◷ ' : 'Ⅱ ') + subtitle : '';
+            if (isInfoNotice) {
+                setStatusTone(reason, 'msg-info');
+            } else {
+                setStatusTone(reason, '');
+            }
             setHidden(reason, !subtitle);
 
             // Track state changes for UI updates
@@ -9419,7 +9468,7 @@
                 <div class="backup-modal history-modal">
                     <div class="history-header">
                         <h3>Job History</h3>
-                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.1rem;line-height:1;padding:4px;">&times;</button>
+                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:1.1rem;line-height:1;padding:4px;">&times;</button>
                     </div>
                     <div class="history-view-tabs">
                         <button class="history-view-tab active" id="historyViewDevices" onclick="switchHistoryView('devices')">By Device</button>
@@ -9468,7 +9517,7 @@
                                     <th>Version</th><th>Status</th><th>Failed Stage</th><th>Dur.</th>
                                 </tr></thead>
                                 <tbody id="historyTableBody">
-                                    <tr><td colspan="8" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">Loading...</td></tr>
+                                    <tr><td colspan="8" style="text-align:center;padding:16px;color:var(--state-neutral-text);font-size:0.75rem;">Loading...</td></tr>
                                 </tbody>
                             </table>
                             <div id="historyLoadMore" class="hidden" style="text-align:center;padding:10px;">
@@ -9482,7 +9531,7 @@
                                     <th>Success</th><th>Failed</th><th>Skipped</th><th>Bank Mode</th>
                                 </tr></thead>
                                 <tbody id="jobHistoryTableBody">
-                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-dim);font-size:0.75rem;">Loading&hellip;</td></tr>
+                                    <tr><td colspan="7" style="text-align:center;padding:16px;color:var(--state-neutral-text);font-size:0.75rem;">Loading&hellip;</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -9624,8 +9673,8 @@
                         <td class="u-history-cell-time">${escapeHtml(timeStr)}</td>
                         <td class="u-history-cell-mono">${escapeHtml(job.job_id || '-')}</td>
                         <td class="u-history-cell">${durStr}</td>
-                        <td class="u-history-cell" style="color:#16a34a;">${job.success_count || 0}</td>
-                        <td class="u-history-cell" style="color:${job.failed_count ? '#dc2626' : 'inherit'};">${job.failed_count || 0}</td>
+                        <td class="u-history-cell msg-ok">${job.success_count || 0}</td>
+                        <td class="u-history-cell" style="color:${job.failed_count ? 'var(--danger-fill)' : 'inherit'};">${job.failed_count || 0}</td>
                         <td class="u-history-cell">${job.skipped_count || 0}</td>
                         <td class="u-history-cell">${escapeHtml(job.bank_mode || '-')}</td>
                     `;
@@ -9857,7 +9906,7 @@
             setHidden(document.getElementById('drawerSavedIndicator'), true);
             const status = document.getElementById('drawerSaveStatus');
             status.textContent = drawerCloseRequested ? 'Save or discard your changes before closing.' : '✎ Unsaved changes';
-            status.className = 'status-bar-badge waiting';
+            setStatusTone(status, 'msg-warn');
             syncDrawerPadding();
         }
 
@@ -10009,7 +10058,10 @@
                 loadDrawerFirmware();
                 loadFleetStatus();
             } catch (e) {
-                if (status) { status.textContent = drawerCloseRequested ? 'Could not save changes. Try Save again or select Discard.' : '✕ Not saved. Try again.'; status.className = 'status-bar-badge blocked'; }
+                if (status) {
+                    status.textContent = drawerCloseRequested ? 'Could not save changes. Try Save again or select Discard.' : '✕ Not saved. Try again.';
+                    setStatusTone(status, 'msg-err');
+                }
                 if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = 'Save changes'; }
             } finally {
                 if (btn) btn.removeAttribute('aria-busy');
@@ -10272,7 +10324,7 @@
 
                 if (result.last_error) {
                     el.textContent = result.last_error;
-                    el.style.color = '#ef4444';
+                    setStatusTone(el, 'var(--danger-fill)');
                     return;
                 }
 
@@ -10285,13 +10337,13 @@
 
                     if (diffDays <= 0) {
                         el.textContent = 'Checked today';
-                        el.style.color = '';
+                        setStatusTone(el, '');
                     } else if (diffDays === 1) {
                         el.textContent = 'Checked yesterday';
-                        el.style.color = '';
+                        setStatusTone(el, '');
                     } else {
                         el.textContent = 'Stale (' + diffDays + ' days)';
-                        el.style.color = '#f59e0b';
+                        setStatusTone(el, 'msg-warn');
                     }
                 }
             } catch (e) {}
@@ -10491,7 +10543,7 @@
                 const data = await resp.json();
                 if (data.enabled && data.domain) {
                     const expiry = data.days_until_expiry != null ? `${data.days_until_expiry} days` : 'unknown';
-                    const renewalClass = data.needs_renewal ? 'color:#ef4444;' : 'color:#22c55e;';
+                    const renewalClass = data.needs_renewal ? 'color:var(--danger-fill);' : 'color:var(--state-neutral-text);';
                     el.innerHTML = `<span style="font-weight:500;">Domain:</span> ${data.domain}<br>`
                         + `<span style="font-weight:500;">Certificate:</span> Let's Encrypt`
                         + ` &middot; <span style="${renewalClass}">expires in ${expiry}</span>`
@@ -10522,15 +10574,15 @@
                 const data = await resp.json();
                 if (resp.ok) {
                     status.textContent = 'Certificate configured successfully';
-                    status.style.color = '#22c55e';
+                    setStatusTone(status, 'var(--state-neutral-text)');
                     loadSslStatus();
                 } else {
                     status.textContent = data.detail || 'Failed to configure HTTPS';
-                    status.style.color = '#ef4444';
+                    setStatusTone(status, 'var(--danger-fill)');
                 }
             } catch (e) {
                 status.textContent = 'Error: ' + e.message;
-                status.style.color = '#ef4444';
+                setStatusTone(status, 'var(--danger-fill)');
             }
         }
 
@@ -10548,11 +10600,11 @@
             const status = document.getElementById('backupStatus');
             if (!passphrase || passphrase.length < 8) {
                 status.textContent = 'Passphrase must be at least 8 characters';
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
                 return;
             }
             status.textContent = 'Exporting...';
-            status.style.color = '#6b7280';
+            setStatusTone(status, 'var(--state-neutral-text)');
             try {
                 const resp = await fetch('/api/backup/export', {
                     method: 'POST',
@@ -10576,11 +10628,11 @@
                 a.remove();
                 URL.revokeObjectURL(url);
                 status.textContent = 'CSV exported successfully';
-                status.style.color = '#16a34a';
+                setStatusTone(status, 'msg-ok');
                 document.getElementById('exportPassphrase').value = '';
             } catch (e) {
                 status.textContent = 'Export error: ' + e.message;
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
             }
         }
 
@@ -10592,17 +10644,17 @@
 
             if (!fileInput.files.length) {
                 status.textContent = 'Please select a CSV file';
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
                 return;
             }
             if (!passphrase || passphrase.length < 8) {
                 status.textContent = 'Passphrase must be at least 8 characters';
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
                 return;
             }
 
             status.innerHTML = '<span class="spinner-inline"></span> Importing...';
-            status.style.color = '#6b7280';
+            setStatusTone(status, 'var(--state-neutral-text)');
 
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
@@ -10638,7 +10690,7 @@
                 }
                 const totalFailures = failures + (ru.failed || 0);
                 status.textContent = summary;
-                status.style.color = totalFailures ? '#dc2626' : '#16a34a';
+                setStatusTone(status, totalFailures ? 'var(--danger-fill)' : 'var(--state-neutral-text)');
 
                 document.getElementById('importPassphrase').value = '';
                 fileInput.value = '';
@@ -10649,7 +10701,7 @@
                 loadFleetStatus();
             } catch (e) {
                 status.textContent = 'Import error: ' + e.message;
-                status.style.color = '#dc2626';
+                setStatusTone(status, 'var(--danger-fill)');
             }
         }
 
@@ -10882,7 +10934,7 @@
                 html += ` <a class="action-link" onclick="viewDeviceConfig('${ip}');event.stopPropagation();">View</a>`;
             }
             if (pushing) {
-                html += ' <span style="color:#6b7280;font-size:0.7rem;">Pushing...</span>';
+                html += ' <span style="color:var(--state-neutral-text);font-size:0.7rem;">Pushing...</span>';
             }
             return html;
         }
@@ -10944,7 +10996,7 @@
                     <div class="backup-modal" style="width:750px;max-height:80vh;display:flex;flex-direction:column;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                             <h3 class="u-m0">Config: ${escapeHtml(ip)}</h3>
-                            <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
+                            <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:1.2rem;">&times;</button>
                         </div>
                         <div style="display:flex;gap:16px;flex:1;overflow:hidden;">
                             <div style="flex:1;overflow:auto;">
@@ -10952,7 +11004,7 @@
                             </div>
                             <div style="width:250px;overflow-y:auto;">
                                 <h4 style="margin:0 0 8px;font-size:0.8rem;">Version History</h4>
-                                ${histHtml || '<p style="color:#9ca3af;font-size:0.72rem;">No history</p>'}
+                                ${histHtml || '<p style="color:var(--state-neutral-text);font-size:0.72rem;">No history</p>'}
                                 <div style="margin-top:8px;display:flex;gap:6px;">
                                     <button class="btn btn-sm btn-ghost diff-compare-btn" style="display:none;" onclick="compareSelectedConfigs('${ip}', this.closest('.backup-modal'))">Compare</button>
                                     <button class="btn btn-sm btn-ghost" onclick="previewMergeForDevice('${ip}')">Preview Merge</button>
@@ -11011,7 +11063,7 @@
                 }).join('');
                 skippedHtml = `
                     <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.4);padding:8px 12px;border-radius:6px;margin-bottom:8px;">
-                        <div style="font-weight:600;color:#f59e0b;margin-bottom:4px;">Skipped ${skipped.length} template${skipped.length === 1 ? '' : 's'} (target is ${targetType})</div>
+                        <div style="font-weight:600;color:var(--warning-text);margin-bottom:4px;">Skipped ${skipped.length} template${skipped.length === 1 ? '' : 's'} (target is ${targetType})</div>
                         <ul style="margin:4px 0 0 16px;padding:0;">${items}</ul>
                     </div>`;
             }
@@ -11026,7 +11078,7 @@
                     else diffHtml += `<div>${escaped}</div>`;
                 }
             } else {
-                diffHtml = '<div style="color:var(--text-dim);padding:8px;">No diff: every template was filtered out for this device type.</div>';
+                diffHtml = '<div style="color:var(--state-neutral-text);padding:8px;">No diff: every template was filtered out for this device type.</div>';
             }
             const overlay = document.createElement('div');
             overlay.className = 'backup-overlay open';
@@ -11035,7 +11087,7 @@
                 <div class="backup-modal" style="width:700px;max-height:80vh;display:flex;flex-direction:column;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <h3 class="u-m0">Config Diff: ${escapeHtml(title)}</h3>
-                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:1.2rem;">&times;</button>
+                        <button onclick="this.closest('.backup-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--state-neutral-text);font-size:1.2rem;">&times;</button>
                     </div>
                     ${skippedHtml}
                     <div class="diff-pre" style="flex:1;overflow:auto;">${diffHtml}</div>
@@ -12065,7 +12117,7 @@
                 if (!panel) return;
                 if (countEl) countEl.textContent = entries.length ? `(${entries.length})` : '';
                 if (!entries.length) {
-                    panel.innerHTML = '<div style="color:var(--text-dim);padding:8px;">No enforce log entries yet.</div>';
+                    panel.innerHTML = '<div style="color:var(--state-neutral-text);padding:8px;">No enforce log entries yet.</div>';
                     return;
                 }
                 panel.innerHTML = entries.map(e => {

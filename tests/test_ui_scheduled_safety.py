@@ -20,6 +20,8 @@ def test_schedule_stop_reason_is_visible_and_clears(state):
     html = TEMPLATE.read_text()
     source = re.search(r"        function updateSchedulerUI\(status\) \{\n.*?\n        \}", html, re.S)
     assert source
+    tone_helper = re.search(r"        function setStatusTone\(.*?\n        \}", html, re.S)
+    assert tone_helper
     assert 'aria-describedby="barNotice"' in html
     script = r'''
 const assert = require('node:assert/strict'), vm = require('node:vm');
@@ -27,7 +29,8 @@ const [source, state, reason] = JSON.parse(require('node:fs').readFileSync(0, 'u
 const elements = Object.fromEntries(['barAutoToggle', 'barStateBadge', 'barNotice',
     'barRolloutSection', 'drawerWeatherToggle', 'drawerWeatherStatus',
     'drawerWeatherTemp', 'headerTemp'].map(id => [id, {
-        textContent: '', title: '', innerHTML: '', classList: {add(){}, toggle(){}, contains() {return true;}}, hidden: false
+        textContent: '', title: '', innerHTML: '', style: {},
+        classList: {add(){}, remove(){}, toggle(){}, contains() {return true;}}, hidden: false
     }]));
 const context = {
     document: {getElementById: id => elements[id] || null},
@@ -62,7 +65,7 @@ assert.equal(elements.headerTemp.textContent, ' · 0°C');
 assert.equal(elements.barNotice.textContent.includes(weatherNotice), false);
 '''
     result = subprocess.run(
-        [node, "-e", script], input=json.dumps([source.group(), state, "Resolve the failed device before a later window"]),
+        [node, "-e", script], input=json.dumps([tone_helper.group() + "\n" + source.group(), state, "Resolve the failed device before a later window"]),
         capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr

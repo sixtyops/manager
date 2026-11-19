@@ -50,7 +50,7 @@ def test_settings_follow_up_requires_successful_save(handler, functions, save_ok
         pytest.skip("Node.js is needed to run the settings handlers")
     source = (ROOT / "updater/templates/monitor.html").read_text()
     definitions = []
-    for name in [handler, "readSaveError", *functions]:
+    for name in [handler, "readSaveError", "setStatusTone", *functions]:
         match = re.search(
             rf"^        (?:async )?function {name}\([^\n]*\) \{{\n.*?^        \}}",
             source,
@@ -64,7 +64,14 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const [source, handler, saveOk] = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const calls = [];
-const status = {style: {}};
+const toneClasses = new Set(['msg-warn']);
+const status = {
+    style: {color: '#10b981'},
+    classList: {
+        remove(...names) { names.forEach(name => toneClasses.delete(name)); },
+        add(name) { toneClasses.add(name); },
+    },
+};
 let refreshes = 0;
 const context = {
     document: {
@@ -96,6 +103,8 @@ vm.runInContext(source, context);
     assert.equal(refreshes, !snmp && saveOk ? 1 : 0);
     const successMessage = snmp ? 'Test trap sent!' : 'Channel updated to beta';
     assert.equal(status.textContent, saveOk ? successMessage : 'Settings rejected');
+    assert.deepEqual([...toneClasses], [saveOk ? 'msg-ok' : 'msg-err']);
+    assert.equal(status.style.color, '');
 })().catch(error => {
     console.error(error);
     process.exitCode = 1;

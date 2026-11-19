@@ -80,7 +80,7 @@ function element(id) {
         elements.set(id, {textContent: '', innerHTML: '', style: {}, disabled: false,
             value: '3', dataset: {}, focus() { this.focused = true; },
             classList: {contains: c => classes.has(c), add: c => classes.add(c),
-                remove: c => classes.delete(c), toggle(c, on) {
+                remove: (...names) => names.forEach(name => classes.delete(name)), toggle(c, on) {
                     if (on === undefined) on = !classes.has(c);
                     on ? classes.add(c) : classes.delete(c);
                 }}, setAttribute() {}, removeAttribute() {}});
@@ -95,7 +95,7 @@ const syncDrawerPadding = () => {};
 const requestAnimationFrame = fn => fn();
 const setTimeout = () => 1;
 const clearTimeout = () => {};
-''' + body)
+''' + _monitor_function('setStatusTone') + '\n' + body)
     result = subprocess.run([NODE, str(script)], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
 
