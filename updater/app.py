@@ -6335,15 +6335,7 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
             "timing_unavailable": "Deferred: firmware admission timing is missing or invalid.",
         }
         reason = messages[reason_code]
-        device_status = job.devices[ip]
-        device_status.status = "pending"
-        device_status.error = None
-        device_status.progress_message = reason
-        device_status.deferral_reason = reason_code
-        device_status.deferral_message = reason
-        deferred_ips = getattr(job, "_deferred_admission_ips", set())
-        deferred_ips.add(ip)
-        job._deferred_admission_ips = deferred_ips
+        _record_device_deferral(job, ip, reason_code, reason)
         return False, reason
 
     if not (job.is_scheduled and job.enforce_window_cutoff):
@@ -6380,6 +6372,11 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
         reason_code = "timing_unavailable"
         reason = f"Deferred: maintenance window timing is unavailable ({exc}); device will retry next window."
 
+    _record_device_deferral(job, ip, reason_code, reason)
+    return False, reason
+
+
+def _record_device_deferral(job: "UpdateJob", ip: str, reason_code: str, reason: str) -> None:
     device_status = job.devices[ip]
     device_status.status = "pending"
     device_status.error = None
@@ -6389,7 +6386,6 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
     deferred_ips = getattr(job, "_deferred_admission_ips", set())
     deferred_ips.add(ip)
     job._deferred_admission_ips = deferred_ips
-    return False, reason
 
 
 def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
@@ -7431,7 +7427,20 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             # Await each complete update and persist its result before moving on.
             for ip in device_ips:
                 await _run_device(ip, pass_number)
-                if job.cancelled or ip in getattr(job, "_deferred_admission_ips", set()):
+                if job.cancelled:
+                    break
+                if ip in getattr(job, "_deferred_admission_ips", set()):
+                    deferred = job.devices[ip]
+                    if (
+                        deferred.status == "pending"
+                        and deferred.deferral_reason
+                        and deferred.deferral_message
+                    ):
+                        for pending_ip, device in job.devices.items():
+                            if pending_ip != ip and device.status == "pending":
+                                _record_device_deferral(
+                                    job, pending_ip, deferred.deferral_reason, deferred.deferral_message,
+                                )
                     break
         else:
             await asyncio.gather(
