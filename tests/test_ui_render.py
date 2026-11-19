@@ -47,7 +47,6 @@ def test_monitor_page_renders_with_seeded_data(authed_client, mock_db):
 
 def test_monitor_weather_and_bank_labels_match_behavior(authed_client):
     html = authed_client.get("/").text
-    assert "Weather unavailable — guard not checked" in html
     assert "sampled ${sampleTime}" in html
     assert "currently ${tempDisplay}" not in html
     assert 'id="drawerParallel"' not in html

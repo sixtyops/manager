@@ -8893,8 +8893,35 @@
 
             if (barToggle) setToggleActive(barToggle, autoUpdateEnabled);
             badge.className = 'status-badge status-bar-badge';
-            reason.textContent = '';
-            reason.title = '';
+            const weatherNotice = status.weather_status || '';
+            reason.textContent = weatherNotice;
+            reason.title = weatherNotice;
+
+            // Show weather only while the guard is enabled and data is available.
+            const weatherEnabled = document.getElementById('drawerWeatherToggle')?.classList.contains('active');
+            const weatherStatus = document.getElementById('drawerWeatherStatus');
+            const weatherTemp = document.getElementById('drawerWeatherTemp');
+            const headerTemp = document.getElementById('headerTemp');
+            if (!weatherEnabled) {
+                if (weatherStatus) weatherStatus.textContent = '';
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else if (!status.weather || status.weather.temperature_c == null) {
+                if (weatherStatus) weatherStatus.textContent = weatherNotice;
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else {
+                if (weatherStatus) weatherStatus.textContent = '';
+                const tempDisplay = displayTemp(status.weather.temperature_c);
+                const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
+                const sampleTime = status.weather.fetched_at
+                    ? new Date(status.weather.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                    : '';
+                if (weatherTemp) {
+                    weatherTemp.textContent = sampleTime ? `(sampled ${sampleTime}: ${tempDisplay}${unit})` : '';
+                }
+                if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
+            }
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
@@ -8973,7 +9000,7 @@
             if (status.hold_clear_reason) {
                 subtitle = status.hold_clear_reason;
             }
-            reason.textContent = subtitle;
+            reason.textContent = [subtitle, weatherNotice].filter(Boolean).join(' · ');
             reason.title = reason.textContent;
 
             // Track state changes for UI updates
@@ -8988,30 +9015,6 @@
             // Hide device count section when all current - badge already conveys this
             setHidden(countSection, state === 'blocked_all_current' || effectiveAllCurrent);
 
-            // Show weather only while the guard is enabled and data is available.
-            const weatherEnabled = document.getElementById('drawerWeatherToggle')?.classList.contains('active');
-            const weatherStatus = document.getElementById('drawerWeatherStatus');
-            const weatherTemp = document.getElementById('drawerWeatherTemp');
-            const headerTemp = document.getElementById('headerTemp');
-            if (!weatherEnabled) {
-                if (weatherStatus) weatherStatus.textContent = '';
-                if (weatherTemp) weatherTemp.textContent = '';
-                if (headerTemp) headerTemp.textContent = '';
-            } else if (!status.weather || status.weather.temperature_c == null) {
-                if (weatherStatus) weatherStatus.textContent = 'Weather unavailable — guard not checked';
-                if (weatherTemp) weatherTemp.textContent = '';
-                if (headerTemp) headerTemp.textContent = '';
-            } else {
-                if (weatherStatus) weatherStatus.textContent = '';
-                const tempDisplay = displayTemp(status.weather.temperature_c);
-                const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
-                const sampleTime = status.weather.fetched_at
-                    ? new Date(status.weather.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-                    : '';
-                if (weatherTemp) weatherTemp.textContent = `(sampled ${sampleTime}: ${tempDisplay}${unit})`;
-                if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
-            }
-
             // Show queue state while work remains or is blocked.
             const rolloutSection = document.getElementById('barRolloutSection');
             if (state === 'blocked_all_current' || effectiveAllCurrent) {
@@ -9019,18 +9022,18 @@
                 renderQueueStatus(null);
             } else if (status.rollout) {
                 setHidden(rolloutSection, false);
-                renderQueueStatus(status.rollout);
+                renderQueueStatus(status.rollout, subtitle);
             } else {
                 setHidden(rolloutSection, false);
                 renderQueueStatus({
                     remaining_devices: lastBehindCount,
                     next_window: status.next_window_iso || status.next_window,
                     pause_reason: status.block_reason,
-                });
+                }, subtitle);
             }
         }
 
-        function renderQueueStatus(queue) {
+        function renderQueueStatus(queue, barReason = '') {
             const remainingEl = document.getElementById('barQueueRemaining');
             const currentEl = document.getElementById('barQueueCurrent');
             const cutoffEl = document.getElementById('barQueueCutoff');
@@ -9053,7 +9056,6 @@
             cutoffEl.textContent = [cutoff, ramp].filter(Boolean).join(' · ');
             nextEl.textContent = queue.next_window ? `Next window: ${when(queue.next_window)}` : '';
             // Skip the reason when the Auto-Update section already shows it.
-            const barReason = document.getElementById('barBlockReason').textContent;
             reasonEl.textContent = queue.pause_reason && queue.pause_reason !== barReason ? queue.pause_reason : '';
         }
 
