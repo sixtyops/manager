@@ -329,6 +329,8 @@ class AutoUpdateScheduler:
             weather_ok, weather_data = await services.check_weather_ok(
                 zip_code if zip_code else None, min_temp_c
             )
+            if weather_data:
+                weather_data["fetched_at"] = datetime.now().isoformat()
             self._weather_info = weather_data
             self._weather_ok = weather_ok
             self._weather_checked_today = datetime.now().strftime("%Y-%m-%d")
@@ -475,6 +477,8 @@ class AutoUpdateScheduler:
                 weather_ok, weather_data = await services.check_weather_ok(
                     zip_code if zip_code else None, min_temp_c
                 )
+                if weather_data:
+                    weather_data["fetched_at"] = datetime.now().isoformat()
                 self._weather_info = weather_data
                 self._weather_ok = weather_ok
                 self._weather_checked_today = today_key
@@ -1331,10 +1335,16 @@ class AutoUpdateScheduler:
         )
         next_window_iso = next_windows[0].isoformat() if next_windows else None
 
+        weather_status = None
+        if (settings.get("weather_check_enabled") == "true"
+                and (self._weather_info or {}).get("temperature_c") is None):
+            weather_status = "Weather or location data unavailable. Weather Guard did not run."
+
         return {
             "state": self._state,
             "block_reason": self._block_reason,
             "weather": self._weather_info,
+            "weather_status": weather_status,
             "last_run_result": self._last_run_result,
             "last_run_time": self._last_run_time,
             "current_job_id": self._current_job_id,

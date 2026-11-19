@@ -45,6 +45,17 @@ def test_monitor_page_renders_with_seeded_data(authed_client, mock_db):
         assert f'id="{element_id}"' in html, f"missing element id {element_id}"
 
 
+def test_monitor_weather_and_bank_labels_match_behavior(authed_client):
+    html = authed_client.get("/").text
+    assert "sampled ${sampleTime}" in html
+    assert "currently ${tempDisplay}" not in html
+    assert 'id="drawerParallel"' not in html
+    assert "parallel_updates:" not in html
+    assert "Manual Update Bank Mode" in html
+    assert "Scheduled updates use one bank." in html
+    assert "Updates run one device at a time." in html
+
+
 def test_monitor_page_does_not_render_pre_update_reboot_switch(authed_client):
     html = authed_client.get("/").text
     assert "Pre-update Reboot" not in html

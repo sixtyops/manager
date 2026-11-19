@@ -317,7 +317,7 @@ class TestSettingsAPI:
         resp = authed_client.get("/api/settings")
         s = resp.json()["settings"]
         assert s["schedule_days"] == "mon,wed,fri"
-        assert s["parallel_updates"] == "4"
+        assert s["parallel_updates"] == "2"
 
     def test_save_settings_rejects_invalid_keys(self, authed_client):
         resp = authed_client.post("/api/settings/save", json={
@@ -465,7 +465,7 @@ class TestSettingsAPI:
         resp = authed_client.get("/api/settings")
         s = resp.json()["settings"]
         assert s["schedule_days"] == "mon,fri"
-        assert s["parallel_updates"] == "8"
+        assert s["parallel_updates"] == "2"
         assert s.get("admin_password_hash") != "evil"
 
     def test_save_settings_calls_fetcher_reselect(self, authed_client):

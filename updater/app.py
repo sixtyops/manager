@@ -2371,7 +2371,7 @@ async def get_settings(session: dict = Depends(require_auth)):
 
 _SETTINGS_WRITABLE = {
     "schedule_enabled", "schedule_days", "schedule_start_hour", "schedule_end_hour",
-    "parallel_updates", "bandwidth_limit_kbps",
+    "bandwidth_limit_kbps",
     "bank_mode", "allow_downgrade", "timezone", "zip_code",
     "weather_check_enabled", "min_temperature_c", "temperature_unit",
     "schedule_scope", "schedule_scope_data",
@@ -2472,10 +2472,6 @@ def _validate_settings(filtered: dict):
         end_hour = _parse_int_field(filtered["schedule_end_hour"], "schedule_end_hour")
         if not 0 <= end_hour <= 23:
             raise HTTPException(400, "schedule_end_hour must be between 0 and 23")
-    if "parallel_updates" in filtered:
-        parallel = _parse_int_field(filtered["parallel_updates"], "parallel_updates")
-        if parallel < 1 or parallel > 32:
-            raise HTTPException(400, "parallel_updates must be between 1 and 32")
     if "bandwidth_limit_kbps" in filtered:
         bw = _parse_int_field(filtered["bandwidth_limit_kbps"], "bandwidth_limit_kbps")
         if bw < 0 or bw > 1000000:

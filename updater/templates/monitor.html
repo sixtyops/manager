@@ -3038,14 +3038,13 @@
 
                     <div class="drawer-col">
                         <div class="drawer-section-title">Settings</div>
-                        <label for="drawerBankMode">Update Mode</label>
+                        <label for="drawerBankMode">Manual Update Bank Mode</label>
                         <select id="drawerBankMode" name="drawerBankMode" data-min-role-disable="operator">
                             <option value="one">Single bank (recommended)</option>
                             <option value="both">Both Banks</option>
                         </select>
-                        <div style="margin-top:8px;">
-                            <label for="drawerParallel">Parallel</label><input type="number" id="drawerParallel" name="drawerParallel" value="2" min="1" max="10" data-min-role-disable="operator">
-                        </div>
+                        <div class="u-text-xs-muted">Scheduled updates use one bank.</div>
+                        <div class="u-text-xs-muted">Updates run one device at a time.</div>
                     </div>
 
                     <div class="drawer-col-wide">
@@ -3062,6 +3061,7 @@
                             <span id="drawerTempUnit" class="u-text-xs-muted">&deg;F</span>
                             <span id="drawerWeatherTemp" class="u-text-sm-muted" style="margin-left:auto;"></span>
                         </div>
+                        <div id="drawerWeatherStatus" class="u-text-xs-muted" role="status" aria-live="polite"></div>
                         <div class="toggle-sm-row">
                             <label class="toggle-sm-label toggle-sm-label-fixed" for="drawerZipCode">Postal / Zip</label>
                             <input type="text" id="drawerZipCode" name="drawerZipCode" placeholder="Auto" maxlength="10" class="u-w-56" data-min-role-disable="operator">
@@ -8908,8 +8908,35 @@
 
             if (barToggle) setToggleActive(barToggle, autoUpdateEnabled);
             badge.className = 'status-badge status-bar-badge';
-            reason.textContent = '';
-            reason.title = '';
+            const weatherNotice = status.weather_status || '';
+            reason.textContent = weatherNotice;
+            reason.title = weatherNotice;
+
+            // Show weather only while the guard is enabled and data is available.
+            const weatherEnabled = document.getElementById('drawerWeatherToggle')?.classList.contains('active');
+            const weatherStatus = document.getElementById('drawerWeatherStatus');
+            const weatherTemp = document.getElementById('drawerWeatherTemp');
+            const headerTemp = document.getElementById('headerTemp');
+            if (!weatherEnabled) {
+                if (weatherStatus) weatherStatus.textContent = '';
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else if (!status.weather || status.weather.temperature_c == null) {
+                if (weatherStatus) weatherStatus.textContent = weatherNotice;
+                if (weatherTemp) weatherTemp.textContent = '';
+                if (headerTemp) headerTemp.textContent = '';
+            } else {
+                if (weatherStatus) weatherStatus.textContent = '';
+                const tempDisplay = displayTemp(status.weather.temperature_c);
+                const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
+                const sampleTime = status.weather.fetched_at
+                    ? new Date(status.weather.fetched_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                    : '';
+                if (weatherTemp) {
+                    weatherTemp.textContent = sampleTime ? `(sampled ${sampleTime}: ${tempDisplay}${unit})` : '';
+                }
+                if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
+            }
 
             if (state === 'disabled') {
                 badge.innerHTML = '<span class="status-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>Off';
@@ -8988,7 +9015,7 @@
             if (status.hold_clear_reason) {
                 subtitle = status.hold_clear_reason;
             }
-            reason.textContent = subtitle;
+            reason.textContent = [subtitle, weatherNotice].filter(Boolean).join(' · ');
             reason.title = reason.textContent;
 
             // Track state changes for UI updates
@@ -9003,16 +9030,6 @@
             // Hide device count section when all current - badge already conveys this
             setHidden(countSection, state === 'blocked_all_current' || effectiveAllCurrent);
 
-            // Update weather temp in drawer and header
-            if (status.weather && status.weather.temperature_c !== null) {
-                const tempDisplay = displayTemp(status.weather.temperature_c);
-                const unit = tempUnit === 'f' ? '\u00B0F' : '\u00B0C';
-                const el = document.getElementById('drawerWeatherTemp');
-                if (el) el.textContent = `(currently ${tempDisplay}${unit})`;
-                const headerTemp = document.getElementById('headerTemp');
-                if (headerTemp) headerTemp.textContent = ` \u00B7 ${tempDisplay}${unit}`;
-            }
-
             // Show queue state while work remains or is blocked.
             const rolloutSection = document.getElementById('barRolloutSection');
             if (state === 'blocked_all_current' || effectiveAllCurrent) {
@@ -9020,18 +9037,18 @@
                 renderQueueStatus(null);
             } else if (status.rollout) {
                 setHidden(rolloutSection, false);
-                renderQueueStatus(status.rollout);
+                renderQueueStatus(status.rollout, subtitle);
             } else {
                 setHidden(rolloutSection, false);
                 renderQueueStatus({
                     remaining_devices: lastBehindCount,
                     next_window: status.next_window_iso || status.next_window,
                     pause_reason: status.block_reason,
-                });
+                }, subtitle);
             }
         }
 
-        function renderQueueStatus(queue) {
+        function renderQueueStatus(queue, barReason = '') {
             const remainingEl = document.getElementById('barQueueRemaining');
             const currentEl = document.getElementById('barQueueCurrent');
             const cutoffEl = document.getElementById('barQueueCutoff');
@@ -9054,7 +9071,6 @@
             cutoffEl.textContent = [cutoff, ramp].filter(Boolean).join(' · ');
             nextEl.textContent = queue.next_window ? `Next window: ${when(queue.next_window)}` : '';
             // Skip the reason when the Auto-Update section already shows it.
-            const barReason = document.getElementById('barBlockReason').textContent;
             reasonEl.textContent = queue.pause_reason && queue.pause_reason !== barReason ? queue.pause_reason : '';
         }
 
@@ -9652,10 +9668,6 @@
                 // Bank mode
                 document.getElementById('drawerBankMode').value = s.bank_mode || 'one';
 
-                // Parallel
-                document.getElementById('drawerParallel').value = s.parallel_updates || '2';
-
-
                 // Beta
                 drawerBetaEnabled = s.firmware_beta_enabled === 'true';
                 const betaToggle = document.getElementById('drawerBetaToggle');
@@ -9751,7 +9763,7 @@
         // Attach change listeners to drawer inputs
         document.addEventListener('DOMContentLoaded', () => {
             ['drawerStartHour', 'drawerEndHour', 'drawerBankMode',
-             'drawerParallel', 'drawerMinTemp', 'drawerZipCode',
+             'drawerMinTemp', 'drawerZipCode',
              'drawerCanaryHoldDays', 'drawerCooldownDays'].forEach(id => {
 
                 const el = document.getElementById(id);
@@ -9788,7 +9800,6 @@
                 schedule_start_hour: document.getElementById('drawerStartHour').value,
                 schedule_end_hour: document.getElementById('drawerEndHour').value,
                 bank_mode: document.getElementById('drawerBankMode').value,
-                parallel_updates: document.getElementById('drawerParallel').value,
                 min_temperature_c: String(storageTemp(Number.isFinite(parseFloat(document.getElementById('drawerMinTemp').value)) ? parseFloat(document.getElementById('drawerMinTemp').value) : 14)),
                 zip_code: document.getElementById('drawerZipCode').value,
                 firmware_canary_hold_days: document.getElementById('drawerCanaryHoldDays').value,

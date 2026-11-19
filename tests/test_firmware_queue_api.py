@@ -4,7 +4,11 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from updater import app as app_module
+from updater import database as scheduler_db
+from updater.scheduler import AutoUpdateScheduler
 
 
 def test_scheduler_status_exposes_queue_state_without_wave_fields(authed_client, monkeypatch):
@@ -64,7 +68,7 @@ def test_monitor_uses_serial_queue_labels_without_wave_controls():
     assert 'id="barQueueCutoff"' in template
     assert 'id="barQueueNextWindow"' in template
     assert 'id="barQueueReason"' in template
-    assert "renderQueueStatus(status.rollout)" in template
+    assert "renderQueueStatus(status.rollout, subtitle)" in template
     assert "barPhaseIndicator" not in template
     assert "barResumeBtn" not in template
     assert "barCancelBtn" not in template
@@ -149,3 +153,33 @@ def test_scheduled_runner_rejects_legacy_ap_batch_input(mock_db, monkeypatch, tm
         asyncio.run(app_module._start_scheduled_update(
             ap_ips=["192.0.2.10"], firmware_file=firmware,
         ))
+
+
+@pytest.mark.parametrize(
+    "enabled, weather, unavailable",
+    [
+        ("true", None, True),
+        ("true", {"temperature_c": None}, True),
+        ("true", {"temperature_c": 0}, False),
+        ("false", None, False),
+    ],
+)
+def test_scheduler_status_reports_unchecked_weather_guard(
+    authed_client, mock_db, monkeypatch, enabled, weather, unavailable,
+):
+    scheduler = AutoUpdateScheduler(broadcast_func=None, start_update_func=None)
+    scheduler._state = "blocked_safety"
+    scheduler._block_reason = "Safety check failed"
+    scheduler._weather_info = weather
+    scheduler_db.set_setting("weather_check_enabled", enabled)
+    monkeypatch.setattr(app_module, "get_scheduler", lambda: scheduler)
+
+    response = authed_client.get("/api/scheduler/status")
+
+    assert response.status_code == 200
+    status = response.json()
+    assert status["weather_status"] == (
+        "Weather or location data unavailable. Weather Guard did not run." if unavailable else None
+    )
+    assert status["state"] == "blocked_safety"
+    assert status["block_reason"] == "Safety check failed"

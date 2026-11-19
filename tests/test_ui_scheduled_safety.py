@@ -25,8 +25,9 @@ def test_schedule_stop_reason_is_visible_and_clears(state):
 const assert = require('node:assert/strict'), vm = require('node:vm');
 const [source, state, reason] = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const elements = Object.fromEntries(['barAutoToggle', 'barStateBadge', 'barBlockReason',
-    'barDeviceCountSection', 'barRolloutSection'].map(id => [id, {
-        textContent: '', title: '', innerHTML: '', classList: {add(){}}, hidden: false
+    'barDeviceCountSection', 'barRolloutSection', 'drawerWeatherToggle', 'drawerWeatherStatus',
+    'drawerWeatherTemp', 'headerTemp'].map(id => [id, {
+        textContent: '', title: '', innerHTML: '', classList: {add(){}, contains() {return true;}}, hidden: false
     }]));
 const context = {
     document: {getElementById: id => elements[id] || null},
@@ -34,6 +35,7 @@ const context = {
     lastAutoState: 'disabled', setToggleActive() {},
     setHidden(element, hidden) {if (element) element.hidden = hidden;},
     updateBarDeviceCount() {}, renderQueueStatus() {},
+    displayTemp: value => value, tempUnit: 'c',
 };
 vm.createContext(context);
 vm.runInContext(source, context);
@@ -45,6 +47,21 @@ assert.ok(elements.barStateBadge.innerHTML.includes(state === 'disabled' ? 'Off'
 context.updateSchedulerUI({state: 'idle'});
 assert.equal(elements.barBlockReason.textContent.includes(reason), false);
 assert.equal(elements.barBlockReason.title.includes(reason), false);
+
+const weatherNotice = 'Weather or location data unavailable. Weather Guard did not run.';
+context.updateSchedulerUI({state, block_reason: reason, weather_status: weatherNotice});
+assert.equal(elements.barBlockReason.textContent, state === 'disabled'
+    ? weatherNotice : reason + ' · ' + weatherNotice);
+assert.equal(elements.barBlockReason.title, elements.barBlockReason.textContent);
+assert.equal(elements.drawerWeatherStatus.textContent, weatherNotice);
+
+context.updateSchedulerUI({state, weather: {temperature_c: 0, fetched_at: '2026-11-19T12:00:00'}});
+assert.match(elements.drawerWeatherTemp.textContent, /^\(sampled .+: 0°C\)$/);
+context.updateSchedulerUI({state, weather: {temperature_c: 0}});
+assert.equal(elements.drawerWeatherTemp.textContent, '');
+assert.equal(elements.drawerWeatherStatus.textContent, '');
+assert.equal(elements.headerTemp.textContent, ' · 0°C');
+assert.equal(elements.barBlockReason.textContent.includes(weatherNotice), false);
 '''
     result = subprocess.run(
         [node, "-e", script], input=json.dumps([source.group(), state, "Resolve the failed device before a later window"]),
