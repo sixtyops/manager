@@ -26,7 +26,7 @@ import httpx
 _device_tokens: dict[weakref.ReferenceType, str] = {}
 
 _secrets: set[str] = set()
-_pattern: re.Pattern[str] | None = None
+_pattern: tuple[str, ...] | None = None
 # Client collection can retire tokens while a literal pattern is being built.
 _registry_lock = threading.RLock()
 # Match canonical capability URLs up to ordinary log delimiters. The fixed
@@ -136,15 +136,14 @@ def register_secret(value: str | None) -> None:
 
 
 def _rebuild_secret_pattern() -> None:
-    """Compile one longest-first pattern for all registered literal forms."""
+    """Snapshot literal forms without compiling a fleet-sized regex."""
     global _pattern
     secrets = _secrets | set(_device_tokens.values())
     forms = {form for secret in secrets for form in (
         secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
         json.dumps(secret, ensure_ascii=False)[1:-1],
     )}
-    _pattern = re.compile("|".join(re.escape(form) for form in
-                                 sorted(forms, key=len, reverse=True))) if forms else None
+    _pattern = tuple(forms) if forms else None
 
 
 class _SanitizingFormatter(logging.Formatter):
@@ -160,17 +159,15 @@ class _SanitizingFormatter(logging.Formatter):
         return _sanitize(output)
 
 
-def _redact_token_spans(output: str, pattern: re.Pattern[str] | None) -> str:
+def _redact_token_spans(output: str, pattern: tuple[str, ...] | None) -> str:
     """Collect format and literal matches before replacing overlapping spans."""
     spans = []
-    for matcher in (pattern,):
-        if matcher is None:
-            continue
-        position = 0
-        while match := matcher.search(output, position):
-            spans.append(match.span())
-            # An interior match can extend beyond the preceding literal.
-            position = match.start() + 1
+    for literal in pattern or ():
+        position = output.find(literal)
+        while position >= 0:
+            spans.append((position, position + len(literal)))
+            # Include intersecting literals before merging their spans.
+            position = output.find(literal, position + 1)
     spans.sort(key=lambda span: (span[0], -span[1]))
     merged = []
     for start, end in spans:
