@@ -25,9 +25,9 @@ firmware. Record the other bank version as observed.
 | Signal | Read and fields | Normal values seen | Fault indication |
 |---|---|---|---|
 | CPE reconnect by MAC | AP `GET /cgi.lua/status?type=wireless,zones`; `wireless.peers[].mac`, `model`, `fw`, `linkUptime`, `rxRate`, `txRate`. The client method is `get_connected_cpes()`. | One peer remained listed. Radio MAC suffix `D0:A0:BE`, model `TNA-303X`, firmware `1.15.0.r55159`, `rxRate=2502`, `txRate=2502`, `linkUptime=4290` seconds at capture. | A hard down removes the expected peer. After it returns, match the same radio MAC and check that `linkUptime` starts again and rises. A replacement MAC does not prove the original CPE returned. Rate units need vendor confirmation. |
-| CPE `eth0` link and negotiation | CPE `GET /cgi.lua/status?type=interfaces`; `interfaces.eth0.disabled`, `type`, `zone`, and `mtu`. `get_device_info()` and `get_ap_info()` already read this endpoint but parse interface MACs only. | `disabled=false`, `type=wired`, `zone=wan`, `mtu=1500`. The captured response did not return link state, negotiated speed, or duplex fields. Later supported reports can expose `link_up` and byte counters. | A lower negotiated speed or duplex change cannot be detected from this capture. `disabled=false` does not prove carrier. Recovery checks use reported link state only when the pre-reboot report showed link-up. |
+| CPE `eth0` link and negotiation | CPE `GET /cgi.lua/status?type=interfaces`; `interfaces.eth0.disabled`, `type`, `zone`, and `mtu`. `get_eth0_recovery_state()` parses supported link and byte-counter fields when present. | `disabled=false`, `type=wired`, `zone=wan`, `mtu=1500`. This capture did not include link state, negotiated speed, or duplex fields. | A lower negotiated speed or duplex change cannot be detected from this capture. `disabled=false` does not prove carrier. Recovery checks use reported link state only when the pre-reboot report showed link-up. |
 | Customer MAC learned on CPE `eth0` | CPE `GET /cgi.lua/bridge_table`; response `data` rows contain the MAC, `dev`, port, and bridge text. `get_bridge_table()` returns `{mac, port}`. | Eight parsed entries; router suffix `B0:49:A0` appeared once on `eth0` under `br-wan`. The row had no VLAN, age, or dynamic/learning flag. | Missing router MAC or a different port fails the check. A hard Ethernet down should stop the counters and remove the customer row after aging. The current response cannot prove when the row was learned. A present row alone does not prove DHCP or end-to-end forwarding. |
-| Two-way traffic | CPE `GET /cgi.lua/status?type=interfaces`; `interfaces.eth0.rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`. AP per-CPE data uses the same peer endpoint as above with `rxBytes`, `txBytes`, `rxPackets`, `txPackets`. The client does not parse these counters today. | Six CPE samples, about 10 seconds apart, had nonzero deltas in both directions: `rx_bytes` 0.16–1.29 kbps and `tx_bytes` 1.86–3.51 kbps per interval. Across 51 seconds: 0.70 kbps RX and 2.56 kbps TX. AP per-CPE counters also rose both ways: `rxBytes` 3.03–11.01 kbps and `txBytes` 0.70–2.62 kbps per interval; across 50 seconds: 5.31 kbps RX and 1.59 kbps TX. | If one direction rises and the other does not, traffic is one-way. If both stop, the link may be down or idle; compare with the saved baseline and bridge evidence. For this router, idle traffic was nonzero both ways. Compute kbps as `8 × byte_delta / (1000 × elapsed_seconds)`. |
+| Two-way traffic | CPE `GET /cgi.lua/status?type=interfaces`; `interfaces.eth0.rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`. AP per-CPE data uses the same peer endpoint as above with `rxBytes`, `txBytes`, `rxPackets`, `txPackets`. The client can parse reported counters, but A5 recovery does not use their deltas as a gate. | Six CPE samples, about 10 seconds apart, had nonzero deltas in both directions: `rx_bytes` 0.16–1.29 kbps and `tx_bytes` 1.86–3.51 kbps per interval. Across 51 seconds: 0.70 kbps RX and 2.56 kbps TX. AP per-CPE counters also rose both ways: `rxBytes` 3.03–11.01 kbps and `txBytes` 0.70–2.62 kbps per interval; across 50 seconds: 5.31 kbps RX and 1.59 kbps TX. | If one direction rises and the other does not, traffic is one-way. If both stop, the link may be down or idle; compare with the saved baseline and bridge evidence. For this router, idle traffic was nonzero both ways. Compute kbps as `8 × byte_delta / (1000 × elapsed_seconds)`. |
 | Customer MAC upstream | AP and TNS-100 `GET /cgi.lua/bridge_table`; response `data` rows contain the MAC, `dev`, port, optional `vlan`, and bridge text. | AP learned router suffix `B0:49:A0` on `prs0` under `br-wan`. TNS-100 learned it on `eth1`, VLAN 101, under `br-wan`. | Missing upstream entry, an unexpected port, or a VLAN other than the expected customer VLAN is a fault signal. An entry can remain while DHCP or forwarding is blocked, so also check two-way counters. The AP row had no VLAN field. |
 
 The API v1.0.8 Swagger page lists `GET /stats` and `GET /bridge_table`.
@@ -53,19 +53,26 @@ return HTTP 200. Redirects and other statuses fail the call.
 
 **Detail:** Manager confirms a reachability drop followed by API return, or
 `system.uptime` lower than the value read immediately before the request.
-Missing evidence fails at the existing reboot deadline. Exact-head lab proof
-remains required by [#790](https://github.com/sixtyops/manager/issues/790).
+The baseline read, request, probes, reauthentication, and recovery callback
+share one deadline. A callback alone does not prove reboot. Exact-head lab
+proof in [#842](https://github.com/sixtyops/manager/pull/842) covered AP
+(TNA-301) firmware 1.12.3.55002 and 1.15.1.55177, and CPE (TNA-303X) firmware
+1.15.0.55151 and 1.15.1.55177. No CPE reboot was tested on 1.12.3.
 
 ## Management MAC and address after an update
 
-**Key points:** Tachyon confirmed that an upgrade that updates the 60 GHz
-modem firmware can change the MAC used by the AP management bridge. DHCP can
-then give the new MAC a different management address. Tachyon targets a fix in
-firmware 1.15.2. Until the fleet runs a fixed release, Manager must re-find an
-AP after any update.
+**Key points:** An upgrade that updates the 60 GHz modem firmware can change
+the MAC used by the AP management bridge. DHCP can then give that MAC a
+different address. Manager can re-find the AP during update recovery when the
+before and after management settings both show DHCP on the same VLAN.
 
 **Detail:** The bridge can use the Ethernet MAC or the radio MAC. DHCP assigns
 each MAC its own lease, so a change in the bridge MAC can change the AP's
 address. The defect was observed on firmware 1.12.3, 1.15.0, and 1.15.1,
 mostly after firmware changes and once after a cold boot. See [issue #777](https://github.com/sixtyops/manager/issues/777).
-AP re-find through its CPEs is planned in [issue #786](https://github.com/sixtyops/manager/issues/786).
+During update recovery, Manager reads saved CPE peer reports, authenticates
+the AP candidate, checks identity and management settings, then saves the
+confirmed address. If the saved address verifies, it keeps it. Otherwise, it
+selects the first verified candidate in sorted order. See
+[#822](https://github.com/sixtyops/manager/pull/822) and the dual-address
+proof in [#834](https://github.com/sixtyops/manager/pull/834).

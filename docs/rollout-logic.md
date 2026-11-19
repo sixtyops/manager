@@ -10,7 +10,8 @@ stays closed until required safety proof passes.
 
 **Detail:** The shipped queue uses Manager inventory and the device APIs it calls. It runs one ordered list of devices that need the selected firmware. It does not persist membership or calculate percentages.
 
-- Keep device identity, address holds, and offline history as described below.
+- Keep device identity, checked address changes, and offline history as
+  described below.
 - Keep Firmware Hold by firmware family. Operators set `firmware_window_ramp_minutes` (30-120) in settings for the first used maintenance windows for each new firmware family or artifact; later windows use the normal schedule. Scheduler status shows the persisted cutoff and ramp window ordinal.
 - Run CPEs, then APs, then switches. Process one device write and recovery
   sequence at a time.
@@ -117,8 +118,8 @@ credential-profile and certificate-pinning proposals are not planned.
   checked transaction moves an AP record to its confirmed address.
 - **Shipped in [PR #787](https://github.com/sixtyops/manager/pull/787):** a CPE
   reads its connected APs, and an AP reports its radio MAC.
-- **Planned in [issue #786](https://github.com/sixtyops/manager/issues/786):**
-  update recovery uses those reads to re-find an AP after its address changes.
+- **Shipped in [PR #822](https://github.com/sixtyops/manager/pull/822):** update
+  recovery uses saved CPE peer reads to re-find an AP after its address changes.
 - Tachyon confirmed that a modem firmware update can change the AP management
   bridge MAC. Since DHCP assigns a lease per MAC, the AP management address
   can change. Tachyon targets a fix in firmware 1.15.2 ([issue #777](https://github.com/sixtyops/manager/issues/777)).
@@ -140,22 +141,29 @@ pair selected for the update. Do not use another AP's credentials, global
 credentials, a subnet scan, a device name, or certificate pinning. This CPE
 recovery shipped in [PR #706](https://github.com/sixtyops/manager/pull/706).
 
-**AP recovery is planned in [issue #786](https://github.com/sixtyops/manager/issues/786).**
-The planned flow reads AP peer reports from its saved CPEs, selects candidates
-by the AP radio MAC, and confirms the AP serial and model before moving its
-record. The checked AP move shipped in
-[PR #788](https://github.com/sixtyops/manager/pull/788); AP re-find is not
-shipped. Until re-find ships, an AP whose management address changes after an
-update times out at its old address and stops the queue.
+**AP recovery is shipped in [PR #822](https://github.com/sixtyops/manager/pull/822).**
+Before reboot or install, Manager saves AP identity, both MACs, management
+settings, selected CPE identities, and credential-source references. The
+locator reads saved CPE peer reports and authenticates AP candidates with the
+selected credentials. Serial, model, management settings, MAC conflicts,
+inventory identity, and address ownership must pass before the checked record
+move. A changed AP address is accepted only when the before and after settings
+show DHCP on the same VLAN. Static changes, changed VLAN or IP mode, missing
+settings, identity conflicts, failed persistence, or the deadline stop
+recovery.
 
-Accept one candidate only when its authenticated serial matches the saved
-serial and its model remains compatible. Missing or different serials,
-multiple matching candidates, identity conflicts, failed persistence, or the
-recovery deadline stop the update. Persist the confirmed current address
-before continuing. Check the expected serial again before every later write.
-This bounded recovery applies to the active update. It does not implement a
-general identity migration or address-promotion system. Those broader
-proposals are not planned.
+If the saved address verifies, Manager keeps it. If it is unavailable, it
+checks candidates and selects the first verified address in sorted order.
+Multiple addresses for the same AP are not an identity conflict. Conflicting
+identities or unresolved alternatives still stop recovery. The confirmed
+address is saved before the job continues, and Manager checks the expected
+serial before each later write. The bounded locator is read-only; it does not
+repeat an upload or install.
+
+After a Manager restart during armed AP recovery, startup may record a
+verified address, but leaves the interrupted job failed for operator action.
+It does not move inventory, write to a device, replay an update, or continue
+the queue. See [PR #831](https://github.com/sixtyops/manager/pull/831).
 
 The config-snapshot code already re-links history by MAC when an IP changes
 (`poller.py:1109-1140`). With identity in place, that special case goes away.
@@ -234,8 +242,20 @@ write.
 
 ### Detail
 
-*(today: an unknown model maps to `tna-30x`, which could flash the wrong
-image.)*
+Before an explicit per-device update returns "already current," Manager reads
+the live bank state with a fresh driver and resolved credentials. Only a
+complete read with no warning and a matching active version permits the
+no-op. Both-bank mode requires both bank versions to match. A failed read or
+mismatch follows normal job admission; stored data does not fill missing live
+fields. See [#835](https://github.com/sixtyops/manager/pull/835) and
+[#840](https://github.com/sixtyops/manager/pull/840).
+
+The single-device endpoint uses the inventory role. CPE updates use the CPE
+recovery path and parent AP credentials. The parent must have role `ap`. See
+[#837](https://github.com/sixtyops/manager/pull/837).
+
+*(Older target note: an unknown model maps to `tna-30x`, which could flash the
+wrong image.)*
 
 `firmware_artifacts (id, family, version, sha256, release_date, path,
 verified_at)`. Settings selects one artifact per family. A rollout stores
@@ -296,6 +316,16 @@ infer customer traffic from bridge learning or byte-counter changes. Missing
 required recovery evidence stops the queue.
 
 ## 4. Changes while the queue is open
+
+Firmware window identity uses the timezone resolved by the scheduler. Explicit
+zones take precedence. With automatic timezone, the scheduler caches only a
+successfully selected and validated zone. An unavailable zone blocks scheduled
+admission. Stop resolution uses schedule-local time and keeps the stopped
+window closed, including its overnight tail. Manual-day stop keys also use the
+scheduler timezone across UTC midnight. See
+[#828](https://github.com/sixtyops/manager/pull/828),
+[#830](https://github.com/sixtyops/manager/pull/830), and
+[#841](https://github.com/sixtyops/manager/pull/841).
 
 The queue is derived again from current inventory at each admission. Devices
 that become eligible or return online join when they pass the admission gates.

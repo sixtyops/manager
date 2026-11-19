@@ -40,21 +40,24 @@ Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1
 
 ## Reboot request and proof
 
-**Key points:** `TachyonClient.reboot()` uses the UI endpoint,
-`POST /cgi.lua/reboot`, and accepts only HTTP 200.
+**Key points:** Tachyon reboot uses `POST /cgi.lua/reboot` and requires HTTP
+200. Manager also requires proof that the device rebooted.
 
-**Detail:** Manager requires a reachability drop followed by API return, or
-an uptime reset against the value read immediately before the request.
-Recovery can re-find a changed AP address within the existing reboot deadline.
-Missing reboot evidence fails the call. Exact-head lab proof remains required
-by [#790](https://github.com/sixtyops/manager/issues/790).
+**Detail:** The request, probes, authentication, and recovery callback share
+one deadline. Manager accepts a reachability drop followed by API return, or a
+lower `system.uptime` value than the authenticated read immediately before the
+request. A recovery callback alone does not prove a reboot. Exact-head lab
+proof in [#842](https://github.com/sixtyops/manager/pull/842) covered AP
+(TNA-301) firmware 1.12.3.55002 and 1.15.1.55177, and CPE (TNA-303X) firmware
+1.15.0.55151 and 1.15.1.55177. No CPE reboot was tested on 1.12.3.
 
 ## Status
 
 **Key points**
 
-- Shipped: the building blocks (client reads, checked address move, serial identity) and the management VLAN and IP mode check. The check stops the queue when an AP does not return on its management address, with the pre-update VLAN and IP mode in the reason.
-- Required proof: exact-head lab AP and CPE reboot checks, including firmware 1.12.3.
+- Shipped: update recovery can re-find an AP through saved CPE peers, verify its serial, model, MAC conflicts, and management settings, then move the AP record in one checked transaction.
+- Shipped: a changed address is accepted only when both management snapshots show DHCP on the same VLAN. Static changes, VLAN or IP-mode changes, missing settings, identity conflicts, and failed persistence stop recovery.
+- Bench proof passed for manual and scheduled address changes, a dual-address AP, restart recovery, and real reboots with uptime proof.
 
 **Detail**
 
@@ -67,21 +70,24 @@ by [#790](https://github.com/sixtyops/manager/issues/790).
 | Lab PoE power-cycle procedure | none | [#789](https://github.com/sixtyops/manager/pull/789) | Merged, `31e618f` |
 | Management VLAN and IP mode check before and after an update | [#777](https://github.com/sixtyops/manager/issues/777) | [#780](https://github.com/sixtyops/manager/pull/780) | Merged, `69008d8` |
 | Docs: address-change status and reboot behavior | none | [#793](https://github.com/sixtyops/manager/pull/793) | Merged, `9c9ef73` |
-| Re-find the AP through its CPEs during update recovery | [#786](https://github.com/sixtyops/manager/issues/786) | none | Design note posted; not started |
-| Reboot with the real endpoint and prove the reboot | [#790](https://github.com/sixtyops/manager/issues/790) | none | Queued after #786 |
+| Allow same-VLAN DHCP address changes | [#801](https://github.com/sixtyops/manager/issues/801) | [#802](https://github.com/sixtyops/manager/pull/802) | Merged; code gate, see bench in #822 |
+| Bounded read-only AP locator | [#810](https://github.com/sixtyops/manager/issues/810) | [#811](https://github.com/sixtyops/manager/pull/811) | Merged; bench proof completed in #822 |
+| Save AP recovery intent and arm reboot deadline | [#812](https://github.com/sixtyops/manager/issues/812) | [#815](https://github.com/sixtyops/manager/pull/815) | Merged; unchanged-address bench passed |
+| Re-find a moved AP during update recovery | [#814](https://github.com/sixtyops/manager/issues/814) | [#822](https://github.com/sixtyops/manager/pull/822) | Merged; manual and scheduled DHCP address-change bench passed |
+| Recover after Manager restart | [#826](https://github.com/sixtyops/manager/issues/826) | [#831](https://github.com/sixtyops/manager/pull/831) | Merged; read-only re-find, job remains failed for operator |
+| Keep one AP identity across two addresses | [#832](https://github.com/sixtyops/manager/issues/832) | [#834](https://github.com/sixtyops/manager/pull/834) | Merged; dual-address bench passed |
+| Reboot through UI endpoint and prove reboot | [#790](https://github.com/sixtyops/manager/issues/790) | [#842](https://github.com/sixtyops/manager/pull/842) | Merged; real reboot and uptime proof passed |
 
 ## Next steps
 
-1. Build [#786](https://github.com/sixtyops/manager/issues/786) on `main`; its dependencies are merged. Follow its [design note](https://github.com/sixtyops/manager/issues/786#issuecomment-6755631148) and the [lead corrections](https://github.com/sixtyops/manager/issues/786#issuecomment-6755651496). One PR, `updater/app.py` only, under about 300 changed engine lines. In DHCP mode, a new lease address passes after the serial is verified at that address; a static address change still stops the queue.
-2. Bench #786 on the lab AP: a manual and a scheduled 1.12.3 to 1.15.1 update. Require "Address changed after update; identity verified" when the address changes, and a normal success when it does not.
-3. Build [#790](https://github.com/sixtyops/manager/issues/790) after #786.
-4. tw00 (4 APs on 1.12.3): hold the jump until #786 passes its bench, or until both MACs of each AP are reserved for one address at the router. A reservation for one MAC does not help.
-5. After Phase 1, create Phase 2 issues: two devices that swap addresses, re-find outside an update by the poller, nullable `devices.ip` with address history, a per-write identity check on the driver session, and proof and history keyed by device ID.
+1. Phase 1 is shipped and its listed bench gates passed. The epic owner can close the remaining documentation slice after this audit is linked.
+2. Keep the four tw00 APs on 1.12.3 until the operator approves and performs the fleet update; lab proof does not authorize a live fleet write.
+3. Track broader identity work separately: devices that swap addresses, poller re-find outside an active update, address history, per-write identity checks on the driver session, and proof/history keyed by device ID.
 
 ## Rules for this work
 
 - Use only Manager's data and the device APIs it already calls. No subnet scan, DHCP, or syslog integration ([#702](https://github.com/sixtyops/manager/issues/702)).
-- A MAC, name, or reported address selects a candidate only. An authenticated serial and model match accepts it. Match an AP on both its Ethernet and radio MACs. A CPE reports the AP's radio MAC.
+- A MAC, name, or reported address selects a candidate only. An authenticated serial and model match accepts it. Match an AP on both its Ethernet and radio MACs. A CPE reports the AP's radio MAC. If the saved address verifies, keep it; if it is unavailable, choose the first verified address in sorted order after checking candidates. Conflicts and unresolved alternatives stop recovery.
 - Recovery reads only. It never repeats an upload or install.
 - Keep the serial queue, Firmware Hold, cutoff, single-bank scheduled updates, the first-failure stop, and `updater/rollout_gate.py`. Do not weaken `tests/test_rollout_invariants.py`.
 
