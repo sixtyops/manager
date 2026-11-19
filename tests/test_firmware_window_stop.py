@@ -1363,10 +1363,54 @@ def test_firmware_stop_resolution_uses_local_day_and_preserves_stopped_window(
     assert len(audits) == (1 if expected_status == 200 else 0)
 
 
+@pytest.mark.parametrize("stop_day,expected_status", [("2026-11-17", 200), ("2026-11-18", 409)])
+def test_firmware_stop_resolution_detects_timezone_with_scheduling_disabled(
+    operator_client, monkeypatch, stop_day, expected_status,
+):
+    db.set_settings({
+        "timezone": "auto",
+        "schedule_enabled": "false",
+        "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
+        "schedule_start_hour": "3",
+        "schedule_end_hour": "4",
+    })
+    services = app_module.services
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    lookup = AsyncMock(return_value={"timezone": "America/Chicago"})
+    monkeypatch.setattr(services, "get_location_from_ip", lookup)
+    instant = datetime(2026, 11, 19, 0, 22, tzinfo=timezone.utc)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz) if tz else instant.astimezone().replace(tzinfo=None)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    failed_key = ("firmware", stop_day)
+    stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
+
+    response = operator_client.post(
+        f"/api/firmware-window-stops/{stop['id']}/resolve",
+        data={"resolution": "Recovery verified"},
+    )
+
+    assert response.status_code == expected_status, response.text
+    lookup.assert_awaited_once()
+    assert bool(db.get_firmware_window_stop(failed_key)["resolved_at"]) == (expected_status == 200)
+    if expected_status == 409:
+        assert response.json()["detail"] == "This maintenance window is stopped and cannot be resumed"
+
+
 @pytest.mark.parametrize("zone", [None, "Invalid/Zone"])
 def test_firmware_stop_resolution_rejects_unavailable_zone(mock_db, monkeypatch, zone):
     db.set_setting("timezone", "auto")
-    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: zone)
+    services = app_module.services
+    if zone is None:
+        monkeypatch.setattr(services, "get_timezone", AsyncMock(return_value=None))
+    else:
+        monkeypatch.setattr(services, "get_cached_timezone", lambda: None)
+        monkeypatch.setattr(services, "get_location_from_ip", AsyncMock(return_value={"timezone": zone}))
     failed_key = ("firmware", "2026-10-26")
     stop = db.stop_firmware_window(failed_key, "old-job", "192.0.2.1", "flash", "Upload failed")
     with pytest.raises(app_module.HTTPException) as error:

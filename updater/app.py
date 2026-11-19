@@ -3780,9 +3780,9 @@ async def resolve_firmware_window_stop_api(
 
         settings = db.get_all_settings()
         zone = settings.get("schedule_timezone") or settings.get("timezone")
-        if not zone or zone == "auto":
-            zone = services.get_cached_timezone()
         try:
+            if not zone or zone == "auto":
+                zone = await services.get_timezone()
             now = datetime.now(ZoneInfo(zone))
         except (KeyError, TypeError, ValueError):
             raise HTTPException(409, "Cannot resolve this stop because the schedule timezone is unavailable.")
