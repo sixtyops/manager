@@ -187,15 +187,48 @@ async def test_authenticated_wrong_identity_stops_at_any_address(h, identity, ip
 
 
 @pytest.mark.asyncio
-async def test_two_verified_addresses_stop_as_ambiguous(h):
+async def test_two_verified_addresses_return_last_ip_first(h):
     h.responses[OLD] = {"info": AP_INFO}
-    with pytest.raises(APLocatorError, match="ambiguous"):
-        await h.run()
+    assert await h.run() == OLD
+    assert [event[1] for event in h.events if event[2] == "info" and event[1] != CPE] == [OLD, NEW]
 
 
 @pytest.mark.asyncio
-async def test_a_match_cannot_pass_with_an_unready_reported_candidate(h):
+@pytest.mark.parametrize("report", [[NEW, OTHER], [OTHER, NEW]])
+async def test_two_alternatives_return_first_sorted_address_when_last_ip_is_dead(h, report):
+    h.responses[CPE]["report"] = [row(ip) for ip in report]
+    h.responses[OTHER] = {"info": AP_INFO}
+    assert await h.run() == NEW
+
+
+@pytest.mark.asyncio
+async def test_three_verified_addresses_return_last_ip(h):
+    h.responses[CPE]["report"] = [row(OTHER), row()]
+    h.responses[OLD] = h.responses[OTHER] = {"info": AP_INFO}
+    assert await h.run() == OLD
+    assert [event[1] for event in h.events if event[2] == "info" and event[1] != CPE] == [
+        OLD, NEW, OTHER,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", [
+    SimpleNamespace(serial="wrong", model="TNA-301"),
+    SimpleNamespace(serial="ap-serial", model="wrong"),
+])
+async def test_two_matches_cannot_pass_with_a_conflicting_candidate(h, identity):
     h.responses[CPE]["report"] = [row(), row(OTHER)]
+    h.responses[OLD] = {"info": AP_INFO}
+    h.responses[OTHER] = {"info": identity}
+    with pytest.raises(APLocatorError, match="identity mismatch"):
+        await h.run()
+    assert h.state.rounds == 1
+
+
+@pytest.mark.asyncio
+async def test_two_matches_cannot_pass_with_an_unready_reported_candidate(h):
+    h.responses[CPE]["report"] = [row(), row(OTHER)]
+    h.responses[OLD] = {"info": AP_INFO}
     with pytest.raises(APLocatorError, match="Device not found after update"):
         await h.run(deadline=125)
     assert h.state.rounds == 2
@@ -203,8 +236,9 @@ async def test_a_match_cannot_pass_with_an_unready_reported_candidate(h):
 
 
 @pytest.mark.asyncio
-async def test_expiry_during_final_candidate_cannot_accept_earlier_match(h):
+async def test_expiry_during_final_candidate_cannot_accept_earlier_matches(h):
     h.responses[CPE]["report"] = [row(), row(OTHER)]
+    h.responses[OLD] = {"info": AP_INFO}
     h.responses[OTHER] = {"info": AP_INFO, "login_delay": 15}
     with pytest.raises(APLocatorError, match="Device not found after update"):
         await h.run(deadline=100)
