@@ -3751,7 +3751,7 @@ async def resolve_firmware_window_stop_api(
     resolution: str = Form(...),
     session: dict = Depends(require_role("admin", "operator")),
 ):
-    """Record the operator's failure resolution in a later maintenance window."""
+    """Record the operator's failure resolution after the stopped window."""
     resolution = resolution.strip()
     if not resolution:
         raise HTTPException(400, "A failure resolution is required")
@@ -3774,13 +3774,23 @@ async def resolve_firmware_window_stop_api(
             raise HTTPException(409, "This local-day window is stopped. Resolve it on a later day.")
     else:
         stopped_start = _firmware_window_key_start_date(stopped_key, "firmware")
-        current_window = rollout_gate.firmware_window_key(db.get_all_settings())
-        current_start = _firmware_window_key_start_date(current_window, "firmware")
         if stopped_start is None:
             raise HTTPException(409, "Cannot resolve this stop because its window key is invalid or ambiguous.")
-        if current_start is None:
-            raise HTTPException(409, "Record the failure resolution during a later maintenance window")
-        if current_start <= stopped_start:
+        from zoneinfo import ZoneInfo
+
+        settings = db.get_all_settings()
+        zone = settings.get("schedule_timezone") or settings.get("timezone")
+        try:
+            if not zone or zone == "auto":
+                zone = await services.get_timezone()
+            now = datetime.now(ZoneInfo(zone))
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(409, "Cannot resolve this stop because the schedule timezone is unavailable.")
+        current_window = rollout_gate.firmware_window_key({**settings, "schedule_timezone": zone}, now)
+        current_start = _firmware_window_key_start_date(current_window, "firmware")
+        # An overnight window keeps its start date after local midnight.
+        comparison_day = current_start if current_start is not None else now.date()
+        if comparison_day <= stopped_start:
             raise HTTPException(409, "This maintenance window is stopped and cannot be resumed")
     resolved = db.resolve_firmware_window_stop(stop_id, session["username"], resolution)
     db.log_audit(session["username"], "firmware.window_stop.resolve", "firmware_window_stop", str(stop_id), resolution, None)
