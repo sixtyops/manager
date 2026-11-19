@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 import pstats
 import time
+from types import SimpleNamespace
 from urllib.parse import urlsplit, parse_qs
 from unittest.mock import AsyncMock, MagicMock
 
@@ -128,13 +129,24 @@ async def run_first_cycle(monkeypatch, tmp_path):
 
     pulse = asyncio.create_task(heartbeat())
     await asyncio.sleep(0)
+    compile_pattern = logging_filter.re.compile
+    pattern_compiles = 0
+
+    def count_compile(*args, **kwargs):
+        nonlocal pattern_compiles
+        pattern_compiles += 1
+        return compile_pattern(*args, **kwargs)
+
+    redactor_re = SimpleNamespace(**(vars(logging_filter.re) | {'compile': count_compile}))
     profile = cProfile.Profile()
     started = time.perf_counter()
     try:
-        profile.enable()
-        async with app_module.lifespan(app):
-            await asyncio.wait_for(done.wait(), 180)
-            await pulse
+        with monkeypatch.context() as redactor_patch:
+            redactor_patch.setattr(logging_filter, 're', redactor_re)
+            profile.enable()
+            async with app_module.lifespan(app):
+                await asyncio.wait_for(done.wait(), 180)
+                await pulse
     finally:
         profile.disable()
         logging.getLogger("asyncio").removeHandler(handler)
@@ -154,10 +166,10 @@ async def run_first_cycle(monkeypatch, tmp_path):
     assert len(db.get_all_cpes()) > 700
     assert all(not ap['last_error'] for ap in db.get_access_points())
     db._invalidate_settings_cache()
-    return max(lags)
+    return pattern_compiles
 
 
 @pytest.mark.asyncio
 async def test_first_poll_keeps_loop_responsive(monkeypatch, tmp_path):
-    lag = await run_first_cycle(monkeypatch, tmp_path)
-    assert lag < 0.5
+    pattern_compiles = await run_first_cycle(monkeypatch, tmp_path)
+    assert pattern_compiles <= 5, f'Redactor compiled {pattern_compiles} patterns during startup'
