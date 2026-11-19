@@ -26,8 +26,8 @@
     --error-border: #fecaca;
     --info-bg: #eff6ff;
     --info-text: #1e40af;
-    --success-bg: #ecfdf5;
-    --success-text: #065f46;
+    --state-neutral-bg: #F3F4F6;
+    --state-neutral-text: #374151;
     /* Type families (Plex is vendored via fonts.css; system stack is the fallback) */
     --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -191,9 +191,9 @@ textarea:focus {
 }
 
 .success-message {
-    background: var(--success-bg);
-    color: var(--success-text);
-    border: 1px solid #a7f3d0;
+    background: var(--state-neutral-bg);
+    color: var(--state-neutral-text);
+    border: 1px solid var(--state-neutral-text);
     padding: 12px 14px;
     border-radius: 8px;
     font-size: 0.83rem;
@@ -248,3 +248,5 @@ textarea {
         flex-direction: column;
     }
 }
+
+.success-message::before { content: "✓ "; }
