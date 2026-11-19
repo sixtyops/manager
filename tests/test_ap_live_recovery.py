@@ -3,6 +3,8 @@
 import asyncio
 import json
 from datetime import datetime
+from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -396,3 +398,76 @@ async def test_shared_locator_finds_moved_ap_from_saved_cpe(live, monkeypatch):
     assert client.ip == NEW
     assert saved["rounds"] == 1
     assert saved["addresses"] == [IP, NEW]
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("last_address_live,expected_ip", [
+    (True, IP), (False, NEW),
+])
+async def test_recovery_accepts_duplicate_addresses_from_real_tachyon_parser(
+        live, monkeypatch, last_address_live, expected_ip):
+    from updater.ap_locator import FIRST_PROBE_DELAY_S, locate_ap
+
+    job, client, _ = live
+    await capture(job, client)
+    now = app.monotonic()
+    monkeypatch.setattr(app, "monotonic", lambda: now)
+
+    async def advance_clock(delay):
+        nonlocal now
+        now += delay
+
+    app._arm_ap_reboot_deadline(job, IP, client, "install")
+    saved = job.recovery_locators[IP]["ap_recovery"]
+    source = db.get_access_point(IP)
+    cpe_ip = "192.0.2.20"
+    alternate = "192.0.2.12"
+    saved["cpes"] = [{"ip": cpe_ip, "serial": "cpe-serial", "model": "TNA-302",
+                      "credential_ref": f"ap:{source['id']}"}]
+    move = Mock(wraps=db.relocate_ap_address)
+    monkeypatch.setattr(db, "relocate_ap_address", move)
+    monkeypatch.setattr(app, "TachyonClient", TachyonClient)
+    monkeypatch.setattr(app, "locate_ap", partial(
+        locate_ap, clock=app.monotonic, sleep=advance_clock,
+    ))
+    configuration = (Path(__file__).parent / "fixtures" / "tachyon"
+                     / "management_zone_dhcp.json").read_text()
+    reported_addresses = [NEW, IP] if last_address_live else [alternate, NEW, IP]
+    live_addresses = {IP, NEW} if last_address_live else {NEW, alternate}
+    verified_addresses = []
+
+    async def transport(self, method, path, **kwargs):
+        if self.ip == cpe_ip and "wireless,zones" in path:
+            return 200, json.dumps({"wireless": {"peers": [
+                {"ipv4": ip, "mac": RADIO, "model": "TNA-301", "system_name": "ap"}
+                for ip in reported_addresses
+            ]}})
+        if self.ip == cpe_ip and "type=system" in path:
+            return 200, json.dumps({"system": {"serial": "cpe-serial", "model": "TNA-302"}})
+        if self.ip in live_addresses:
+            if "type=system" in path:
+                verified_addresses.append(self.ip)
+                return 200, json.dumps({"system": {"serial": "ap-serial", "model": "TNA-301"}})
+            if path.endswith("type=zones"):
+                return 200, json.dumps({"zones": {"wan": {
+                    "management_interface": "br-wan.12", "mgmt_vlan_id": 12,
+                }}})
+            if path == "/cgi.lua/config":
+                return 200, configuration
+        return 503, "{}"
+
+    monkeypatch.setattr(TachyonClient, "_curl", transport)
+    monkeypatch.setattr(TachyonClient, "login", AsyncMock(return_value=True))
+
+    assert await callback(job, client)
+    assert now == saved["reboot_started"] + FIRST_PROBE_DELAY_S
+    assert saved["rounds"] == 1
+    assert verified_addresses == [*sorted(live_addresses), expected_ip]
+    assert client.ip == expected_ip
+    assert db.get_access_point(expected_ip)["id"] == source["id"]
+    if last_address_live:
+        move.assert_not_called()
+    else:
+        move.assert_called_once_with(saved["device_id"], "ap-serial", IP, NEW)
+        assert db.get_access_point(IP) is None

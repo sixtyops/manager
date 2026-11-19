@@ -176,8 +176,6 @@ async def locate_ap(
                     raise APLocatorError("AP locator identity mismatch")
                 if identity == "match":
                     matches.append(ip)
-                    if len(matches) > 1:
-                        raise APLocatorError("AP locator address is ambiguous")
                 elif ip != last_ip:
                     unready.add(ip)
             except APLocatorError:
@@ -186,5 +184,6 @@ async def locate_ap(
                 if ip != last_ip:
                     unready.add(ip)
         remaining()
-        if len(matches) == 1 and not unready and (not usable or valid_reports):
+        # Multiple ready addresses can belong to the same AP; preserve last_ip priority.
+        if matches and not unready and (not usable or valid_reports):
             return matches[0]
