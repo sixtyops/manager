@@ -360,10 +360,12 @@ Get all configuration settings as key-value pairs. Sensitive values (password ha
 ### `PUT /api/settings`
 Update settings. Only whitelisted keys are accepted:
 
-`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `parallel_updates`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `firmware_beta_enabled`, `firmware_canary_hold_days`, `firmware_update_cooldown_days`, `slack_webhook_url`, `autoupdate_enabled`
+`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `firmware_beta_enabled`, `firmware_canary_hold_days`, `firmware_update_cooldown_days`, `firmware_window_ramp_minutes`, `slack_webhook_url`, `autoupdate_enabled`
 
 - **Body** (JSON): Object of key-value pairs to set
 - **Notes**:
+  - A settings update writes only the keys in the request. Omit keys the operator did not change.
+  - `schedule_enabled` controls scheduled update admission. There is no separate readiness setting.
   - `firmware_canary_hold_days` (the Firmware Hold) must be between 6 and 365
 - **Response**: `{ "success": true }`
 
@@ -446,7 +448,7 @@ Start a firmware update job for multiple devices.
   - `firmware_file` — filename for TNA-30x models (validated)
   - `device_type` — `"tachyon"`
   - `ip_list` — newline-separated IP addresses
-  - `concurrency` — parallel update limit (default 2)
+  - `concurrency` — legacy request field; Manager processes updates serially
   - `firmware_file_303l` — filename for TNA-303L models (optional, validated)
   - `firmware_file_tns100` — filename for TNS-100 models (optional, validated)
   - `bank_mode` — `"both"` or `"one"`

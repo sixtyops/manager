@@ -10,12 +10,13 @@ Three fixed layers, always in this order:
 
 1. **Dashboard** (permanent) — add-devices card, signal/rain-fade chart, fleet-status counts, config-status counts, active-rollout strip when a rollout is in flight. Never changes based on active tab.
 2. **Tabs** (below dashboard) — default open: **Updates**:
-   - **Updates** — current shipped UI has update policies (maintenance window,
-     parallelism) and a safety-defaults override panel. The target removes
-     safety overrides. Live rollout status lives in the status bar, not here.
+   - **Updates** — current shipped UI has update policies and a safety-defaults
+     override panel. There is no Parallel setting. Weather availability and
+     sample time are shown. Saving or discarding edits must be confirmed before
+     the drawer closes. Live rollout status lives in the status bar.
    - **Configuration** — configuration policies + drift resolution.
    - **Devices** — conformity ledger only. Intentional afterthought; one click away, never in the way.
-3. **Persistent status bar** (fixed bottom) — always visible. Two clusters: update status + config conformity. Each cluster is clickable when something is active, expanding a panel upward with full detail (rollout progress or drift card). Abort button appears during active rollouts.
+3. **Persistent status bar** (fixed bottom) — always visible. It shows update status and config conformity. Unsaved Updates changes expose Save and Discard controls and save-result feedback. Paused states show the full reason in a separate notice row, with recovery instructions; manual updates remain available. The queue summary shows its count and next window.
 
 ## Information hierarchy
 
@@ -46,6 +47,9 @@ to the first used windows for a new firmware family or artifact. The persisted
 cutoff stops new starts and allows active recovery to finish. A failed check
 stops the queue. After resume, Manager checks the failed device first. Do not
 show deleted wave selection, saved membership, predictions, or phase controls.
+The status bar and drawer show the reason for each paused state. The device
+table keeps values on one line, shortens long names, and scrolls horizontally
+when needed.
 
 
 ## Don't ask the user for input
@@ -53,7 +57,7 @@ show deleted wave selection, saved membership, predictions, or phase controls.
 - **"There are no power users."** Zero-config bias. Climate auto-detects from IP geolocation. Antenna kit reads from the AP.
 - **Allow override, never require it.** Climate override dropdown marks the auto-detected zone ("YOUR AREA" with a location pin).
 - **Sensible defaults log once, never nag.** Missing antenna kit → assume AK-150, log it, move on.
-- **Shipped safety settings.** The current UI exposes a "Safety defaults" override panel. Operators can also set the maintenance window (default Tue–Thu 03:00–04:00 local) and parallelism. The current backend default for Weather Guard is −4 °C / 25 °F (`min_temperature_c`). This describes the shipped interface, not the target contract.
+- **Shipped settings.** Operators can set the maintenance window and safety defaults. The current backend default for Weather Guard is −4 °C / 25 °F (`min_temperature_c`). Weather data availability and sample time appear in the Updates drawer. Each save changes only the settings the operator edited.
 
 ## Target operator contract
 
@@ -74,4 +78,4 @@ behavior until implementation changes them.
 
 ---
 
-**Doc check:** covers page structure (dashboard/tabs/status bar), fleet-scope rules, disclosure progression, color/copy, scheduled queue status, and safety-defaults pattern including the correct Weather Guard default.
+**Doc check:** covers page structure (dashboard/tabs/status bar), fleet-scope rules, disclosure progression, color/copy, scheduled queue status, and the shipped settings pattern including the correct Weather Guard default.

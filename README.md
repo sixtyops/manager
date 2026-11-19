@@ -1,24 +1,13 @@
 # SixtyOps Manager
 
-## Safe scheduled firmware progress
+## Safe scheduled firmware updates
 
-The serial queue is on `main`. It processes one device at a time, with CPEs
-before APs and switches. The first used maintenance windows for a new firmware
-family or artifact use the configured 30-120 minute ramp. The cutoff stops new
-starts and lets active recovery finish. A failure stops the queue; after resume,
-Manager checks that device first. Wave selection, saved membership, and
-predictions have been removed.
-
-- Write safety: serial recovery, CPE rediscovery, serial checks before each
-  write, and stop-on-first-failure are shipped.
-- Queue: cutoff, serial execution, and removal of wave behavior are shipped.
-- Progress: C1 and C2 are done. C3 is dropped by the operator. C4 release
-  preparation is complete in [#732](https://github.com/sixtyops/manager/pull/732)
-  for version 1.4.1-dev6; the tag awaits the operator's signature after the UI
-  review. C5 step 1 passed in dev host run 28c on 2026-11-04. C5 steps 2 and 3
-  await the operator.
-
-Updated 2026-11-04. Track status in [#604](https://github.com/sixtyops/manager/issues/604).
+Scheduled work uses one serial queue. It processes CPEs, then APs, then
+switches, one device at a time. Auto-Update is the switch for scheduled work.
+The first used maintenance windows for a new firmware family or artifact use
+the configured 30-120 minute ramp. The cutoff stops new starts and lets active
+recovery finish. A failure stops the queue. After resume, Manager checks that
+device first. See [the rollout guide](docs/gradual-rollout.md).
 
 Automated firmware updates for Tachyon wireless networks — handles scheduling, gradual rollouts, and safety checks so you don't have to update APs manually.
 
@@ -44,7 +33,7 @@ You can also trigger immediate updates on any single AP, CPE, or switch from the
 
 ## Safety Mechanisms
 
-- **Temperature validation** — Blocks updates if temperature is below threshold (default -10°C / 14°F) to protect equipment in cold conditions
+- **Temperature validation** — Blocks scheduled updates if temperature is below the threshold (default −4 °C / 25 °F)
 - **Timezone validation** — Prevents daytime updates that would cause outages due to device clock drift
 - **Serial scheduled queue** — Updates one device at a time in CPE, AP, then switch order
 - **Firmware Hold** — Holds scheduled work until the family hold clears; manual per-device updates can proceed
@@ -65,7 +54,7 @@ You can also trigger immediate updates on any single AP, CPE, or switch from the
 
 - **Manual updates** — Immediate firmware push on any single AP, CPE, or switch without affecting the scheduled rollout
 - **Signal health monitoring** — Real-time signal strength and distance visualization across your fleet
-- **Parallel updates** — Configurable concurrency for faster bulk updates
+- **Serial updates** — Scheduled work and the update runner process one device at a time
 - **Real-time progress** — WebSocket-based live update status during rollouts
 
 ## Dangerous / Experimental Features
@@ -127,10 +116,11 @@ See [docs/deployment.md](docs/deployment.md) for full deployment options.
 3. Configure scheduler (**Auto-Update** tab):
    - Set maintenance window (days and time range)
    - Assign firmware to device models
-   - Set temperature threshold (default: -10°C / 14°F)
+   - Set temperature threshold (default: −4 °C / 25 °F)
 4. Enable the scheduler
 
-The system runs the serial queue during configured maintenance windows. Monitor progress in the **Rollout Status** panel. Scheduled admission stays closed until safety readiness is recorded.
+The system runs the serial queue during configured maintenance windows when
+Auto-Update is on. Monitor progress and pause reasons in the status bar.
 
 See [docs/gradual-rollout.md](docs/gradual-rollout.md) for rollout details.
 
@@ -138,10 +128,11 @@ See [docs/gradual-rollout.md](docs/gradual-rollout.md) for rollout details.
 
 Click the **Update** button on any AP, CPE, or switch in the device table to trigger an immediate firmware push:
 - Updates start immediately (no maintenance window required)
-- The device reboots with the new firmware
+- Manager reboots the device before the update, then it reboots into the new firmware
 - Useful for emergency updates, testing new firmware, or updating specific devices outside the schedule
 
-Configure concurrency (number of parallel updates) and bank mode before starting.
+Choose the bank mode before starting. Each device reboots and completes recovery
+before its firmware update begins.
 
 ### Signal Monitoring
 

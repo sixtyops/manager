@@ -55,6 +55,9 @@ Status surfaces use five color-blind-safe tones. Neutral uses `--state-neutral-b
 (`#0F766E`) with white text. Use an icon and a text label for every state.
 Keep `--success*` for the brand mark. Do not use green for state.
 
+Use the same state labels and icons with these colors. Status text must meet
+4.5:1 contrast. Selected controls use a solid fill; off controls use an outline.
+
 ### Neutrals
 
 `--bg`, `--bg-card`, `--bg-subtle`, `--text`, `--text-muted`, `--text-dim`,
@@ -80,6 +83,8 @@ the system stack as fallback. Use `var(--font-sans)` / `var(--font-mono)`.
 Data surfaces (tables, stat values, version cells, counts, the clock) carry
 `font-variant-numeric: tabular-nums` so numbers don't wiggle as they update.
 No em-dashes in rendered copy — rewrite with a period, colon, or `·`.
+Device table values stay on one line. The table scrolls horizontally when it
+does not fit, and long device names use an ellipsis.
 
 ## Spacing
 
