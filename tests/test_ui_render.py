@@ -50,6 +50,7 @@ def test_monitor_page_does_not_render_pre_update_reboot_switch(authed_client):
     assert "Pre-update Reboot" not in html
     assert "drawerPreRebootToggle" not in html
     assert "toggleDrawerPreReboot" not in html
+    assert "Each device reboots before its firmware update." in html
 
 
 def test_monitor_static_references_resolve(authed_client):
