@@ -38,16 +38,23 @@ Lab evidence, 2026-11-09 and 2026-11-10, about 40 boots on 1.12.3, 1.15.0, and 1
 - The MAC usually stays the same over many boots. Two Manager runs of the 1.12.3 to 1.15.1 jump (2026-11-07 and 2026-11-10) both changed the address.
 - An AP on the radio MAC can change address again when it returns to the Ethernet MAC, for example on a cold boot or on the 1.15.2 upgrade.
 
-## Related defect: the reboot call does not reboot
+## Reboot request and proof
 
-`TachyonClient.reboot()` sends `POST /reboot`. On 1.15.1 this returns HTTP 302 and does not reboot the device. The device web UI reboots with `POST /cgi.lua/reboot`. So the pre-update reboot and the CPE reboot after an AP update do not reboot anything today. Tracked in [#790](https://github.com/sixtyops/manager/issues/790). It merges after [#786](https://github.com/sixtyops/manager/issues/786), because a real pre-update reboot can also change the AP address.
+**Key points:** `TachyonClient.reboot()` uses the UI endpoint,
+`POST /cgi.lua/reboot`, and accepts only HTTP 200.
+
+**Detail:** Manager requires a reachability drop followed by API return, or
+an uptime reset against the value read immediately before the request.
+Recovery can re-find a changed AP address within the existing reboot deadline.
+Missing reboot evidence fails the call. Exact-head lab proof remains required
+by [#790](https://github.com/sixtyops/manager/issues/790).
 
 ## Status
 
 **Key points**
 
 - Shipped: the building blocks (client reads, checked address move, serial identity) and the management VLAN and IP mode check. The check stops the queue when an AP does not return on its management address, with the pre-update VLAN and IP mode in the reason.
-- Open: the AP re-find during update recovery, and the reboot fix. Until the re-find ships, an AP whose DHCP address changes still stops the queue.
+- Required proof: exact-head lab AP and CPE reboot checks, including firmware 1.12.3.
 
 **Detail**
 

@@ -301,16 +301,10 @@ async def test_reboot_recovery_callback_uses_one_absolute_deadline(monkeypatch):
     client = tachyon.TachyonClient(OLD_IP, "synthetic", "synthetic")
     monkeypatch.setattr(tachyon.asyncio, "sleep", AsyncMock())
 
-    class FailedPing:
-        returncode = 1
-
-        async def communicate(self):
-            return b"", b""
-
-    async def subprocess(*args, **kwargs):
-        return FailedPing()
-
-    monkeypatch.setattr(tachyon.asyncio, "create_subprocess_exec", subprocess)
+    monkeypatch.setattr(client, "_curl", AsyncMock(side_effect=[
+        RuntimeError("unreachable"), RuntimeError("unreachable"),
+        (200, '{"system":{"uptime":2}}'),
+    ]))
     deadlines = []
 
     async def recover(deadline, started_at):
