@@ -347,6 +347,7 @@ class TestUpdateDevice:
         self, authed_client, mock_db, fw_dir,
     ):
         _seed_303l_ap("1.5.0.54980")
+        db.set_setting("timezone", "UTC")
         window_key = app_module._manual_firmware_window_key()
         db.stop_firmware_window(window_key, "stopped-job", AP_IP, "flash", "Upload failed")
 
@@ -361,6 +362,7 @@ class TestUpdateDevice:
         self, authed_client, mock_db, fw_dir,
     ):
         _seed_303l_ap("1.5.0.54970")
+        db.set_setting("timezone", "UTC")
         window_key = app_module._manual_firmware_window_key()
         db.stop_firmware_window(window_key, "stopped-job", AP_IP, "flash", "Upload failed")
 
@@ -481,6 +483,7 @@ class TestLiveExactBuild:
         self, authed_client, mock_db, fw_dir, live_banks, failure, stopped,
     ):
         if stopped:
+            db.set_setting("timezone", "UTC")
             db.stop_firmware_window(app_module._manual_firmware_window_key(),
                                     "stopped-job", AP_IP, "flash", "Upload failed")
         connect = AsyncMock(return_value=True)
@@ -543,3 +546,18 @@ class TestLiveExactBuild:
         expected_ip = {"ap": AP_IP, "cpe": "10.0.0.60", "switch": "10.0.0.70"}[role]
         assert first.args[1:] == second.args[1:] == (expected_ip, "root", "pass")
         assert live_banks.await_count == 2
+
+
+@pytest.mark.parametrize("route", ["/api/start-update", "/api/update-device"])
+def test_manual_routes_reject_unresolved_timezone(authed_client, fw_dir, monkeypatch, route):
+    db.set_setting("timezone", "auto")
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: None)
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value=None))
+    with patch("updater.app._spawn_update_job") as spawn:
+        response = authed_client.post(route, data={
+            "firmware_file": FW_30X, "device_type": "ap", "ip_list": AP_IP, "ip": AP_IP,
+        })
+    assert response.status_code == 409
+    assert "timezone" in response.json()["detail"]
+    spawn.assert_not_called()
+    assert db.get_active_jobs() == []

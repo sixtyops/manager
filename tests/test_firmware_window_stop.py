@@ -748,7 +748,7 @@ def test_manual_fallback_admission_is_blocked_by_configured_window_stop(mock_db,
     local_day_key = ("manual", "2026-10-27")
     db.stop_firmware_window(configured_key, "scheduled-job", "192.0.2.1", "flash", "Upload failed")
     monkeypatch.setattr(rollout_gate, "firmware_window_key", lambda *args: None)
-    monkeypatch.setattr(app_module, "_manual_firmware_window_key", lambda now=None: local_day_key)
+    monkeypatch.setattr(app_module, "_manual_firmware_window_key", lambda now=None, **kwargs: local_day_key)
 
     manual_key = rollout_gate.firmware_window_key(db.get_all_settings()) or app_module._manual_firmware_window_key()
     assert manual_key == local_day_key
@@ -778,6 +778,7 @@ async def test_manual_fallback_job_does_not_bypass_scheduled_queue_readiness(
     mock_db, monkeypatch, utc_window_clock,
 ):
     db.set_setting("scheduled_rollout_safety_ready", "true")
+    db.set_setting("schedule_timezone", "UTC")
     settings = {
         "schedule_days": "mon,tue,wed,thu,fri,sat,sun",
         "schedule_start_hour": 0,
@@ -1432,3 +1433,81 @@ def test_stop_resolution_rejects_empty_text(mock_db, schedule):
         ))
     assert error.value.status_code == 400
     assert db.get_firmware_window_stop(failed_key)["resolved_at"] is None
+
+
+@pytest.mark.parametrize("zone_setting", [None, "auto", "America/Chicago"])
+@pytest.mark.asyncio
+async def test_manual_stop_uses_chicago_day_until_local_midnight(
+    mock_db, monkeypatch, zone_setting,
+):
+    db.set_settings({"timezone": zone_setting or "", "schedule_days": ""})
+    services = app_module.services
+    monkeypatch.setattr(services, "_location_cache", {})
+    monkeypatch.setattr(services, "_location_cache_times", {})
+    lookup = AsyncMock(return_value={"timezone": "America/Chicago"})
+    monkeypatch.setattr(services, "get_location_from_ip", lookup)
+    instant = datetime.fromisoformat("2026-11-19T00:59:00+00:00")
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is not None
+            return instant.astimezone(tz)
+
+    monkeypatch.setattr(app_module, "datetime", Clock)
+    key = await app_module._manual_update_window_key()
+    assert key == ("manual", "2026-11-18")
+    stop = db.stop_firmware_window(key, "manual-job", "192.0.2.1", "flash", "Upload failed")
+    for timestamp in ("2026-11-19T00:59:00+00:00", "2026-11-19T05:59:59+00:00"):
+        instant = datetime.fromisoformat(timestamp)
+        with pytest.raises(app_module.HTTPException) as error:
+            await app_module.resolve_firmware_window_stop_api(
+                stop["id"], "Recovery verified", {"username": "operator"},
+            )
+        assert error.value.status_code == 409
+        assert db.get_firmware_window_stop(key)["resolved_at"] is None
+    instant = datetime.fromisoformat("2026-11-19T06:00:00+00:00")
+    await app_module.resolve_firmware_window_stop_api(
+        stop["id"], "Recovery verified", {"username": "operator"},
+    )
+    assert db.get_firmware_window_stop(key)["resolved_at"]
+    with pytest.raises(app_module.HTTPException):
+        app_module._check_firmware_window_admission(key)
+    if zone_setting == "America/Chicago":
+        lookup.assert_not_awaited()
+    else:
+        lookup.assert_awaited_once()
+
+
+@pytest.mark.parametrize("zone", [None, "Invalid/Zone"])
+@pytest.mark.asyncio
+async def test_manual_zone_unavailable_rejects_admission_and_resolution(mock_db, monkeypatch, zone):
+    db.set_settings({"timezone": "auto", "schedule_days": ""})
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: None)
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value=zone))
+    key = ("manual", "2026-11-18")
+    stop = db.stop_firmware_window(key, "manual-job", "192.0.2.1", "flash", "Upload failed")
+    for action in (
+        lambda: app_module._manual_update_window_key(),
+        lambda: app_module.resolve_firmware_window_stop_api(
+            stop["id"], "Recovery verified", {"username": "operator"},
+        ),
+    ):
+        with pytest.raises(app_module.HTTPException) as error:
+            await action()
+        assert error.value.status_code == 409
+        assert "timezone" in error.value.detail
+    with pytest.raises(app_module.HTTPException):
+        app_module._manual_firmware_window_key()
+    assert db.get_firmware_window_stop(key)["resolved_at"] is None
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({"timezone": "UTC"}, "2026-11-19"),
+    ({"timezone": "UTC", "schedule_timezone": "America/Chicago"}, "2026-11-18"),
+    ({"timezone": "auto"}, "2026-11-18"),
+])
+def test_manual_key_converts_aware_time_and_honors_explicit_zone(monkeypatch, settings, expected):
+    monkeypatch.setattr(app_module.services, "get_cached_timezone", lambda: "America/Chicago")
+    now = datetime.fromisoformat("2026-11-19T00:59:00+00:00")
+    assert app_module._manual_firmware_window_key(now, settings=settings) == ("manual", expected)
