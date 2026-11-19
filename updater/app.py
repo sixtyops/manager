@@ -524,6 +524,124 @@ async def _websocket_health_check():
             logger.debug(f"Removed {len(dead)} dead WebSocket connection(s)")
 
 
+async def _observe_crashed_ap(job, payload, locator):
+    """Record bounded AP rediscovery without resuming the interrupted job."""
+    saved = locator.get("ap_recovery", {})
+
+    def finite(value):
+        return type(value) in (int, float) and math.isfinite(value)
+
+    def checkpoint():
+        if monotonic() >= deadline:
+            raise RuntimeError("AP recovery deadline expired")
+        if db.save_active_job(
+            job["job_id"], "running", json.dumps(payload),
+            job.get("firmware_name", ""), job["in_flight_device_ip"],
+        ) is False:
+            raise RuntimeError("AP restart checkpoint failed")
+
+    try:
+        if not isinstance(saved, dict) or saved.get("state") not in {
+            "write_pending", "locating", "verified", "committed", "loaded",
+        }:
+            raise RuntimeError("AP recovery intent is not armed")
+        required = ("serial", "model", "ip", "expected_version", "credential_ref")
+        management = saved.get("management")
+        if (not all(isinstance(saved.get(key), str) and saved[key].strip() for key in required)
+                or type(saved.get("device_id")) is not int
+                or saved["credential_ref"] != f"ap:{saved['device_id']}"
+                or not isinstance(management, dict)
+                or _management_settings_changes(management, management)
+                or not isinstance(saved.get("baseline"), dict)
+                or not isinstance(saved["baseline"].get("peers"), dict)
+                or not all(_usable_recovery_mac(saved.get(key))
+                           for key in ("ethernet_mac", "radio_mac"))
+                or not isinstance(saved.get("cpes"), list)
+                or type(saved.get("rounds")) is not int
+                or not 0 <= saved["rounds"] <= 20
+                or not isinstance(saved.get("addresses"), list)
+                or not saved["addresses"]
+                or len(saved["addresses"]) != len(set(saved["addresses"]))
+                or saved["ip"] not in saved["addresses"]
+                or not all(finite(saved.get(key)) for key in (
+                    "deadline", "reboot_started", "next_probe_at", "remaining_s"))):
+            raise RuntimeError("Invalid AP restart state")
+        now = datetime.now(timezone.utc)
+        expiry = datetime.fromisoformat(saved["deadline_utc"])
+        previous = datetime.fromisoformat(saved["checkpoint_utc"])
+        if expiry.tzinfo is None or previous.tzinfo is None or now < previous:
+            raise RuntimeError("Invalid AP restart clock")
+        remaining = min((expiry - now).total_seconds(),
+                        saved["remaining_s"] - (now - previous).total_seconds(), 600)
+        old_deadline = saved["deadline"]
+        budget = old_deadline - saved["reboot_started"]
+        if (remaining <= 0 or not 0 < budget <= 600
+                or not 0 < saved["remaining_s"] <= budget
+                or not saved["reboot_started"] + FIRST_PROBE_DELAY_S
+                <= saved["next_probe_at"] <= old_deadline + 30):
+            raise RuntimeError("AP recovery deadline expired or invalid")
+        local_now = monotonic()
+        deadline = local_now + remaining
+        elapsed = (now - previous).total_seconds()
+        old_checkpoint = old_deadline - saved["remaining_s"]
+        started = local_now + saved["reboot_started"] - old_checkpoint - elapsed
+        next_probe = local_now + saved["next_probe_at"] - old_checkpoint - elapsed
+        sources = {f"ap:{row['id']}": row
+                   for row in db.get_access_points(enabled_only=False)}
+        peers = [SavedCPE(**peer) for peer in saved["cpes"]]
+        references = [saved["credential_ref"], *(peer.credential_ref for peer in peers)]
+        if any(not sources.get(ref) or sources[ref].get("role") != "ap"
+               or not sources[ref].get("username") or not sources[ref].get("password")
+               for ref in references):
+            raise RuntimeError("Saved AP credential source is unavailable or changed")
+        source = sources[saved["credential_ref"]]
+        if source.get("uid_source") != "serial" or source.get("uid") != saved["serial"]:
+            raise RuntimeError("Saved AP credential source identity changed")
+        if any(not all(isinstance(value, str) and value.strip() for value in (
+                peer.ip, peer.serial, peer.model, peer.credential_ref)) for peer in peers):
+            raise RuntimeError("Invalid saved CPE locator")
+        for peer in peers:
+            address = ipaddress.IPv4Address(peer.ip)
+            if (str(address) != peer.ip or int(address) < 0x01000000
+                    or address.is_multicast or address.is_loopback or address.is_reserved):
+                raise RuntimeError("Invalid saved CPE address")
+        state = SearchState(saved["rounds"], next_probe, set(saved["addresses"]))
+
+        def factory(address, reference):
+            source = sources[reference]
+            return TachyonClient(address, source["username"], source["password"])
+
+        async def save_search(state):
+            left = deadline - monotonic()
+            if left <= 0:
+                raise RuntimeError("AP recovery deadline expired")
+            saved.update({
+                "state": "locating", "rounds": state.rounds,
+                "next_probe_at": state.next_probe_at, "addresses": sorted(state.addresses),
+                "deadline": deadline, "reboot_started": started,
+                "checkpoint_utc": datetime.now(timezone.utc).isoformat(), "remaining_s": left,
+            })
+            checkpoint()
+
+        saved["state"] = "loaded"
+        checkpoint()
+        async with asyncio.timeout(remaining):
+            observed = await locate_ap(
+                serial=saved["serial"], model=saved["model"],
+                ethernet_mac=saved["ethernet_mac"], radio_mac=saved["radio_mac"],
+                last_ip=saved["ip"], credential_ref=saved["credential_ref"], peers=peers,
+                reboot_started=started, deadline=deadline, state=state,
+                client_factory=factory, checkpoint=save_search,
+            )
+        saved.update({"state": "observed", "observed_ip": observed})
+        checkpoint()
+        return f"read-only recovery confirmed serial {saved['serial']} at {observed}; operator action required"
+    except Exception as error:
+        if isinstance(saved, dict):
+            saved.update({"state": "stopped", "stop_reason": str(error)})
+        return f"AP restart recovery stopped: {error}; operator action required"
+
+
 async def _recover_crashed_device_jobs():
     """Reconcile saved device identity after a crash, then stop for the operator."""
     active = db.get_active_jobs()
@@ -542,7 +660,10 @@ async def _recover_crashed_device_jobs():
             current_ip = locator.get("ip")
             parent_ap = locator.get("parent_ap")
             reconciliation = "saved recovery identity is missing; operator action required"
-            if expected_serial and current_ip:
+            if ("ap_recovery" in locator
+                    or (db.get_device(current_ip or in_flight_ip) or {}).get("role") == "ap"):
+                reconciliation = await _observe_crashed_ap(job, payload, locator)
+            elif expected_serial and current_ip:
                 credential_source = (
                     db.get_access_point(parent_ap) if parent_ap
                     else db.get_access_point(current_ip) or db.get_switch(current_ip)
@@ -580,7 +701,10 @@ async def _recover_crashed_device_jobs():
                     job_id=job["job_id"], ip=ip, role="unknown", pass_number=1,
                     status="failed", old_version=None, new_version=None,
                     model=None, error=f"App crashed during firmware update; {reconciliation}",
-                    failed_stage="crash_recovery", stages=[],
+                    failed_stage="crash_recovery", stages=[{
+                        "stage": "ap_restart_recovery",
+                        "evidence": locator.get("ap_recovery", {}),
+                    }] if "ap_recovery" in locator else [],
                     duration_seconds=0, started_at=job.get("started_at", now_iso),
                     completed_at=now_iso, action="firmware_update",
                 )
