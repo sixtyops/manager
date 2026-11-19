@@ -11,10 +11,71 @@ from fastapi import HTTPException
 from unittest.mock import AsyncMock
 
 from updater import app as app_module
+from updater import database as db
 
 
 def test_update_job_defaults_to_one_bank():
     assert app_module.UpdateJob(job_id="job-default-bank").bank_mode == "one"
+
+
+@pytest.mark.asyncio
+async def test_job_history_reload_keeps_deferral_reason(mock_db, monkeypatch):
+    ip = "192.0.2.90"
+    job = app_module.UpdateJob(
+        job_id="deferred-history", started_at=datetime.now(),
+        devices={ip: app_module.DeviceStatus(
+            ip=ip, status="pending", progress_message="Deferred: cutoff passed.",
+            deferral_reason="cutoff_reached", deferral_message="Cutoff passed.",
+        )},
+    )
+    monkeypatch.setattr(app_module, "_scheduled_job_guard", AsyncMock(return_value=(True, "")))
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
+    for notifier in (app_module.slack, app_module.snmp, app_module.webhooks, app_module.email_notifier):
+        monkeypatch.setattr(notifier, "notify_job_completed", AsyncMock())
+
+    await app_module.run_update_job(job, concurrency=1)
+
+    loaded = db.get_job_history(limit=1)[0]
+    assert loaded["devices"][ip]["deferral_reason"] == "cutoff_reached"
+    assert loaded["devices"][ip]["deferral_message"] == "Cutoff passed."
+
+
+@pytest.mark.asyncio
+async def test_completion_data_keeps_success_failure_and_deferral_counts(mock_db, monkeypatch):
+    success_ip, failed_ip, deferred_ip = "192.0.2.91", "192.0.2.92", "192.0.2.93"
+    job = app_module.UpdateJob(
+        job_id="mixed-completion", started_at=datetime.now(), is_scheduled=True,
+        cancelled=True, cancel_reason="A device failed during the queue",
+        devices={
+            success_ip: app_module.DeviceStatus(ip=success_ip, status="success"),
+            failed_ip: app_module.DeviceStatus(ip=failed_ip, status="failed"),
+            deferred_ip: app_module.DeviceStatus(
+                ip=deferred_ip, status="pending", deferral_reason="cutoff_reached",
+                deferral_message="Cutoff passed.",
+            ),
+        },
+    )
+    job._deferred_admission_ips = {deferred_ip}
+    received = {}
+
+    def on_job_completed(job_id, success_count, failed_count, **kwargs):
+        received.update(job_id=job_id, success_count=success_count, failed_count=failed_count, **kwargs)
+
+    monkeypatch.setattr(app_module, "get_scheduler", lambda: types.SimpleNamespace(on_job_completed=on_job_completed))
+    monkeypatch.setattr(app_module, "_scheduled_job_guard", AsyncMock(return_value=(True, "")))
+    monkeypatch.setattr(app_module, "broadcast", AsyncMock())
+    monkeypatch.setattr(app_module.services, "get_timezone", AsyncMock(return_value="UTC"))
+    for notifier in (app_module.slack, app_module.snmp, app_module.webhooks, app_module.email_notifier):
+        monkeypatch.setattr(notifier, "notify_job_completed", AsyncMock())
+
+    await app_module.run_update_job(job, concurrency=1)
+
+    assert received["success_count"] == 1
+    assert received["failed_count"] == 1
+    assert received["deferred_count"] == 1
+    assert received["deferral_reasons"] == {deferred_ip: "cutoff_reached"}
+    assert received["cancel_reason"] == "A device failed during the queue"
 
 
 @pytest.fixture(autouse=True)
