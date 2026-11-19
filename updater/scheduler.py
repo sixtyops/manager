@@ -4,8 +4,9 @@ import asyncio
 import ipaddress
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 from . import database as db
 from .firmware_policy import (
@@ -136,6 +137,73 @@ def upcoming_window_starts(
         if len(results) >= count:
             break
     return results
+
+
+def next_window_start_after(
+    window_key, schedule_days, start_hour: int, end_hour: int, timezone_name: str,
+) -> Optional[datetime]:
+    """Return the first enabled window start after this window's local start date."""
+    try:
+        if not isinstance(window_key, (list, tuple)) or len(window_key) != 2:
+            return None
+        start_date = datetime.fromisoformat(window_key[1]).date()
+        zone = ZoneInfo(timezone_name)
+        active_days = _parse_schedule_days(schedule_days)
+        parts = (
+            [day.strip().lower() for day in schedule_days.split(",")]
+            if isinstance(schedule_days, str)
+            else [str(day).strip().lower() for day in schedule_days]
+        )
+        if any(day not in _DAY_INDEX for day in parts):
+            return None
+        if not active_days or not (0 <= start_hour <= 23 and 0 <= end_hour <= 23):
+            return None
+        for offset in range(1, 61):
+            candidate_date = start_date + timedelta(days=offset)
+            if candidate_date.weekday() in active_days:
+                return datetime(
+                    candidate_date.year, candidate_date.month, candidate_date.day,
+                    start_hour, tzinfo=zone,
+                )
+    except (TypeError, ValueError, OverflowError, KeyError):
+        return None
+    return None
+
+
+def _deferral_report(deferred_count, deferral_reasons, success_count, settings, window_key):
+    """Build the operator report for a queue that deferred one or more devices."""
+    reasons = set((deferral_reasons or {}).values())
+    reason_text = []
+    if "cutoff_reached" in reasons:
+        reason_text.append(
+            "the firmware admission cutoff for this target has passed. "
+            "Changing window hours does not reset it."
+        )
+    if "timing_unavailable" in reasons:
+        reason_text.append("Firmware window timing is unavailable. Scheduled writes remain blocked.")
+    if "window_closed" in reasons:
+        reason_text.append("The maintenance window is closed.")
+    if not reason_text:
+        reason_text.append("The scheduled update was deferred.")
+
+    start = next_window_start_after(
+        window_key,
+        settings.get("schedule_days", ""),
+        _as_int(settings.get("schedule_start_hour", "3"), 3),
+        _as_int(settings.get("schedule_end_hour", "4"), 4),
+        settings.get("timezone", "America/Chicago"),
+    )
+    if start:
+        next_text = f"{start.strftime('%d %b %Y, %H:%M')} {start.tzinfo.key}"
+    else:
+        next_text = "unavailable"
+    updated_label = "device" if success_count == 1 else "devices"
+    deferred_label = "device" if deferred_count == 1 else "devices"
+    if success_count:
+        lead = f"{success_count} {updated_label} updated. {deferred_count} {deferred_label} deferred: "
+    else:
+        lead = f"No devices updated. All {deferred_count} {deferred_label} deferred: "
+    return f"{lead}{' '.join(reason_text)} Next scheduled window: {next_text}."
 
 
 def _parse_version(version: str) -> tuple:
@@ -286,6 +354,8 @@ class AutoUpdateScheduler:
         self._weather_ok: Optional[bool] = None
         self._last_run_result: Optional[str] = None
         self._last_run_time: Optional[str] = None
+        self._deferral_window_key = None
+        self._deferral_timezone = None
         self._current_job_id: Optional[str] = None
         self._check_lock = asyncio.Lock()
         self._queue_job_context: dict[str, dict] = {}
@@ -309,6 +379,7 @@ class AutoUpdateScheduler:
         """Start the scheduler check loop."""
         if self._running:
             return
+        self._restore_deferral()
         self._running = True
         self._task = asyncio.create_task(self._check_loop())
         logger.info(f"Auto-update scheduler started (interval: {self.check_interval}s)")
@@ -317,6 +388,53 @@ class AutoUpdateScheduler:
         # can outlive the scheduler (e.g. in tests, leaving "Task was destroyed but
         # it is pending" warnings at loop teardown).
         self._weather_task = asyncio.create_task(self._fetch_weather_initial())
+
+    def _restore_deferral(self):
+        saved = db.get_latest_scheduled_deferral()
+        if not saved or saved["failed_count"] != 0 or saved["cancelled_count"] != 0:
+            return
+        try:
+            summary, encoded_key = saved["completion_details"].rsplit(" | window_key=", 1)
+            window_key = json.loads(encoded_key)
+            if (not summary.strip() or not isinstance(window_key, list) or len(window_key) != 2
+                    or window_key[0] != "firmware"
+                    or date.fromisoformat(window_key[1]).isoformat() != window_key[1]):
+                return
+            zone = ZoneInfo(saved["timezone"])
+            datetime.fromisoformat(saved["completed_at"])
+            devices = json.loads(saved["devices_json"])
+            if not isinstance(devices, dict) or not all(isinstance(device, dict) for device in devices.values()):
+                return
+            reasons = {}
+            for ip, device in devices.items():
+                reason = device.get("deferral_reason")
+                message = device.get("deferral_message")
+                if reason is None and message is None:
+                    continue
+                if (reason not in ("cutoff_reached", "timing_unavailable", "window_closed")
+                        or not isinstance(message, str) or not message.strip()):
+                    return
+                reasons[ip] = reason
+            success_count = saved["success_count"]
+            if not reasons or not isinstance(success_count, int) or success_count < 0:
+                return
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            return
+
+        settings = db.get_all_settings() | {"timezone": zone.key}
+        start = _as_int(settings.get("schedule_start_hour", "3"), 3)
+        end = _as_int(settings.get("schedule_end_hour", "4"), 4)
+        next_start = next_window_start_after(window_key, settings.get("schedule_days", ""), start, end, zone.key)
+        if next_start and datetime.now(zone) >= next_start:
+            return
+
+        report = _deferral_report(len(reasons), reasons, success_count, settings, window_key)
+        self._deferral_window_key = tuple(window_key)
+        self._deferral_timezone = zone.key
+        self._last_run_time = saved["completed_at"]
+        self._last_run_result = report
+        self._block_reason = report
+        self._state = "waiting"
 
     async def _fetch_weather_initial(self):
         """Fetch weather on startup so the UI shows temperature immediately."""
@@ -441,6 +559,20 @@ class AutoUpdateScheduler:
         schedule_days = [d.strip() for d in settings.get("schedule_days", "").split(",") if d.strip()]
         start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
         end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
+        if self._deferral_window_key:
+            report_timezone = self._deferral_timezone or tz_str
+            next_start = next_window_start_after(
+                self._deferral_window_key, schedule_days, start_hour, end_hour,
+                report_timezone,
+            )
+            if next_start and now.astimezone(next_start.tzinfo) >= next_start:
+                self._deferral_window_key = None
+                self._deferral_timezone = None
+                self._block_reason = None
+                self._last_run_result = None
+            elif next_start:
+                await self._broadcast_status()
+                return
         current_day = now.strftime("%a").lower()
         current_hour = now.hour
 
@@ -454,7 +586,8 @@ class AutoUpdateScheduler:
                     f"Outside maintenance window (day={current_day}, hour={current_hour}), setting state to idle"
                 )
                 self._state = "idle"
-                self._block_reason = None
+                if not self._deferral_window_key:
+                    self._block_reason = None
                 self._weather_checked_today = None
                 self._weather_ok = None
                 await self._broadcast_status()
@@ -723,6 +856,7 @@ class AutoUpdateScheduler:
         self._queue_job_context[job_id] = {
             "window_key": window_key,
             "entries": queue,
+            "timezone": timezone_name,
         }
         db.log_schedule_event("job_started", f"Job {job_id} for derived firmware queue", job_id=job_id)
         return
@@ -1070,6 +1204,8 @@ class AutoUpdateScheduler:
         learned_versions: Optional[dict[str, str]] = None,
         device_statuses: Optional[dict[str, str]] = None,
         cancel_reason: Optional[str] = None,
+        deferred_count: int = 0,
+        deferral_reasons: Optional[dict[str, str]] = None,
     ):
         """Record completion for an admitted derived-queue job."""
         queue_context = self._queue_job_context.pop(job_id, None)
@@ -1099,6 +1235,19 @@ class AutoUpdateScheduler:
         elif cancel_reason:
             self._last_run_result = cancel_reason
             db.log_schedule_event("job_deferred", cancel_reason, job_id=job_id)
+        elif deferred_count:
+            settings = db.get_all_settings()
+            self._last_run_result = _deferral_report(
+                deferred_count, deferral_reasons, success_count,
+                settings | {"timezone": queue_context.get("timezone") or settings.get("timezone")},
+                window_key,
+            )
+            self._deferral_window_key = window_key
+            self._deferral_timezone = queue_context.get("timezone")
+            db.log_schedule_event(
+                "job_deferred", f"{self._last_run_result} | window_key={json.dumps(window_key)}",
+                job_id=job_id,
+            )
         else:
             self._last_run_result = f"Queue job completed ({success_count} device(s))"
             db.log_schedule_event("job_completed", self._last_run_result, job_id=job_id)
@@ -1330,10 +1479,20 @@ class AutoUpdateScheduler:
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"Firmware-hold status computation failed: {e}")
 
-        next_windows = upcoming_window_starts(
-            datetime.now(), schedule_days, start_hour, end_hour, count=1
-        )
-        next_window_iso = next_windows[0].isoformat() if next_windows else None
+        if self._deferral_window_key:
+            next_start = next_window_start_after(
+                self._deferral_window_key,
+                settings.get("schedule_days", ""),
+                start_hour,
+                end_hour,
+                self._deferral_timezone or settings.get("timezone", "America/Chicago"),
+            )
+            next_window_iso = next_start.isoformat() if next_start else None
+        else:
+            next_windows = upcoming_window_starts(
+                datetime.now(), schedule_days, start_hour, end_hour, count=1
+            )
+            next_window_iso = next_windows[0].isoformat() if next_windows else None
 
         weather_status = None
         if (settings.get("weather_check_enabled") == "true"

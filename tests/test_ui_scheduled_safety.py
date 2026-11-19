@@ -1,6 +1,7 @@
 """Execute the schedule status renderer with Auto-Update and failure stops."""
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -10,6 +11,43 @@ import pytest
 
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "updater/templates/monitor.html"
+
+
+def test_job_history_renders_full_deferral_message_as_text():
+    html = TEMPLATE.read_text()
+    assert 'class="u-history-deferral"' in html
+    assert "savedDevice.deferral_message || d.deferral_message" in html
+    assert "escapeHtml(deferralMessage)" in html
+    assert "title=\"${escapeHtml(deferralMessage)}\"" not in html
+
+
+def test_queue_shows_persisted_cutoff_time():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is needed to execute the queue status renderer")
+    html = TEMPLATE.read_text()
+    sources = [
+        re.search(rf"        function {name}\(.*?\n        \}}", html, re.S).group()
+        for name in ("formatWhen", "renderQueueStatus")
+    ]
+    script = r'''
+const assert = require('node:assert/strict'), vm = require('node:vm');
+const source = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const elements = Object.fromEntries(['Remaining', 'Current', 'Cutoff', 'NextWindow', 'Reason']
+    .map(name => ['barQueue' + name, {textContent: ''}]));
+const context = {document: {getElementById: id => elements[id]}};
+vm.createContext(context);
+vm.runInContext(source, context);
+context.renderQueueStatus({cutoff_utc: '2020-06-23T08:30:00+00:00', ramp_ordinal: 1});
+assert.equal(elements.barQueueCutoff.textContent, 'Cutoff: Tue, Jun 23 at 3:30 AM · Ramp window: 1');
+context.renderQueueStatus(null);
+assert.equal(elements.barQueueCutoff.textContent, '');
+'''
+    result = subprocess.run(
+        [node, "-e", script], input=json.dumps("\n".join(sources)), capture_output=True,
+        text=True, timeout=10, env=os.environ | {"TZ": "America/Chicago", "LC_ALL": "en_US.UTF-8"},
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("state", ["disabled", "blocked_safety"])

@@ -2280,6 +2280,25 @@ def get_schedule_log(limit: int = 50) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def get_latest_scheduled_deferral() -> Optional[dict]:
+    """Read the latest scheduled job only if it ended with a deferral event."""
+    with get_db() as db:
+        row = db.execute(
+            """SELECT history.completed_at, history.timezone, history.devices_json,
+                      history.success_count, history.failed_count, history.cancelled_count,
+                      latest.details AS completion_details
+               FROM (
+                   SELECT event, details, job_id FROM schedule_log
+                   WHERE job_id IS NOT NULL AND event IN
+                       ('job_started', 'job_completed', 'job_deferred', 'firmware_window_stopped')
+                   ORDER BY id DESC LIMIT 1
+               ) AS latest
+               JOIN job_history AS history ON history.job_id = latest.job_id
+               WHERE latest.event = 'job_deferred'"""
+        ).fetchone()
+        return dict(row) if row else None
+
+
 # Session operations
 def create_session(session_id: str, username: str, ip_address: str, expires_at: str):
     """Create a new session."""
