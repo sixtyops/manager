@@ -30,6 +30,11 @@ SCHEDULE_END_BUFFER_MINUTES = 15
 CONFIRMED_SEEN_WITHIN = timedelta(hours=24)
 
 _DAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+_FIRMWARE_SELECTION_KEYS = {
+    "tna-30x": "selected_firmware_30x",
+    "tna-303l": "selected_firmware_303l",
+    "tns-100": "selected_firmware_tns100",
+}
 
 _UNSET = object()
 
@@ -69,20 +74,14 @@ def _resolved_failure_recovery_ip(window_key) -> Optional[str]:
 
 def _scheduled_freeze_hold_reason(now: datetime) -> Optional[str]:
     """Return a read-only freeze hold for the supplied admission time."""
-    try:
-        freeze = db.is_in_freeze_window(now.isoformat())
-    except Exception:
-        return "Could not verify maintenance freeze windows"
+    freeze = db.is_in_freeze_window(now.isoformat())
     if freeze:
         return f"Maintenance freeze: {freeze['name']}"
     return None
 
 
-def _scheduled_environment_hold_reason(now: datetime, window_key=None) -> Optional[str]:
-    """Return the shared freeze or firmware-stop admission hold, read-only."""
-    freeze_reason = _scheduled_freeze_hold_reason(now)
-    if freeze_reason:
-        return freeze_reason
+def _scheduled_failure_hold_reason(window_key) -> Optional[str]:
+    """Return the shared firmware-stop admission hold."""
     if not window_key:
         return None
     try:
@@ -298,14 +297,8 @@ def _device_needs_update(
     if target_version == "__unknown__":
         return True
 
-    # Cooldown check: skip if recently updated
-    if cooldown_days > 0 and last_update_iso:
-        try:
-            last_upd = datetime.fromisoformat(last_update_iso)
-            if datetime.now() - last_upd < timedelta(days=cooldown_days):
-                return False
-        except (ValueError, TypeError):
-            pass
+    if _device_cooldown_reason(last_update_iso, cooldown_days):
+        return False
 
     return classify_device_version(current_version, target_version, allow_downgrade).needs_update
 
@@ -322,13 +315,13 @@ def _stored_timestamp_clock(value: str, evaluation_time: Optional[datetime] = No
     return stored, now
 
 
-def _device_cooldown_reason(device: dict, cooldown_days: int, evaluation_time: Optional[datetime] = None) -> Optional[str]:
+def _device_cooldown_reason(last_update_iso: Optional[str], cooldown_days: int, evaluation_time: Optional[datetime] = None) -> Optional[str]:
     """Return the queue hold reason when an otherwise-behind device is cooling down."""
-    last_update_iso = device.get("last_firmware_update")
     if cooldown_days <= 0 or not last_update_iso:
         return None
     try:
-        last_update, now = _stored_timestamp_clock(last_update_iso, evaluation_time)
+        last_update = datetime.fromisoformat(last_update_iso)
+        now = datetime.now() if evaluation_time is None else evaluation_time.astimezone().replace(tzinfo=None)
         if now - last_update < timedelta(days=cooldown_days):
             return f"Device is in the {cooldown_days}-day firmware update cooldown"
     except (ValueError, TypeError):
@@ -493,6 +486,8 @@ class AutoUpdateScheduler:
         self._last_run_time: Optional[str] = None
         self._deferral_window_key = None
         self._deferral_timezone = None
+        self._deferral_targets: dict[str, str] = {}
+        self._all_deferred = False
         self._current_job_id: Optional[str] = None
         self._check_lock = asyncio.Lock()
         self._queue_job_context: dict[str, dict] = {}
@@ -531,7 +526,14 @@ class AutoUpdateScheduler:
         if not saved or saved["failed_count"] != 0 or saved["cancelled_count"] != 0:
             return
         try:
-            summary, encoded_key = saved["completion_details"].rsplit(" | window_key=", 1)
+            details, encoded_key = saved["completion_details"].rsplit(" | window_key=", 1)
+            summary, encoded_targets = details.rsplit(" | targets=", 1)
+            targets = json.loads(encoded_targets)
+            if not isinstance(targets, dict) or not targets or any(
+                family not in _FIRMWARE_SELECTION_KEYS or not isinstance(file, str) or not file
+                for family, file in targets.items()
+            ):
+                return
             window_key = json.loads(encoded_key)
             if (not summary.strip() or not isinstance(window_key, list) or len(window_key) != 2
                     or window_key[0] != "firmware"
@@ -559,6 +561,8 @@ class AutoUpdateScheduler:
             return
 
         settings = db.get_all_settings() | {"timezone": zone.key}
+        if any(settings.get(_FIRMWARE_SELECTION_KEYS[family]) != file for family, file in targets.items()):
+            return
         start = _as_int(settings.get("schedule_start_hour", "3"), 3)
         end = _as_int(settings.get("schedule_end_hour", "4"), 4)
         next_start = next_window_start_after(window_key, settings.get("schedule_days", ""), start, end, zone.key)
@@ -568,10 +572,40 @@ class AutoUpdateScheduler:
         report = _deferral_report(len(reasons), reasons, success_count, settings, window_key)
         self._deferral_window_key = tuple(window_key)
         self._deferral_timezone = zone.key
+        self._deferral_targets = targets
+        self._all_deferred = success_count == 0
         self._last_run_time = saved["completed_at"]
         self._last_run_result = report
         self._block_reason = report
         self._state = "waiting"
+
+    def _deferral_target_changed(self, settings):
+        return any(
+            settings.get(_FIRMWARE_SELECTION_KEYS[family]) != file
+            for family, file in self._deferral_targets.items()
+        )
+
+    def _deferral_next_start(self, days, start_hour, end_hour, timezone_name):
+        if self._deferral_window_key:
+            return next_window_start_after(
+                self._deferral_window_key, days, start_hour, end_hour,
+                self._deferral_timezone or timezone_name,
+            )
+        return None
+
+    def _target_deferred(self, family, filename):
+        return self._all_deferred and filename == self._deferral_targets.get(family)
+
+    def _clear_deferral(self):
+        if self._deferral_window_key is None:
+            return
+        if self._block_reason == self._last_run_result:
+            self._block_reason = None
+        self._last_run_result = None
+        self._deferral_window_key = None
+        self._deferral_timezone = None
+        self._deferral_targets = {}
+        self._all_deferred = False
 
     async def _fetch_weather_initial(self):
         """Fetch weather on startup so the UI shows temperature immediately."""
@@ -634,9 +668,12 @@ class AutoUpdateScheduler:
         """Main decision logic each tick."""
         settings = db.get_all_settings()
         schedule_enabled = settings.get("schedule_enabled")
+        report_cleared = self._deferral_target_changed(settings)
+        if report_cleared:
+            self._clear_deferral()
 
         if schedule_enabled != "true":
-            if self._state != "disabled":
+            if self._state != "disabled" or report_cleared:
                 logger.info(f"Scheduler disabled (schedule_enabled={schedule_enabled!r})")
                 self._state = "disabled"
                 self._block_reason = None
@@ -679,10 +716,17 @@ class AutoUpdateScheduler:
             now = time_result
         logger.info(f"Time validation: {'passed' if time_ok else 'degraded (system clock)'}")
 
-        # Check the shared read-only admission holds before queue selection.
-        environment_hold = _scheduled_environment_hold_reason(now)
+        schedule_days = [d.strip() for d in settings.get("schedule_days", "").split(",") if d.strip()]
+        start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
+        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
+        next_start = self._deferral_next_start(schedule_days, start_hour, end_hour, tz_str)
+        if next_start and now.astimezone(next_start.tzinfo) >= next_start:
+            self._clear_deferral()
+            report_cleared = True
+
+        environment_hold = _scheduled_freeze_hold_reason(now)
         if environment_hold:
-            if self._state != "frozen":
+            if self._state != "frozen" or report_cleared:
                 self._state = "frozen"
                 self._block_reason = environment_hold
                 db.log_schedule_event("frozen", self._block_reason)
@@ -690,26 +734,8 @@ class AutoUpdateScheduler:
                 await self._broadcast_status()
             return
 
-        fw_30x = settings.get("selected_firmware_30x", "")
         allow_downgrade = settings.get("allow_downgrade", "false") == "true"
 
-        schedule_days = [d.strip() for d in settings.get("schedule_days", "").split(",") if d.strip()]
-        start_hour = _as_int(settings.get("schedule_start_hour", "3"), 3)
-        end_hour = _as_int(settings.get("schedule_end_hour", "4"), 4)
-        if self._deferral_window_key:
-            report_timezone = self._deferral_timezone or tz_str
-            next_start = next_window_start_after(
-                self._deferral_window_key, schedule_days, start_hour, end_hour,
-                report_timezone,
-            )
-            if next_start and now.astimezone(next_start.tzinfo) >= next_start:
-                self._deferral_window_key = None
-                self._deferral_timezone = None
-                self._block_reason = None
-                self._last_run_result = None
-            elif next_start:
-                await self._broadcast_status()
-                return
         current_day = now.strftime("%a").lower()
         current_hour = now.hour
 
@@ -718,13 +744,12 @@ class AutoUpdateScheduler:
         )
 
         if not services.is_in_schedule_window(current_hour, current_day, schedule_days, start_hour, end_hour):
-            if self._state != "idle":
+            if self._state != "idle" or report_cleared:
                 logger.info(
                     f"Outside maintenance window (day={current_day}, hour={current_hour}), setting state to idle"
                 )
                 self._state = "idle"
-                if not self._deferral_window_key:
-                    self._block_reason = None
+                self._block_reason = None
                 self._weather_checked_today = None
                 self._weather_ok = None
                 await self._broadcast_status()
@@ -805,7 +830,7 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
-        environment_hold = _scheduled_environment_hold_reason(now, window_key)
+        environment_hold = _scheduled_failure_hold_reason(window_key)
         if environment_hold:
             self._state = "blocked_safety"
             self._block_reason = environment_hold
@@ -825,6 +850,17 @@ class AutoUpdateScheduler:
             "tna-303l": fw_303l,
             "tns-100": fw_tns100,
         }
+        if self._all_deferred:
+            queue = [
+                entry for entry in queue
+                if not self._target_deferred(entry["family"], filenames[entry["family"]])
+            ]
+            if not queue:
+                self._state = "waiting"
+                self._block_reason = self._last_run_result
+                await self._broadcast_status()
+                return
+
         schedule = MaintenanceSchedule(
             schedule_id=window_key[0],
             days=frozenset(_parse_schedule_days(schedule_days)),
@@ -880,6 +916,10 @@ class AutoUpdateScheduler:
             await self._broadcast_status()
             return
 
+        report_cleared = any(filenames[family] == self._deferral_targets.get(family) for family in families)
+        if report_cleared:
+            self._clear_deferral()
+
         # Count a target window only after the update runner has accepted the
         # queue. An admission block or rejected job must leave its ordinal alone.
         try:
@@ -901,8 +941,11 @@ class AutoUpdateScheduler:
             "window_key": window_key,
             "entries": queue,
             "timezone": timezone_name,
+            "filenames": filenames,
         }
         db.log_schedule_event("job_started", f"Job {job_id} for derived firmware queue", job_id=job_id)
+        if report_cleared:
+            await self._broadcast_status()
         return
 
     def _firmware_admission_reason(self, settings):
@@ -1129,7 +1172,7 @@ class AutoUpdateScheduler:
                 continue
             info = db.get_firmware_hold_info(fname, hold_days)
             cleared_by_time = bool(info.get("cleared", True))
-            if info.get("clears_at"):
+            if evaluation_time is not None and info.get("clears_at"):
                 clears_at, hold_now = _stored_timestamp_clock(info["clears_at"], evaluation_time)
                 cleared_by_time = hold_now >= clears_at
             prover = confirmed_by.get(fam)
@@ -1358,27 +1401,19 @@ class AutoUpdateScheduler:
                         address_owners[address_key] = entry
                     return
                 raise ValueError(f"Pending queue held: reported version is unreadable for {role} {ip}")
-            needs_update = _device_needs_update(
-                version, target, allow_downgrade,
-            )
-            cooldown_reason = (
-                _device_cooldown_reason(device, cooldown_days, evaluation_time)
-                if needs_update else None
-            )
-            auth_reason = (
-                "CPE credentials are not verified"
-                if needs_update and role == "cpe" and not cpe_auth_ok else None
-            )
-            if (cooldown_reason or auth_reason) and not include_all:
+            if family in held_families and not include_all:
+                return
+            needs_update = _device_needs_update(version, target, allow_downgrade)
+            cooldown_reason = _device_cooldown_reason(
+                device.get("last_firmware_update"), cooldown_days, evaluation_time,
+            ) if needs_update else None
+            eligible_update = needs_update and cooldown_reason is None
+            if not eligible_update and ip != recovery_ip and not include_all:
                 return
             held = needs_update and (
-                family in held_families or cooldown_reason is not None or auth_reason is not None
+                family in held_families or cooldown_reason is not None
             )
-            if held and not include_all:
-                return
-            if not needs_update and ip != recovery_ip and not include_all:
-                return
-            hold_reason = cooldown_reason or auth_reason
+            hold_reason = cooldown_reason
             if not hold_reason and family in held_families:
                 hold_reason = self._firmware_hold_block_reason({family}, {
                     family: (family_holds.get(family) or {})
@@ -1391,7 +1426,7 @@ class AutoUpdateScheduler:
                 "family": family,
                 "current_version": version,
                 "target_version": target,
-                "verify_recovery_if_current": ip == recovery_ip and not needs_update,
+                "verify_recovery_if_current": ip == recovery_ip and not eligible_update,
                 "needs_update": needs_update,
                 "held": held,
                 "hold_reason": hold_reason,
@@ -1463,6 +1498,7 @@ class AutoUpdateScheduler:
         if self._current_job_id == job_id:
             self._current_job_id = None
         self._last_run_time = datetime.now().isoformat()
+        self._clear_deferral()
         window_key = queue_context["window_key"]
         entries = queue_context["entries"]
         if failed_count > 0:
@@ -1491,8 +1527,17 @@ class AutoUpdateScheduler:
             )
             self._deferral_window_key = window_key
             self._deferral_timezone = queue_context.get("timezone")
+            self._all_deferred = success_count == 0
+            filenames = queue_context.get("filenames", {})
+            self._deferral_targets = {
+                entry["family"]: filenames[entry["family"]]
+                for entry in entries
+                if entry["ip"] in (deferral_reasons or {})
+            }
             db.log_schedule_event(
-                "job_deferred", f"{self._last_run_result} | window_key={json.dumps(window_key)}",
+                "job_deferred",
+                f"{self._last_run_result} | targets={json.dumps(self._deferral_targets)}"
+                f" | window_key={json.dumps(window_key)}",
                 job_id=job_id,
             )
         else:
@@ -1814,9 +1859,11 @@ class AutoUpdateScheduler:
         projected_admission_time = now
         if window and window[1] > now.astimezone(window[1].tzinfo):
             projected_admission_time = window[1]
-        environment_hold = _scheduled_environment_hold_reason(
-            projected_admission_time, window_key,
-        )
+        try:
+            environment_hold = _scheduled_freeze_hold_reason(projected_admission_time)
+        except Exception:
+            environment_hold = "Could not verify maintenance freeze windows"
+        environment_hold = environment_hold or _scheduled_failure_hold_reason(window_key)
         if environment_hold:
             global_hold_reason = environment_hold
 
@@ -1849,12 +1896,30 @@ class AutoUpdateScheduler:
             if queue_state and queue_state != "blocked_all_current" and not global_hold_reason:
                 global_hold_reason = queue_reason
             admitted_keys = {(entry["ip"], entry["device_type"]) for entry in admitted_queue}
+            deferred_keys = set()
+            deferred_until = self._deferral_next_start(
+                settings.get("schedule_days", ""), start_hour, end_hour, timezone_name,
+            )
+            if not self._deferral_target_changed(settings) and (
+                deferred_until is None
+                or projected_admission_time.astimezone(deferred_until.tzinfo) < deferred_until
+            ):
+                deferred_keys = {
+                    (entry["ip"], entry["device_type"]) for entry in admitted_queue
+                    if self._target_deferred(
+                        entry["family"], settings.get(_FIRMWARE_SELECTION_KEYS[entry["family"]], ""),
+                    )
+                }
+            if deferred_keys and not global_hold_reason:
+                next_start = deferred_until
             for item in candidates:
                 held = bool(item.get("held"))
                 reason = item.get("hold_reason")
                 actionable = item.get("needs_update") or item.get("verify_recovery_if_current")
                 if actionable and global_hold_reason and not (item.get("excluded") or item.get("queue_blocking")):
                     held, reason = True, global_hold_reason
+                elif (item["ip"], item["device_type"]) in deferred_keys:
+                    held, reason = True, self._last_run_result
                 elif actionable and recovery_ip and (item["ip"], item["device_type"]) not in admitted_keys and not reason:
                     held, reason = True, "Waiting for the previously failed device to recover"
                 devices.append({
@@ -1910,7 +1975,7 @@ class AutoUpdateScheduler:
                             device["held"] = True
                             device["hold_reason"] = rollout_gate.FIRMWARE_CUTOFF_MESSAGE
                             device["deferral_reason"] = rollout_gate.FIRMWARE_CUTOFF_REASON
-                    if any(device.get("deferral_reason") for device in devices):
+                    if next_start is None and any(device.get("deferral_reason") for device in devices):
                         next_start = next_window_start_after(
                             window_key, settings.get("schedule_days", ""),
                             start_hour, end_hour, timezone_name,
