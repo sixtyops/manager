@@ -9,7 +9,7 @@ require an outside system.
 
 ## Built-in behavior
 
-**Shipped behavior:** Scheduled work uses a serial queue, one device at a time, ordered CPEs, APs, then switches. The first used windows for each new firmware family or artifact use the configured 30-120 minute ramp. A persisted cutoff stops new starts and lets active recovery finish. A failure stops the queue; after resume, Manager checks that device first. The shipped Update Mode defaults to one bank; the operator can select both banks. Wave selection, saved membership, and predictions have been removed. See [gradual-rollout.md](gradual-rollout.md).
+**Shipped behavior:** Auto-Update controls scheduled admission. Scheduled work uses a serial queue, one device at a time, ordered CPEs, APs, then switches. Each device reboots before its firmware write and completes recovery before the next device starts. The first used windows for each new firmware family or artifact use the configured 30-120 minute ramp. A persisted cutoff stops new starts and lets active recovery finish. A failure stops the queue; after resume, Manager checks that device first. Update Mode defaults to one bank; the operator can select both banks. Wave selection, saved membership, and predictions have been removed. See [gradual-rollout.md](gradual-rollout.md).
 
 **Target behavior:** The rules below describe the intended contract. They are not all shipped.
 
@@ -32,9 +32,8 @@ exception. Approval covers that plan only. It cannot bypass a failed gate.
 Derive an ordered queue from current inventory. Run CPEs, then APs, then
 switches, with one device write and recovery sequence at a time. Persist each
 window cutoff. Stop new starts at cutoff, finish active recovery, and continue
-remaining devices in a later window. Before the pre-update reboot and every
-device write, verify a fresh, restorable backup and commit a fresh config
-snapshot. Prove recovery with the reboot only after the snapshot passes. Enforce
+remaining devices in a later window. Before every device write, verify a fresh,
+restorable backup and commit a fresh config snapshot. Enforce
 Firmware Hold, weather, clock, artifact, and maintenance-window gates. Use
 single-bank scheduled writes. After each update, verify version, CPE
 re-association, and RSSI. Use bounded reported peer-return checks and reported

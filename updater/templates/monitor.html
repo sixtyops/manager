@@ -581,6 +581,7 @@
         .u-history-cell-time { font-size: var(--text-sm); color: var(--text-dim); white-space: nowrap; }
         .u-history-cell-failed.error { color: var(--danger-fill); }
         .u-history-error { color: var(--danger-fill); font-size: var(--text-base); margin-top: 4px; word-break: break-word; }
+        .u-history-deferral { color: var(--info-text); font-size: var(--text-base); margin-top: 4px; white-space:normal; }
         .u-history-pass { font-size: var(--text-sm); color: var(--text-dim); margin-left: 8px; }
 
         .settings-panel {
@@ -9756,18 +9757,23 @@
                     detailRow.innerHTML = '<td colspan="7" class="u-history-detail-cell">No device records for this job</td>';
                     return;
                 }
+                const savedDevices = job.devices || {};
                 let html = '<td colspan="7" class="u-history-detail-cell"><div style="max-height:300px;overflow-y:auto;">';
                 html += '<table style="width:100%;font-size:0.8rem;"><tr><th>Device</th><th>Role</th><th>Status</th><th>Version</th><th>Duration</th><th>Error</th></tr>';
                 for (const d of data.devices) {
+                    const savedDevice = savedDevices[d.ip] || {};
+                    const deferralMessage = savedDevice.deferral_message || d.deferral_message || '';
                     const verStr = d.old_version && d.new_version ? `${d.old_version} → ${d.new_version}` : d.new_version || '-';
                     const durStr = d.duration_seconds ? Math.round(d.duration_seconds) + 's' : '-';
+                    const deferralText = deferralMessage
+                        ? `<div class="u-history-deferral">${escapeHtml(deferralMessage)}</div>` : '';
                     html += `<tr>
                         <td class="u-history-cell-mono">${escapeHtml(d.ip)}</td>
                         <td>${escapeHtml(d.role || '-')}</td>
                         <td><span class="history-status-badge ${d.status}">${d.status}</span></td>
                         <td>${escapeHtml(verStr)}</td>
                         <td>${durStr}</td>
-                        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(d.error || '')}">${escapeHtml((d.error || '').substring(0, 60))}</td>
+                        <td style="max-width:320px;white-space:normal;">${escapeHtml(d.error || '')}${deferralText}</td>
                     </tr>`;
                 }
                 html += '</table></div></td>';

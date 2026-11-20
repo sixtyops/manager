@@ -360,10 +360,12 @@ Get all configuration settings as key-value pairs. Sensitive values (password ha
 ### `PUT /api/settings`
 Update settings. Only whitelisted keys are accepted:
 
-`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `firmware_beta_enabled`, `firmware_canary_hold_days`, `firmware_update_cooldown_days`, `slack_webhook_url`, `autoupdate_enabled`
+`schedule_enabled`, `schedule_days`, `schedule_start_hour`, `schedule_end_hour`, `bank_mode`, `allow_downgrade`, `timezone`, `zip_code`, `weather_check_enabled`, `min_temperature_c`, `temperature_unit`, `schedule_scope`, `schedule_scope_data`, `firmware_beta_enabled`, `firmware_canary_hold_days`, `firmware_update_cooldown_days`, `firmware_window_ramp_minutes`, `slack_webhook_url`, `autoupdate_enabled`
 
 - **Body** (JSON): Object of key-value pairs to set
 - **Notes**:
+  - A settings update writes only the keys in the request. Omit keys the operator did not change.
+  - `schedule_enabled` controls scheduled update admission. There is no separate readiness setting.
   - `firmware_canary_hold_days` (the Firmware Hold) must be between 6 and 365
 - **Response**: `{ "success": true }`
 
@@ -395,10 +397,10 @@ Get scheduler state and the serial queue summary. The queue shows remaining devi
 ### `GET /api/scheduler/preview`
 Preview the next scheduled firmware window. Any authenticated role can call this endpoint. It reads Manager settings and inventory only. It does not contact devices or create jobs.
 
-- **Window fields**: `timezone`, `window_start`, and `window_end` show the resolved local time zone and window bounds. `family_timing` gives each selected firmware family its `ramp_ordinal`, `ramp_limit_minutes`, and `cutoff_utc`. The top-level `cutoff_utc`, `ramp_limit_minutes`, and `ramp_ordinal` mirror the first family in serial queue order for compatibility.
+- **Window fields**: `timezone`, `window_start`, and `window_end` show the resolved local time zone and window bounds. `family_timing` gives each selected firmware family its `ramp_ordinal`, `ramp_limit_minutes`, and `cutoff_utc`. The top-level `cutoff_utc`, `ramp_limit_minutes`, and `ramp_ordinal` mirror the first family in serial queue order for compatibility. When the cutoff defers a device, `next_window_start` gives the next scheduled start, or null if unavailable.
 - **Scope fields**: `scope` is the configured scope key. `scope_label` is the readable label. `scope_names` lists the selected site and AP names. An all-sites scope lists enabled AP names and their site names.
 - **Flags**: `schedule_enabled` and `auto_update_enabled` both report the firmware scheduler setting `schedule_enabled`. `scheduler_enabled` reports whether the scheduler service is initialized. `manager_auto_updates_enabled` reports the separate `autoupdate_enabled` setting for Manager software updates. The Manager software update setting does not control firmware scheduling.
-- **Devices**: `devices` follows the serial queue order: recovery device first when one is due, then CPEs, APs, and switches. Each row has `ip`, `role`, `model`, `current_firmware`, `target_firmware`, `needs_update`, `held`, and `hold_reason`. `needs_update` follows the scheduler's `allow_downgrade` setting; it can be true when the selected target is older than the reported version. Cooldown is reported separately as a hold. `held` reports why an update cannot start, including Firmware Hold, cooldown, CPE credential, freeze, failure stop, unsupported model, missing or invalid or duplicate management address, missing recovery serial, and the applicable family cutoff. Credentials are not included.
+- **Devices**: `devices` follows the serial queue order: recovery device first when one is due, then CPEs, APs, and switches. Each row has `ip`, `role`, `model`, `current_firmware`, `target_firmware`, `needs_update`, `held`, and `hold_reason`. `needs_update` follows the scheduler's `allow_downgrade` setting; it can be true when the selected target is older than the reported version. Cooldown is reported separately as a hold. `held` reports why an update cannot start, including Firmware Hold, cooldown, CPE credential, freeze, failure stop, unsupported model, missing or invalid or duplicate management address, missing recovery serial, and the applicable family cutoff. When the cutoff defers a device, `deferral_reason` is `cutoff_reached` and `hold_reason` matches the run’s deferral message. Credentials are not included.
 - **Hold reasons**: top-level `hold_reason` reports a fleet-level block when the scheduler is unavailable, the firmware schedule is off, a freeze is active, or a firmware failure stop prevents admission. Device `hold_reason` reports a device or queue admission reason. The preview uses the scheduler queue admission decision. It checks freezes, Firmware Hold, and cooldown at the active time or, for a future window, at its scheduled start. Missing primary firmware and recovery admission failures hold the queue. Weather uses the scheduler's cached check for the active window. Future or unchecked weather admission is unverified and holds affected rows. The preview does not fetch weather. Excluded CPEs remain visible and do not block eligible devices. At its own family cutoff, and during the final 15 minutes of the maintenance window, a needed update is held for the next window.
 
 ## Firmware queue
@@ -455,7 +457,7 @@ Start a firmware update job for multiple devices.
   - `firmware_file` — filename for TNA-30x models (validated)
   - `device_type` — `"tachyon"`
   - `ip_list` — newline-separated IP addresses
-  - `concurrency` — parallel update limit (default 2)
+  - `concurrency` — legacy request field; Manager processes updates serially
   - `firmware_file_303l` — filename for TNA-303L models (optional, validated)
   - `firmware_file_tns100` — filename for TNS-100 models (optional, validated)
   - `bank_mode` — `"both"` or `"one"`
@@ -864,6 +866,28 @@ Export job history as CSV download.
 Export device history as CSV download.
 
 - **Query**: `days` (1–365, default 30)
+
+## Read-only service token
+
+An administrator can manage one token for inventory sync.
+
+### `GET /api/service-token`
+Return whether a token exists and its creation and last-use times. Requires the admin role.
+
+### `POST /api/service-token`
+Create a token when none exists. Store the returned value securely; Manager shows it only once. Requires the admin role.
+
+### `DELETE /api/service-token`
+Revoke the token. Revoke the current token before creating a replacement. Requires the admin role.
+
+Send the token as `Authorization: Bearer <token>` to `GET /api/aps`,
+`GET /api/cpes`, or `GET /api/topology`. The token grants no other API access.
+The three inventory routes return `401` for an invalid or revoked token and
+`429` when a request limit is reached. The topology response uses Manager's
+current database snapshot and does not start a device poll.
+
+Keep the token in the Ops worker secret `sixtyops_readonly_token`. Do not put
+it in a URL or log it.
 
 ## Device Groups
 

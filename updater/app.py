@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import hmac
 import html as html_module
 import ipaddress
 import json
@@ -10,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import secrets
 import subprocess
 import threading
 import uuid
@@ -1146,6 +1148,72 @@ def _clear_rate_limit_bucket(bucket: str):
     _auth_rate_attempts.pop(bucket, None)
 
 
+SERVICE_TOKEN_KEY = "readonly_service_token"
+_INVENTORY_TOKEN_ROUTES = {("GET", "/api/aps"), ("GET", "/api/cpes"), ("GET", "/api/topology")}
+
+
+def _service_token_record(conn):
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,)).fetchone()
+    if not row:
+        return None
+    try:
+        value = json.loads(row[0])
+    except (TypeError, ValueError):
+        return {}
+    if (not isinstance(value, dict) or set(value) != {"sha256", "created_at", "created_by", "last_used_at"}
+            or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256", "")))
+            or not isinstance(value.get("created_at"), str)
+            or not isinstance(value.get("created_by"), str)
+            or value.get("last_used_at") is not None and not isinstance(value.get("last_used_at"), str)):
+        return {}
+    return value
+
+
+def _service_token_audit(conn, username, action, route, ip):
+    conn.execute(
+        "INSERT INTO audit_log (username, action, target_type, target_id, details, ip_address) VALUES (?, ?, ?, ?, ?, ?)",
+        (username, action, "service_token", route, None, ip),
+    )
+
+
+def _limited(bucket, limit, window):
+    if not _check_rate_limit(bucket, limit, window):
+        _record_rate_limit_event(bucket)
+        return
+    raise HTTPException(429, "Too many requests", headers={"Retry-After": str(window)})
+
+
+async def require_inventory_read(request: Request) -> dict:
+    authorization = request.headers.getlist("authorization")
+    if not authorization:
+        return await require_auth(request)
+    ip = _client_ip(request)
+    _limited(f"service-token-attempt:{ip}", 60, 300)
+    match = re.fullmatch(r"Bearer (mgr_ro_[A-Za-z0-9_-]{43})", authorization[0]) if len(authorization) == 1 else None
+    if not match or (request.method.upper(), request.url.path) not in _INVENTORY_TOKEN_ROUTES:
+        raise HTTPException(401, "Not authenticated")
+    digest = hashlib.sha256(match.group(1).encode()).hexdigest()
+    try:
+        with db.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            record = _service_token_record(conn)
+            if not record or not hmac.compare_digest(bytes.fromhex(record["sha256"]), bytes.fromhex(digest)):
+                conn.rollback()
+                raise HTTPException(401, "Not authenticated")
+            _limited(f"service-token-authenticated:{record['sha256']}", 15, 60)
+            used_at = datetime.now(timezone.utc).isoformat()
+            updated = dict(record)
+            updated["last_used_at"] = used_at
+            conn.execute("UPDATE settings SET value = ? WHERE key = ?", (json.dumps(updated), SERVICE_TOKEN_KEY))
+            _service_token_audit(conn, "readonly-service", "service_token.use", request.url.path, ip)
+        return {"username": "readonly-service", "role": "viewer", "auth_method": "readonly_service_token"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Service token authentication database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Authentication service unavailable")
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     """Handle login form submission."""
@@ -1636,7 +1704,7 @@ def _include_backoff_state(devices: list[dict]) -> list[dict]:
 
 
 @app.get("/api/aps", tags=["devices"])
-async def list_aps(site_id: int = None, session: dict = Depends(require_auth)):
+async def list_aps(site_id: int = None, session: dict = Depends(require_inventory_read)):
     """List access points (credentials redacted)."""
     aps = db.get_access_points(tower_site_id=site_id, enabled_only=False)
     return {"aps": _include_backoff_state(_strip_credentials(aps))}
@@ -2028,7 +2096,7 @@ async def poll_switch(ip: str, session: dict = Depends(require_role("admin", "op
 # ============================================================================
 
 @app.get("/api/topology", tags=["devices"])
-async def get_topology(session: dict = Depends(require_auth)):
+async def get_topology(request: Request, session: dict = Depends(require_inventory_read)):
     """Get current network topology."""
     # Warm the IP-location cache in the background. ipwho.is can hang for the
     # full 10 s curl timeout, and this endpoint is the dashboard's heartbeat —
@@ -2036,7 +2104,7 @@ async def get_topology(session: dict = Depends(require_auth)):
     # `get_topology()` falls back to the default zone until the task lands.
     try:
         import asyncio
-        if services._cache_get("ip_location") is None:
+        if session.get("auth_method") != "readonly_service_token" and services._cache_get("ip_location") is None:
             asyncio.create_task(services.get_default_rain_climate())
     except Exception:
         pass
@@ -2044,6 +2112,9 @@ async def get_topology(session: dict = Depends(require_auth)):
     poller = get_poller()
     if poller:
         return poller.get_topology()
+
+    if session.get("auth_method") == "readonly_service_token":
+        raise HTTPException(503, "Topology is unavailable")
 
     return {
         "sites": [],
@@ -2067,7 +2138,7 @@ async def refresh_topology(session: dict = Depends(require_role("admin", "operat
 
 
 @app.get("/api/cpes", tags=["devices"])
-async def get_all_cpes(session: dict = Depends(require_auth)):
+async def get_all_cpes(session: dict = Depends(require_inventory_read)):
     """Get all CPEs."""
     cpes = db.get_all_cpes()
     return {"cpes": cpes}
@@ -2360,6 +2431,7 @@ async def get_vendors(session: dict = Depends(require_auth)):
 async def get_settings(session: dict = Depends(require_auth)):
     """Get all settings. Sensitive values are redacted."""
     settings = db.get_all_settings()
+    settings.pop(SERVICE_TOKEN_KEY, None)
     for key in _SETTINGS_SENSITIVE:
         if key in settings and settings[key]:
             settings[key] = "********"
@@ -2401,6 +2473,55 @@ _SETTINGS_WRITABLE = {
     "email_smtp_username", "email_smtp_password", "email_smtp_tls",
     "email_from_address", "email_to_addresses",
 }
+
+
+@app.get("/api/service-token", tags=["auth"])
+async def get_service_token_status(session: dict = Depends(require_role("admin"))):
+    try:
+        with db.get_db() as conn:
+            record = _service_token_record(conn)
+        return {"configured": record is not None, "created_at": record.get("created_at") if record else None,
+                "created_by": record.get("created_by") if record else None,
+                "last_used_at": record.get("last_used_at") if record else None}
+    except Exception as exc:
+        logger.error("Service token status database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Service unavailable")
+
+
+@app.post("/api/service-token", tags=["auth"], status_code=201)
+async def create_service_token(request: Request, session: dict = Depends(require_role("admin"))):
+    token = "mgr_ro_" + secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc).isoformat()
+    record = {"sha256": hashlib.sha256(token.encode()).hexdigest(), "created_at": now,
+              "created_by": session["username"], "last_used_at": None}
+    try:
+        with db.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,)).fetchone():
+                raise HTTPException(409, "A service token already exists")
+            conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)",
+                         (SERVICE_TOKEN_KEY, json.dumps(record)))
+            _service_token_audit(conn, session["username"], "service_token.create", "/api/service-token", _client_ip(request))
+        return JSONResponse({"token": token, "created_at": now}, status_code=201, headers={"Cache-Control": "no-store"})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Service token creation database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Service unavailable")
+
+
+@app.delete("/api/service-token", tags=["auth"])
+async def revoke_service_token(request: Request, session: dict = Depends(require_role("admin"))):
+    try:
+        with db.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,)).fetchone():
+                conn.execute("DELETE FROM settings WHERE key = ?", (SERVICE_TOKEN_KEY,))
+            _service_token_audit(conn, session["username"], "service_token.revoke", "/api/service-token", _client_ip(request))
+        return {"revoked": True}
+    except Exception as exc:
+        logger.error("Service token revocation database failure: %s", type(exc).__name__)
+        raise HTTPException(503, "Service unavailable")
 
 
 def _parse_int_field(value, field: str) -> int:
@@ -4154,6 +4275,8 @@ class DeviceStatus:
     new_version: Optional[str] = None
     error: Optional[str] = None
     progress_message: str = ""
+    deferral_reason: Optional[str] = None
+    deferral_message: Optional[str] = None
     bank1_version: Optional[str] = None
     bank2_version: Optional[str] = None
     active_bank: Optional[int] = None
@@ -4897,6 +5020,8 @@ async def _finalize_crashed_job(job: "UpdateJob", error: Exception):
             ip: {
                 "status": ds.status,
                 "message": ds.progress_message,
+                "deferral_reason": ds.deferral_reason,
+                "deferral_message": ds.deferral_message,
                 "old_version": ds.old_version,
                 "new_version": ds.new_version,
                 "error": ds.error,
@@ -5625,7 +5750,7 @@ async def _start_scheduled_update(
     if bank_mode not in ("one", "both"):
         raise RuntimeError("bank_mode must be 'one' or 'both'")
     if concurrency < 1:
-        raise RuntimeError("concurrency must be >= 1")
+        raise RuntimeError("parallel_updates must be >= 1")
 
     window_key = window_key or rollout_gate.firmware_window_key({
         "schedule_days": ",".join(schedule_days or []),
@@ -6342,14 +6467,13 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
         return True, ""
 
     if not _firmware_deadline_admits(job, ip):
-        reason = "Deferred: firmware admission cutoff reached or unavailable; device will retry next window"
-        device_status = job.devices[ip]
-        device_status.status = "pending"
-        device_status.error = None
-        device_status.progress_message = reason
-        deferred_ips = getattr(job, "_deferred_admission_ips", set())
-        deferred_ips.add(ip)
-        job._deferred_admission_ips = deferred_ips
+        reason_code = getattr(job, "_firmware_deadline_reasons", {}).get(ip, rollout_gate.FIRMWARE_CUTOFF_REASON)
+        messages = {
+            rollout_gate.FIRMWARE_CUTOFF_REASON: rollout_gate.FIRMWARE_CUTOFF_MESSAGE,
+            "timing_unavailable": "Deferred: firmware admission timing is missing or invalid.",
+        }
+        reason = messages[reason_code]
+        _record_device_deferral(job, ip, reason_code, reason)
         return False, reason
 
     if not (job.is_scheduled and job.enforce_window_cutoff):
@@ -6374,13 +6498,32 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
         minutes_until_end = _minutes_until_window_end(now, job.start_hour, job.end_hour)
         if current_key == job.window_key and minutes_until_end > SCHEDULE_END_BUFFER_MINUTES:
             return True, ""
-        reason = "Deferred: maintenance window ended or is ending; queued device will retry next window"
+        if current_key is None:
+            days = {day.strip().lower()[:3] for day in ",".join(job.schedule_days).split(",") if day.strip()}
+            if not days or days - {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:
+                raise ValueError("Scheduled update has invalid maintenance window days")
+            if not (0 <= int(job.start_hour) <= 23 and 0 <= int(job.end_hour) <= 23):
+                raise ValueError("Scheduled update has invalid maintenance window hours")
+        reason_code = "window_closed"
+        reason = "Deferred: the maintenance window has ended or is ending; device will retry next window."
     except Exception as exc:
-        reason = f"Deferred: maintenance window check failed; queued device will retry next window ({exc})"
+        reason_code = "timing_unavailable"
+        reason = f"Deferred: maintenance window timing is unavailable ({exc}); device will retry next window."
 
-    job.devices[ip].status = "pending"
-    job.devices[ip].progress_message = reason
+    _record_device_deferral(job, ip, reason_code, reason)
     return False, reason
+
+
+def _record_device_deferral(job: "UpdateJob", ip: str, reason_code: str, reason: str) -> None:
+    device_status = job.devices[ip]
+    device_status.status = "pending"
+    device_status.error = None
+    device_status.progress_message = reason
+    device_status.deferral_reason = reason_code
+    device_status.deferral_message = reason
+    deferred_ips = getattr(job, "_deferred_admission_ips", set())
+    deferred_ips.add(ip)
+    job._deferred_admission_ips = deferred_ips
 
 
 def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
@@ -6391,7 +6534,11 @@ def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
     """
     if not (job.is_scheduled and job.enforce_window_cutoff and job.device_order):
         return True
+    reasons = getattr(job, "_firmware_deadline_reasons", {})
+    reasons.pop(ip, None)
+    job._firmware_deadline_reasons = reasons
     if not job.window_key:
+        _record_firmware_timing_reason(job, ip, "timing_unavailable")
         return False
 
     try:
@@ -6401,6 +6548,7 @@ def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
         family = _get_firmware_type_for_model(model, job.device_vendor_map.get(ip, "tachyon"))
         target_sha256 = db.get_firmware_sha256(Path(fw_path).name) if fw_path else None
         if not family or not target_sha256:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
         with db.get_db() as conn:
             row = conn.execute(
@@ -6410,16 +6558,29 @@ def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
             ).fetchone()
         expected_key = json.dumps(list(job.window_key), separators=(",", ":"))
         if not row or row["last_window_key"] != expected_key:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
         cutoff = datetime.fromisoformat(row["cutoff_utc"].replace("Z", "+00:00"))
         if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None or now.utcoffset() is None:
+            _record_firmware_timing_reason(job, ip, "timing_unavailable")
             return False
-        return now.astimezone(timezone.utc) < cutoff.astimezone(timezone.utc)
+        admitted = now.astimezone(timezone.utc) < cutoff.astimezone(timezone.utc)
+        if not admitted:
+            _record_firmware_timing_reason(job, ip, rollout_gate.FIRMWARE_CUTOFF_REASON)
+        return admitted
     except Exception:
+        _record_firmware_timing_reason(job, ip, "timing_unavailable")
         return False
+
+
+def _record_firmware_timing_reason(job: "UpdateJob", ip: str, reason: str) -> None:
+    reasons = getattr(job, "_firmware_deadline_reasons", {})
+    reasons[ip] = reason
+    job._firmware_deadline_reasons = reasons
 
 
 async def _scheduled_job_guard(job: "UpdateJob") -> tuple[bool, str]:
@@ -7404,7 +7565,20 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             # Await each complete update and persist its result before moving on.
             for ip in device_ips:
                 await _run_device(ip, pass_number)
-                if job.cancelled or ip in getattr(job, "_deferred_admission_ips", set()):
+                if job.cancelled:
+                    break
+                if ip in getattr(job, "_deferred_admission_ips", set()):
+                    deferred = job.devices[ip]
+                    if (
+                        deferred.status == "pending"
+                        and deferred.deferral_reason
+                        and deferred.deferral_message
+                    ):
+                        for pending_ip, device in job.devices.items():
+                            if pending_ip != ip and device.status == "pending":
+                                _record_device_deferral(
+                                    job, pending_ip, deferred.deferral_reason, deferred.deferral_message,
+                                )
                     break
         else:
             await asyncio.gather(
@@ -7451,6 +7625,11 @@ async def run_update_job(job: UpdateJob, concurrency: int):
         "failed_count": failed_count,
         "skipped_count": skipped_count,
         "cancelled_count": cancelled_count,
+        "deferred_count": len(getattr(job, "_deferred_admission_ips", set())),
+        "deferral_reasons": {
+            ip: ds.deferral_reason for ip, ds in job.devices.items()
+            if ds.deferral_reason
+        },
         "duration": (job.completed_at - job.started_at).total_seconds(),
         "timezone": resolved_tz,
         "devices": {
@@ -7467,6 +7646,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                 "parent_ap": ds.parent_ap,
                 "model": ds.model,
                 "smoke_warnings": ds.smoke_warnings,
+                "deferral_reason": ds.deferral_reason,
+                "deferral_message": ds.deferral_message,
             }
             for ip, ds in job.devices.items()
         },
@@ -7484,6 +7665,8 @@ async def run_update_job(job: UpdateJob, concurrency: int):
             "role": ds.role,
             "parent_ap": ds.parent_ap,
             "model": ds.model,
+            "deferral_reason": ds.deferral_reason,
+            "deferral_message": ds.deferral_message,
         }
         for ip, ds in job.devices.items()
     }
@@ -7518,10 +7701,25 @@ async def run_update_job(job: UpdateJob, concurrency: int):
                         learned_versions[fw_type] = ds.new_version
             # Pass device statuses so rollout devices get marked correctly
             device_statuses = {ip: ds.status for ip, ds in job.devices.items()}
-            scheduler.on_job_completed(job.job_id, success_count, failed_count,
-                                       learned_versions=learned_versions,
-                                       device_statuses=device_statuses,
-                                       cancel_reason=job.cancel_reason)
+            completion_data = {
+                "learned_versions": learned_versions,
+                "device_statuses": device_statuses,
+                "cancel_reason": job.cancel_reason,
+                "deferred_count": len(getattr(job, "_deferred_admission_ips", set())),
+                "deferral_reasons": {
+                    ip: ds.deferral_reason for ip, ds in job.devices.items()
+                    if ds.deferral_reason
+                },
+            }
+            import inspect
+            callback = scheduler.on_job_completed
+            if not any(p.kind == inspect.Parameter.VAR_KEYWORD
+                       for p in inspect.signature(callback).parameters.values()):
+                completion_data = {
+                    key: value for key, value in completion_data.items()
+                    if key in inspect.signature(callback).parameters
+                }
+            callback(job.job_id, success_count, failed_count, **completion_data)
 
     firmware_name = (
         job.firmware_names.get("tna-30x", "")

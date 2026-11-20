@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -271,7 +272,62 @@ def test_preview_holds_behind_devices_after_persisted_cutoff(mock_db):
     device = next(item for item in preview["devices"] if item["ip"] == "192.0.2.10")
     assert device["needs_update"] is True
     assert device["held"] is True
-    assert device["hold_reason"] == "Firmware window cutoff has passed; device will retry next window"
+    assert device["hold_reason"] == "Deferred: the firmware admission cutoff for this target has passed."
+
+
+
+@pytest.mark.asyncio
+async def test_preview_matches_run_after_same_day_window_edit(mock_db, monkeypatch):
+    scheduler, _, now = _fixed_preview(mock_db)
+    window_key = ("firmware", "2026-11-02")
+    db.record_firmware_window_admission(
+        "tna-30x", "a" * 64, window_key, "2026-11-02T09:30:00+00:00",
+    )
+    db.set_setting("schedule_start_hour", "4")
+    settings = db.get_all_settings()
+    before = _snapshot(mock_db)
+    preview = scheduler.get_preview(settings, now, "America/Chicago")
+    assert _snapshot(mock_db) == before
+
+    scheduler.start_update_func.return_value = "same-day-job"
+    await _run_preview_scheduler(scheduler, now, monkeypatch)
+    admission = scheduler.start_update_func.await_args.kwargs
+    assert admission["window_key"] == window_key
+    ip = admission["device_entries"][0]["ip"]
+    job = app_module.UpdateJob(
+        job_id="same-day-job", device_firmware_map={ip: FIRMWARE},
+        credentials={}, device_order=[ip], device_roles={ip: "ap"},
+        devices={ip: app_module.DeviceStatus(ip=ip, model="TNA-301")},
+        is_scheduled=True, window_key=window_key,
+        start_hour=admission["start_hour"], end_hour=admission["end_hour"],
+        schedule_timezone=admission["schedule_timezone"],
+        schedule_days=admission["schedule_days"],
+    )
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(app_module, "datetime", FixedDateTime)
+    allowed, _ = app_module._firmware_write_gate(job, ip)
+    assert not allowed
+    device = preview["devices"][0]
+    assert device["ip"] == ip
+    assert device["needs_update"] and device["held"]
+    assert device["deferral_reason"] == job.devices[ip].deferral_reason == "cutoff_reached"
+    assert device["hold_reason"] == job.devices[ip].deferral_message
+
+    scheduler.on_job_completed(
+        job.job_id, 0, 0, deferred_count=1,
+        deferral_reasons={ip: job.devices[ip].deferral_reason},
+    )
+    next_start = datetime.fromisoformat(preview["next_window_start"])
+    assert next_start == datetime(2026, 11, 3, 4, tzinfo=ZoneInfo("America/Chicago"))
+    assert scheduler._block_reason == scheduler._last_run_result
+    assert scheduler._last_run_result.endswith(
+        f"Next scheduled window: {next_start:%d %b %Y, %H:%M} America/Chicago."
+    )
 
 
 def test_preview_holds_recovery_at_target_without_saved_serial(mock_db):
@@ -330,7 +386,7 @@ def test_preview_reports_and_applies_cutoffs_per_family(mock_db):
     by_ip = {item["ip"]: item for item in preview["devices"]}
     assert by_ip["192.0.2.10"]["held"] is False
     assert by_ip["192.0.2.20"]["held"] is True
-    assert by_ip["192.0.2.20"]["hold_reason"] == "Firmware window cutoff has passed; device will retry next window"
+    assert by_ip["192.0.2.20"]["hold_reason"] == "Deferred: the firmware admission cutoff for this target has passed."
     assert preview["family_timing"]["tna-30x"] == {
         "ramp_ordinal": 2, "ramp_limit_minutes": 120,
         "cutoff_utc": "2026-11-02T11:00:00+00:00",
@@ -508,8 +564,6 @@ def test_preview_ignores_missing_hash_for_already_held_family(mock_db, monkeypat
 
 
 async def _run_preview_scheduler(scheduler, now, monkeypatch):
-    from zoneinfo import ZoneInfo
-
     monkeypatch.setattr(
         app_module.services, "validate_time_sources",
         AsyncMock(return_value=(True, now.astimezone(ZoneInfo("America/Chicago")))),

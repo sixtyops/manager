@@ -41,6 +41,7 @@ _http_userinfo = re.compile(
     r'(?<![\w+./-])(https?://)[^\s/?#@"<>\[\]{}]+@',
     re.IGNORECASE,
 )
+_readonly_service_token = re.compile(r"(?<![A-Za-z0-9_-])mgr_ro_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])")
 
 
 _url_redactor: ContextVar[Callable[[str], str] | None] = ContextVar("webhook_url_redactor", default=None)
@@ -190,6 +191,7 @@ def _sanitize(output: str) -> str:
         output = redactor(output)
     # Redact URLs first so a registered substring cannot break their recognition.
     output = _http_userinfo.sub(r"\1[REDACTED]@", output)
+    output = _readonly_service_token.sub("[REDACTED]", output)
     output = _slack_webhook.sub("https://hooks.slack.com/services/[REDACTED]", output)
     for _ in range(3):
         with _registry_lock:
