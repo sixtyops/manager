@@ -210,21 +210,27 @@ async def test_tick_after_all_deferred(mock_db, monkeypatch, reload_scheduler, s
 
     async def start_later(**kwargs):
         assert kwargs["firmware_file"] == firmware
-        assert scheduler.get_status()["last_run_result"] == (report if scenario == "same_day" else None)
+        assert scheduler.get_status()["last_run_result"] is None
         return "later"
 
     scheduler.start_update_func = AsyncMock(side_effect=start_later)
+    if scenario == "same_day":
+        for _ in range(2):
+            await scheduler._check_and_run()
+            scheduler.start_update_func.assert_not_awaited()
+            status = scheduler.get_status()
+            assert status["state"] == "waiting"
+            assert status["block_reason"] == status["last_run_result"] == report
+            now += timedelta(minutes=1)
+        return
+
     await scheduler._check_and_run()
     scheduler.start_update_func.assert_awaited_once()
     status = scheduler.get_status()
     assert status["state"] == "running"
     assert status["block_reason"] is None
     assert status["last_run_result"] is None
-    if scenario == "same_day":
-        assert not check_write("later", firmware)
-        assert scheduler.get_status()["last_run_result"] == report
-    else:
-        assert check_write("later", firmware)
+    assert check_write("later", firmware)
 
 
 @pytest.mark.asyncio

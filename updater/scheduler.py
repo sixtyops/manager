@@ -362,6 +362,7 @@ class AutoUpdateScheduler:
         self._deferral_window_key = None
         self._deferral_timezone = None
         self._deferral_targets: dict[str, str] = {}
+        self._all_deferred = False
         self._current_job_id: Optional[str] = None
         self._check_lock = asyncio.Lock()
         self._queue_job_context: dict[str, dict] = {}
@@ -447,6 +448,7 @@ class AutoUpdateScheduler:
         self._deferral_window_key = tuple(window_key)
         self._deferral_timezone = zone.key
         self._deferral_targets = targets
+        self._all_deferred = success_count == 0
         self._last_run_time = saved["completed_at"]
         self._last_run_result = report
         self._block_reason = report
@@ -461,6 +463,7 @@ class AutoUpdateScheduler:
         self._deferral_window_key = None
         self._deferral_timezone = None
         self._deferral_targets = {}
+        self._all_deferred = False
 
     async def _fetch_weather_initial(self):
         """Fetch weather on startup so the UI shows temperature immediately."""
@@ -790,6 +793,17 @@ class AutoUpdateScheduler:
             "tna-303l": fw_303l,
             "tns-100": fw_tns100,
         }
+        if self._all_deferred:
+            queue = [
+                entry for entry in queue
+                if filenames[entry["family"]] != self._deferral_targets.get(entry["family"])
+            ]
+            if not queue:
+                self._state = "waiting"
+                self._block_reason = self._last_run_result
+                await self._broadcast_status()
+                return
+
         schedule = MaintenanceSchedule(
             schedule_id=window_key[0],
             days=frozenset(_parse_schedule_days(schedule_days)),
@@ -1277,6 +1291,7 @@ class AutoUpdateScheduler:
             )
             self._deferral_window_key = window_key
             self._deferral_timezone = queue_context.get("timezone")
+            self._all_deferred = success_count == 0
             filenames = queue_context.get("filenames", {})
             self._deferral_targets = {
                 entry["family"]: filenames[entry["family"]]
