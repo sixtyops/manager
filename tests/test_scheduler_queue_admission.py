@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from updater import app as app_module
 from updater import database as db
 from updater.scheduler import AutoUpdateScheduler
 
@@ -137,6 +138,93 @@ async def test_restart_restores_deferral_until_next_window(mock_db, monkeypatch,
             assert reloaded.get_status()["last_run_result"] is None
         finally:
             await reloaded.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reload_scheduler", [False, True])
+@pytest.mark.parametrize("scenario", ["different_target", "same_day", "next_window"])
+async def test_tick_after_all_deferred(mock_db, monkeypatch, reload_scheduler, scenario):
+    now = _queue_fixture(mock_db)
+    db.set_settings({
+        "schedule_enabled": "true", "timezone": ZONE.key,
+        "weather_check_enabled": "false", "selected_firmware_tns100": "",
+    })
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(side_effect=["first", "later"]))
+    monkeypatch.setattr(
+        "updater.services.validate_time_sources",
+        AsyncMock(side_effect=lambda _zone: (True, now)),
+    )
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr("updater.scheduler.datetime", FixedClock)
+    monkeypatch.setattr(app_module, "datetime", FixedClock)
+
+    def check_write(job_id, firmware):
+        ip = "10.0.0.1"
+        job = app_module.UpdateJob(
+            job_id=job_id, device_firmware_map={ip: firmware}, device_order=[ip],
+            devices={ip: app_module.DeviceStatus(ip=ip, model="TNA-301")},
+            is_scheduled=True, window_key=scheduler._queue_job_context[job_id]["window_key"],
+            start_hour=4, end_hour=6, schedule_days=["tue", "wed"], schedule_timezone=ZONE.key,
+        )
+        allowed, message = app_module._firmware_write_gate(job, ip)
+        if not allowed:
+            reason = job.devices[ip].deferral_reason
+            assert reason == "cutoff_reached"
+            db.save_job_history(
+                job_id, now.isoformat(), now.isoformat(), 0, "one", 0, 0, 0, 0,
+                {ip: {"deferral_reason": reason, "deferral_message": message}},
+                {}, {}, timezone=ZONE.key,
+            )
+            scheduler.on_job_completed(job_id, 0, 0, deferred_count=1, deferral_reasons={ip: reason})
+        return allowed
+
+    await scheduler._check_and_run()
+    now = now.replace(minute=40)
+    db.set_settings({"schedule_start_hour": "4"})
+    assert not check_write("first", FW_30X)
+    report = scheduler.get_status()["last_run_result"]
+    if reload_scheduler:
+        scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock(return_value="later"))
+        scheduler._restore_deferral()
+
+    now = now.replace(hour=3, minute=45)
+    await scheduler._check_and_run()
+    status = scheduler.get_status()
+    assert status["state"] == "idle"
+    assert status["block_reason"] is None
+    assert status["last_run_result"] == report
+
+    firmware = FW_30X
+    now = now.replace(hour=4, minute=0)
+    if scenario == "different_target":
+        firmware = "tna-30x-2.1.0-r210.bin"
+        db.register_firmware(firmware, sha256="c" * 64)
+        db.set_settings({"selected_firmware_30x": firmware})
+    elif scenario == "next_window":
+        now += timedelta(days=1)
+
+    async def start_later(**kwargs):
+        assert kwargs["firmware_file"] == firmware
+        assert scheduler.get_status()["last_run_result"] == (report if scenario == "same_day" else None)
+        return "later"
+
+    scheduler.start_update_func = AsyncMock(side_effect=start_later)
+    await scheduler._check_and_run()
+    scheduler.start_update_func.assert_awaited_once()
+    status = scheduler.get_status()
+    assert status["state"] == "running"
+    assert status["block_reason"] is None
+    assert status["last_run_result"] is None
+    if scenario == "same_day":
+        assert not check_write("later", firmware)
+        assert scheduler.get_status()["last_run_result"] == report
+    else:
+        assert check_write("later", firmware)
 
 
 @pytest.mark.asyncio
