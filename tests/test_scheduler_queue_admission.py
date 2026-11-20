@@ -142,7 +142,7 @@ async def test_restart_restores_deferral_until_next_window(mock_db, monkeypatch,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reload_scheduler", [False, True])
-@pytest.mark.parametrize("scenario", ["different_target", "same_day", "next_window"])
+@pytest.mark.parametrize("scenario", ["different_target", "same_day", "next_window", "other_family"])
 async def test_tick_after_all_deferred(mock_db, monkeypatch, reload_scheduler, scenario):
     now = _queue_fixture(mock_db)
     db.set_settings({
@@ -207,6 +207,29 @@ async def test_tick_after_all_deferred(mock_db, monkeypatch, reload_scheduler, s
         db.set_settings({"selected_firmware_30x": firmware})
     elif scenario == "next_window":
         now += timedelta(days=1)
+
+    elif scenario == "other_family":
+        db.set_settings({"selected_firmware_tns100": FW_TNS})
+
+    status = scheduler.get_status()
+    preview = scheduler.get_preview(db.get_all_settings(), now, ZONE.key)
+    preview_by_ip = {device["ip"]: device for device in preview["devices"]}
+    ap = preview_by_ip["10.0.0.1"]
+    if scenario in ("same_day", "other_family"):
+        assert ap["held"]
+        assert ap["hold_reason"] == report
+        assert preview["next_window_start"] == status["next_window_iso"]
+    else:
+        assert not ap["held"]
+
+    if scenario == "other_family":
+        assert not preview_by_ip["10.0.1.1"]["held"]
+        await scheduler._check_and_run()
+        scheduler.start_update_func.assert_awaited()
+        assert [
+            entry["ip"] for entry in scheduler.start_update_func.await_args.kwargs["device_entries"]
+        ] == ["10.0.1.1"]
+        return
 
     async def start_later(**kwargs):
         assert kwargs["firmware_file"] == firmware

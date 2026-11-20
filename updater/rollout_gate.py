@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Optional
 
 
+FIRMWARE_CUTOFF_REASON = "cutoff_reached"
+FIRMWARE_CUTOFF_MESSAGE = "Deferred: the firmware admission cutoff for this target has passed."
 SCHEDULE_DISABLED_REASON = "Deferred: Auto-Update is off or unavailable"
 
 

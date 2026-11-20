@@ -56,7 +56,7 @@ from . import database as db
 from .ap_locator import FIRST_PROBE_DELAY_S, SavedCPE, SearchState, locate_ap
 from .vendors.tachyon.client import TachyonClient
 from .poller import init_poller, get_poller, set_poller
-from .scheduler import init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
+from .scheduler import AutoUpdateScheduler, init_scheduler, get_scheduler, SCHEDULE_END_BUFFER_MINUTES
 from . import rollout_gate
 from .firmware_fetcher import init_fetcher, get_fetcher, PLATFORM_SETTING_KEYS, pin_setting_key
 from .firmware_policy import (
@@ -3982,6 +3982,23 @@ async def get_scheduler_status(session: dict = Depends(require_auth)):
     return _queue_status_payload(scheduler.get_status())
 
 
+@app.get("/api/scheduler/preview", tags=["system"])
+async def get_scheduler_preview(session: dict = Depends(require_auth)):
+    """Preview the next scheduled firmware window using Manager inventory only."""
+    settings = db.get_all_settings()
+    timezone_name = settings.get("timezone", "auto")
+    if not timezone_name or timezone_name == "auto":
+        timezone_name = await services.get_timezone()
+    scheduler = get_scheduler()
+    scheduler_available = scheduler is not None
+    if scheduler is None:
+        scheduler = AutoUpdateScheduler(None, None)
+    return scheduler.get_preview(
+        settings, datetime.now(timezone.utc), timezone_name,
+        scheduler_enabled=scheduler_available,
+    )
+
+
 @app.get("/api/firmware-window-stops", tags=["system"])
 async def list_firmware_window_stops(session: dict = Depends(require_role("admin", "operator"))):
     """List stopped firmware windows and their resolution state."""
@@ -6450,9 +6467,9 @@ def _firmware_write_gate(job: "UpdateJob", ip: str) -> tuple[bool, str]:
         return True, ""
 
     if not _firmware_deadline_admits(job, ip):
-        reason_code = getattr(job, "_firmware_deadline_reasons", {}).get(ip, "cutoff_reached")
+        reason_code = getattr(job, "_firmware_deadline_reasons", {}).get(ip, rollout_gate.FIRMWARE_CUTOFF_REASON)
         messages = {
-            "cutoff_reached": "Deferred: the firmware admission cutoff for this target has passed.",
+            rollout_gate.FIRMWARE_CUTOFF_REASON: rollout_gate.FIRMWARE_CUTOFF_MESSAGE,
             "timing_unavailable": "Deferred: firmware admission timing is missing or invalid.",
         }
         reason = messages[reason_code]
@@ -6553,7 +6570,7 @@ def _firmware_deadline_admits(job: "UpdateJob", ip: str, now=None) -> bool:
             return False
         admitted = now.astimezone(timezone.utc) < cutoff.astimezone(timezone.utc)
         if not admitted:
-            _record_firmware_timing_reason(job, ip, "cutoff_reached")
+            _record_firmware_timing_reason(job, ip, rollout_gate.FIRMWARE_CUTOFF_REASON)
         return admitted
     except Exception:
         _record_firmware_timing_reason(job, ip, "timing_unavailable")
