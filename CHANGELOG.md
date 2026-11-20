@@ -180,6 +180,37 @@ All notable changes to this project are documented in this file.
 ### Security
 - Pin bundled nginx to 1.31.9 to fix CVE-2026-123007 and four related CVEs.
 
+## 1.4.1-dev9 - 2026-11-20
+
+### Added
+- Add a read-only API preview for the next scheduled firmware window.
+- Show ordered devices, target firmware, ramp timing, and shared scheduler admission holds.
+- Add one hashed service token for read-only inventory sync.
+- Allow the token only on AP, CPE, and topology GET routes.
+
+### Changed
+- Rollout, settings, and interface documentation now match the shipped serial update flow.
+- Scheduled updates run again when Auto-Update is on. The separate safety-readiness switch is removed.
+- The update drawer explains that each device reboots before its firmware update.
+- Manager ignores the old Pre-update Reboot setting.
+- Ask for Save or Discard before closing the Updates drawer with unsaved changes. Show the full pause reason and recovery step for each paused update state.
+- Use distinct fills, icons, and labels for status and selected controls.
+- Keep status text at or above 4.5:1 contrast, including settings and history.
+- Keep device values on one line in the device table.
+- Scroll the table horizontally when the window is too narrow.
+- Show the deferral reason and next scheduled window when a firmware queue defers devices.
+- Keep the report visible after a restart until the next enabled window starts.
+
+### Fixed
+- Keep the API responsive during startup polling by removing repeated log-redaction regex compilation.
+- Settings saves now keep fields that the operator did not change.
+- Failed saves show the API error and do not report success.
+- Show when weather data is unavailable and when a temperature was sampled.
+- Remove the unused Parallel setting and clarify manual and scheduled bank modes.
+- Scheduled firmware jobs record why each device was deferred when the queue stops.
+- Job history keeps the reason after reload.
+- Keep checking the schedule after a deferral. If a job defers every device, wait until the next eligible window or a target change before retrying that target.
+
 ## Unreleased
 
 ### Added
