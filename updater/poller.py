@@ -1207,10 +1207,7 @@ class NetworkPoller:
             if db.get_setting("config_poll_enabled", "true") != "true":
                 return
 
-            existing = set(db.get_all_latest_configs().keys())
-            aps = db.get_all_access_points_dict(enabled_only=True)
-            switches = db.get_all_switches_dict(enabled_only=True)
-            missing = [ip for ip in list(aps) + list(switches) if ip not in existing]
+            missing = db.get_enabled_ips_missing_device_configs()
             if not missing:
                 return
 
@@ -1642,15 +1639,12 @@ class NetworkPoller:
         if not effective:
             return
 
-        # Get latest configs for all devices
-        all_configs = db.get_all_latest_configs()
-
         # Find non-compliant devices
         non_compliant = []  # [(ip, device_type, templates)]
         for ip, templates in effective.items():
             if not templates:
                 continue
-            config_row = all_configs.get(ip)
+            config_row = db.get_latest_device_config(ip)
             if not config_row:
                 continue  # No config snapshot yet — skip
             try:

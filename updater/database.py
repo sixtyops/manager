@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from .db.schema import build_schema
-from .crypto import encrypt_password, decrypt_password, is_encrypted
+from .crypto import decrypt_config, decrypt_password, encrypt_config, encrypt_password, is_encrypted
 from .logging_filter import register_secret
 
 logger = logging.getLogger(__name__)
@@ -605,7 +605,7 @@ def _migrate_encrypt_device_configs(db):
         if cfg and not is_encrypted(cfg):
             db.execute(
                 "UPDATE device_configs SET config_json = ? WHERE id = ?",
-                (encrypt_password(cfg), row[0]),
+                (encrypt_config(cfg), row[0]),
             )
             migrated += 1
     if migrated:
@@ -2920,7 +2920,7 @@ def _decrypt_config_json_field(value):
     if not value:
         return value
     if is_encrypted(value):
-        return decrypt_password(value)
+        return decrypt_config(value)
     return value
 
 
@@ -2953,7 +2953,7 @@ def save_device_config(ip: str, config_json: str, config_hash: str,
     if kind not in ("poll", "pre_push", "post_push"):
         raise ValueError("Invalid snapshot kind")
     normalized_mac = mac.upper() if mac else None
-    encrypted_json = encrypt_password(config_json) if config_json else config_json
+    encrypted_json = encrypt_config(config_json) if config_json else config_json
     with get_db() as db:
         cursor = db.execute(
             """INSERT INTO device_configs (ip, config_json, config_hash, model, hardware_id, mac, fetched_at, kind)
@@ -2985,7 +2985,7 @@ def insert_imported_device_config(
     if kind not in ("poll", "pre_push", "post_push"):
         raise ValueError("Invalid snapshot kind")
     normalized_mac = mac.upper() if mac else None
-    encrypted_json = encrypt_password(config_json) if config_json else config_json
+    encrypted_json = encrypt_config(config_json) if config_json else config_json
     with get_db() as db:
         db.execute(
             """INSERT INTO device_configs
@@ -3066,6 +3066,22 @@ def get_all_latest_configs() -> dict:
             )
         """).fetchall()
         return {row["ip"]: _decrypt_row_config_json(dict(row)) for row in rows}
+
+
+def get_enabled_ips_missing_device_configs() -> list[str]:
+    """Return enabled AP and switch IPs that have no live config snapshot."""
+    with get_db() as db:
+        rows = db.execute("""
+            SELECT d.ip
+            FROM devices d
+            WHERE d.enabled = 1 AND d.role IN ('ap', 'switch')
+              AND NOT EXISTS (
+                  SELECT 1 FROM device_configs c
+                  WHERE c.ip = d.ip AND c.deleted_at IS NULL
+              )
+            ORDER BY d.role, d.ip
+        """)
+        return [row[0] for row in rows]
 
 
 def get_latest_config_fetched_at() -> Optional[str]:
