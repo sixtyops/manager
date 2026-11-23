@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock, call
 
-from updater import radius_config
+from updater.device import credentials
 from updater.poller import NetworkPoller, _CLIENT_IDLE_TTL_SECONDS
 
 
@@ -44,9 +44,7 @@ class TestCheckCpeAuth:
         # TachyonClient.login() returns "Invalid credentials" on HTTP 401.
         poller = NetworkPoller()
         with patch("updater.poller.get_driver",
-                   return_value=_driver_returning("Invalid credentials")), \
-             patch("updater.poller.radius_config.is_device_auth_enabled",
-                   return_value=False):
+                   return_value=_driver_returning("Invalid credentials")):
             status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
         assert status == "auth_failed"
 
@@ -76,14 +74,16 @@ class TestCheckCpeAuth:
         client.connect = AsyncMock(side_effect=["Invalid credentials",
                                                 "Device not reachable"])
         factory = MagicMock(return_value=client)  # same client reused per attempt
-        cfg = radius_config.DeviceAuthConfig(enabled=True, username="other",
+        cfg = credentials.DeviceAuthConfig(enabled=True, username="other",
                                              password="default-pass")
         with patch("updater.poller.get_driver", return_value=factory), \
-             patch("updater.poller.radius_config.is_device_auth_enabled",
+             patch("updater.poller.credentials.is_device_auth_enabled",
                    return_value=True), \
-             patch("updater.poller.radius_config.get_device_auth_config",
+             patch("updater.poller.credentials.get_device_auth_config",
                    return_value=cfg):
-            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+            status = await poller._check_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", allow_defaults=True,
+            )
         assert status == "unreachable"
         assert client.connect.await_count == 2
         # Second attempt must use the global-default credentials.
@@ -99,14 +99,16 @@ class TestCheckCpeAuth:
         client = MagicMock()
         client.connect = AsyncMock(side_effect=["Invalid credentials", True])
         factory = MagicMock(return_value=client)
-        cfg = radius_config.DeviceAuthConfig(enabled=True, username="root",
+        cfg = credentials.DeviceAuthConfig(enabled=True, username="root",
                                              password="cpe-pass")
         with patch("updater.poller.get_driver", return_value=factory), \
-             patch("updater.poller.radius_config.is_device_auth_enabled",
+             patch("updater.poller.credentials.is_device_auth_enabled",
                    return_value=True), \
-             patch("updater.poller.radius_config.get_device_auth_config",
+             patch("updater.poller.credentials.get_device_auth_config",
                    return_value=cfg):
-            status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
+            status = await poller._check_cpe_auth(
+                "10.0.0.11", "root", "ap-pass", allow_defaults=True,
+            )
         assert status == "ok"
         assert client.connect.await_count == 2
         # Second attempt must reuse the username but swap in the default password.
@@ -229,9 +231,7 @@ class TestCheckCpeAuthCaching:
     async def test_auth_failed_is_not_cached(self, mock_db):
         poller = NetworkPoller()
         with patch("updater.poller.get_driver",
-                   return_value=_driver_returning("Invalid credentials")), \
-             patch("updater.poller.radius_config.is_device_auth_enabled",
-                   return_value=False):
+                   return_value=_driver_returning("Invalid credentials")):
             status = await poller._check_cpe_auth("10.0.0.11", "root", "ap-pass")
         assert status == "auth_failed"
         assert "10.0.0.11" not in poller._cpe_clients
@@ -245,8 +245,7 @@ class TestCheckCpeAuthCaching:
         now = datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("UTC"))
 
         with patch("updater.poller.time.time", clock.time), \
-             patch("updater.poller.get_driver", return_value=factory), \
-             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+             patch("updater.poller.get_driver", return_value=factory):
             assert await poller._probe_cpe_auth(
                 "10.0.0.11", "root", "ap-pass", settings, now
             ) == "auth_failed"
@@ -268,8 +267,7 @@ class TestCheckCpeAuthCaching:
         clock = FakeClock(1000.0)
         factory = _driver_returning("Invalid credentials")
         with patch("updater.poller.time.time", clock.time), \
-             patch("updater.poller.get_driver", return_value=factory), \
-             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+             patch("updater.poller.get_driver", return_value=factory):
             assert await poller._check_cpe_auth(
                 "10.0.0.11", "root", "old-pass"
             ) == "auth_failed"
@@ -292,8 +290,7 @@ class TestCheckCpeAuthCaching:
             _driver_returning(True).return_value,
         ])
         with patch("updater.poller.time.time", clock.time), \
-             patch("updater.poller.get_driver", return_value=factory), \
-             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+             patch("updater.poller.get_driver", return_value=factory):
             assert await poller._check_cpe_auth(
                 "10.0.0.11", "root", "ap-pass"
             ) == "auth_failed"
@@ -450,8 +447,7 @@ class TestCheckCpeAuthCaching:
         poller._cache_cpe_client(cpe_ip, cached)
         fresh_factory = _driver_returning(True)
 
-        with patch("updater.poller.get_driver", return_value=fresh_factory), \
-             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+        with patch("updater.poller.get_driver", return_value=fresh_factory):
             assert await poller._probe_cpe_auth(
                 cpe_ip, "root", "ap-pass", settings, now
             ) == "unreachable"
@@ -482,8 +478,7 @@ class TestCheckCpeAuthCaching:
 
         fresh_factory = _driver_returning(True)
         fresh_factory.return_value.session_valid = AsyncMock(return_value="ok")
-        with patch("updater.poller.get_driver", return_value=fresh_factory), \
-             patch("updater.poller.radius_config.is_device_auth_enabled", return_value=False):
+        with patch("updater.poller.get_driver", return_value=fresh_factory):
             first = await poller._probe_cpe_auth(
                 "10.0.0.11", "root", "ap-pass", settings, now
             )

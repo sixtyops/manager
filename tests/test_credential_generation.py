@@ -36,10 +36,12 @@ async def test_auth_discards_result_after_invalidation(mock_db, path, result):
     factory = MagicMock(side_effect=[rejected, client] if path == "fallback" else [client])
     defaults = MagicMock(username="default", password="test-default")
     with patch("updater.poller.get_driver", return_value=factory), \
-         patch("updater.poller.radius_config.get_device_credentials", return_value=("ap", "test-ap")), \
-         patch("updater.poller.radius_config.is_device_auth_enabled", return_value=True), \
-         patch("updater.poller.radius_config.get_device_auth_config", return_value=defaults):
-        assert await poller._check_cpe_auth(CPE, "ap", "test-ap") == "unreachable"
+         patch("updater.poller.credentials.get_device_credentials", return_value=("ap", "test-ap")), \
+         patch("updater.poller.credentials.is_device_auth_enabled", return_value=True), \
+         patch("updater.poller.credentials.get_device_auth_config", return_value=defaults):
+        assert await poller._check_cpe_auth(
+            CPE, "ap", "test-ap", allow_defaults=True,
+        ) == "unreachable"
     assert CPE not in poller._cpe_clients
     assert factory.call_count == {"cached": 0, "primary": 1, "fallback": 2}[path]
 

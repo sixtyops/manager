@@ -77,7 +77,7 @@ from . import webhooks
 from . import syslog_forwarder
 from . import email_notifier
 from . import ssl_manager
-from . import radius_config
+from .device import credentials
 from . import radius_rollout
 from . import oidc_config
 from .features import (
@@ -86,7 +86,7 @@ from .features import (
 )
 from .radius_server import (
     init_radius_service, get_radius_service,
-    get_radius_server_config, set_radius_server_config,
+    get_radius_config_summary, get_radius_server_config, set_radius_server_config,
     RadiusServerConfig,
 )
 from . import radius_users
@@ -2953,31 +2953,30 @@ async def apply_app_update(session: dict = Depends(require_role("admin"))):
 @app.get("/api/auth/config", tags=["auth"])
 async def get_auth_config(session: dict = Depends(require_auth)):
     """Get authentication configuration (secrets masked)."""
-    return radius_config.get_auth_config_summary()
+    oidc = oidc_config.get_oidc_config()
+    return {
+        "radius": get_radius_config_summary(),
+        "oidc": {
+            "enabled": oidc.enabled,
+            "provider_url": oidc.provider_url,
+            "client_id": oidc.client_id,
+            "client_secret_set": bool(oidc.client_secret),
+            "redirect_uri": oidc.redirect_uri,
+            "allowed_group": oidc.allowed_group,
+            "scopes": oidc.scopes,
+            "configured": oidc_config.is_oidc_enabled(),
+        },
+        "device_defaults": credentials.get_device_auth_summary(),
+    }
 
 
 @app.get("/api/auth/radius", tags=["auth"])
 async def get_radius_config_api(session: dict = Depends(require_auth), _pro=Depends(require_feature(Feature.RADIUS_AUTH))):
     """Get RADIUS server configuration, status, and stats."""
-    config = get_radius_server_config()
-    svc = get_radius_service()
+    summary = get_radius_config_summary()
     return {
-        "enabled": config.enabled,
-        "auth_port": config.auth_port,
-        "has_secret": bool(config.shared_secret),
-        "secret_set": bool(config.shared_secret),
-        "configured": bool(config.shared_secret),
-        "auth_mode": config.auth_mode,
-        "advertised_address": config.advertised_address,
-        "client_mode": config.client_mode,
-        "detected_ip": radius_config._detect_host_ip(),
-        "ldap_url": config.ldap_url,
-        "ldap_bind_dn": config.ldap_bind_dn,
-        "ldap_has_password": bool(config.ldap_bind_password),
-        "ldap_base_dn": config.ldap_base_dn,
-        "ldap_user_filter": config.ldap_user_filter,
-        "running": svc.is_running if svc else False,
-        "error": svc.last_error if svc else "",
+        **summary,
+        "has_secret": summary["secret_set"],
         "stats": radius_rollout.get_auth_stats(limit=5),
         **radius_rollout.get_secret_rotation_summary(),
     }
@@ -3446,7 +3445,7 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
     """Update global default device credentials."""
     data = await request.json()
 
-    config = radius_config.DeviceAuthConfig(
+    config = credentials.DeviceAuthConfig(
         enabled=data.get("enabled", False),
         username=data.get("username", ""),
         password=data.get("password", ""),
@@ -3454,10 +3453,10 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
 
     # Preserve existing password if not provided (field is cleared on UI load)
     if not config.password:
-        existing = radius_config.get_device_auth_config()
+        existing = credentials.get_device_auth_config()
         config.password = existing.password
 
-    radius_config.set_device_auth_config(config)
+    credentials.set_device_auth_config(config)
     poller = get_poller()
     if poller:
         poller.invalidate_cpe_clients()
