@@ -576,7 +576,7 @@ class TestSnapshotKinds:
     def test_invalid_kind_fails_before_encryption_or_connection(self, mock_db, kind, operation):
         def unexpected(*args, **kwargs):
             pytest.fail("Invalid kind must fail before encryption or database access")
-        with patch.object(db, "encrypt_password", unexpected), patch.object(db, "get_db", unexpected), pytest.raises(ValueError, match="Invalid snapshot kind"):
+        with patch.object(db, "encrypt_config", unexpected), patch.object(db, "get_db", unexpected), pytest.raises(ValueError, match="Invalid snapshot kind"):
             if operation == "save":
                 db.save_device_config("192.0.2.10", "{}", "invalid", kind=kind)
             else:

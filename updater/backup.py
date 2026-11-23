@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from . import __version__
 from . import database as db
-from .crypto import decrypt_password, is_encrypted, key_path
+from .crypto import decrypt_config, is_encrypted, key_path
 from .logging_filter import register_secret
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ def build_csv_export(passphrase: str) -> tuple[str, str]:
                 # the export remains decryptable on a new manager install
                 # whose storage key won't match.
                 stored = r["config_json"] or ""
-                cleartext = decrypt_password(stored) if is_encrypted(stored) else stored
+                cleartext = decrypt_config(stored) if is_encrypted(stored) else stored
                 cfg_writer.writerow({
                     "ip": r["ip"],
                     "fetched_at": r["fetched_at"] or "",

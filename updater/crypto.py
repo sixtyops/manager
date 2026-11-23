@@ -60,6 +60,16 @@ def reset_cache() -> None:
     _fernet = None
 
 
+def encrypt_config(plaintext: str) -> str:
+    """Encrypt a config snapshot for storage."""
+    return get_fernet().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_config(ciphertext: str) -> str:
+    """Decrypt a config snapshot for use by the caller."""
+    return get_fernet().decrypt(ciphertext.encode()).decode()
+
+
 def encrypt_password(plaintext: str) -> str:
     """Encrypt a device password for storage."""
     register_secret(plaintext)
