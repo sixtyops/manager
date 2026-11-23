@@ -211,6 +211,14 @@ All notable changes to this project are documented in this file.
 - Job history keeps the reason after reload.
 - Keep checking the schedule after a deferral. If a job defers every device, wait until the next eligible window or a target change before retrying that target.
 
+## 1.4.1-dev10 - 2026-11-23
+
+### Changed
+- Document scheduled firmware cutoff, deferral reports, and queue preview behavior.
+
+### Fixed
+- Reduce memory use during config polls. Manager keeps encrypted snapshots and checks for missing snapshots without loading full configs.
+
 ## Unreleased
 
 ### Added
