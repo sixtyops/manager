@@ -208,7 +208,8 @@ class TestCpeCredentialAdmission:
 
         set_poller(poller)
         try:
-            with patch("updater.poller.get_driver", return_value=driver):
+            with patch("updater.poller.get_driver", return_value=driver), \
+                 patch("updater.poller.credentials.is_device_auth_enabled", return_value=False):
                 precheck = asyncio.create_task(
                     scheduler._precheck_cpe_credentials([parent_ip], settings, now)
                 )
@@ -255,7 +256,8 @@ class TestCpeCredentialAdmission:
 
         set_poller(poller)
         try:
-            with patch("updater.poller.get_driver", return_value=driver):
+            with patch("updater.poller.get_driver", return_value=driver), \
+                 patch("updater.poller.credentials.is_device_auth_enabled", return_value=False):
                 assert await scheduler._precheck_cpe_credentials(
                     [parent_ip], settings, first_window
                 ) == ()
@@ -312,7 +314,8 @@ class TestCpeCredentialAdmission:
         }
         set_poller(poller)
         try:
-            with patch("updater.poller.get_driver", return_value=fresh_driver):
+            with patch("updater.poller.get_driver", return_value=fresh_driver), \
+                 patch("updater.poller.credentials.is_device_auth_enabled", return_value=False):
                 failures = await scheduler._precheck_cpe_credentials(
                     [parent_ip], settings, now
                 )

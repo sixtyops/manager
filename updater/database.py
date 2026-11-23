@@ -38,7 +38,6 @@ _SETTINGS_CACHE_TTL = 5  # seconds
 # the absent-but-defaulted code paths in app.py and poller.py treat empty
 # as "not configured"). (#175)
 SECRET_SETTINGS_KEYS = frozenset({
-    "device_default_password",
     "snmp_trap_community",
     "email_smtp_password",
     "radius_secret",

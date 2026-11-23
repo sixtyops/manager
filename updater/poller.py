@@ -98,7 +98,7 @@ class NetworkPoller:
         self._cpe_clients: dict[str, tuple[VendorDriver, float]] = {}  # CPE IP -> (client, cached_at)
         self._cpe_credentials_generation = 0
         self._cpe_fresh_login_periods: dict[str, set[object]] = {}
-        self._cpe_login_retries: dict[str, tuple[int, int, float, str, bool]] = {}
+        self._cpe_login_retries: dict[str, tuple[int, int, float, str]] = {}
         self._cpe_auth_locks: dict[str, asyncio.Lock] = {}
         self._cpe_forced_login_checks: set[str] = set()
         self._cpe_request_locks: dict[str, asyncio.Lock] = {}
@@ -240,21 +240,16 @@ class NetworkPoller:
         """Remove a CPE client from the cache."""
         self._cpe_clients.pop(ip, None)
 
-    def _cpe_login_retry_status(self, ip: str, generation: int,
-                                allow_defaults: bool) -> Optional[str]:
+    def _cpe_login_retry_status(self, ip: str, generation: int) -> Optional[str]:
         """Return the last result while a failed-login retry delay is active."""
         retry = self._cpe_login_retries.get(ip)
         if retry is None or retry[0] != generation:
             return None
         if time.time() >= retry[2]:
             return None
-        if (allow_defaults and retry[3] == "auth_failed" and not retry[4]
-                and credentials.is_device_auth_enabled()):
-            return None
         return retry[3]
 
-    def _record_cpe_login_attempt(self, ip: str, generation: int, status: str,
-                                  allow_defaults: bool):
+    def _record_cpe_login_attempt(self, ip: str, generation: int, status: str):
         """Reset retry state on success or delay a failed fresh login."""
         if not self._credentials_current(generation):
             return
@@ -268,7 +263,7 @@ class NetworkPoller:
             _CPE_LOGIN_RETRY_MAX_SECONDS,
         )
         self._cpe_login_retries[ip] = (
-            generation, failures, time.time() + delay, status, allow_defaults,
+            generation, failures, time.time() + delay, status,
         )
 
     def _cpe_auth_check_period(self, settings: dict = None, now: datetime = None):
@@ -603,7 +598,6 @@ class NetworkPoller:
 
             # Get connected CPEs
             cpes = await client.get_connected_cpes()
-            peer_report_valid = getattr(client, "last_connected_cpes_valid", False) is True
             self._record_peer_snapshot(ip, client, cpes)
 
             # Capture this AP's live radio params (channel / BW / freq / kit)
@@ -690,7 +684,6 @@ class NetworkPoller:
                             status = await self._probe_cpe_auth(
                                 cpe_ip, username, password,
                                 credential_generation=cpe_generation,
-                                allow_defaults=peer_report_valid,
                             )
                             if not self._credentials_current(cpe_generation):
                                 return
@@ -781,13 +774,12 @@ class NetworkPoller:
 
     async def _check_cpe_auth(self, cpe_ip: str, username: str, password: str,
                               force_fresh_login: bool = False,
-                              credential_generation: int = None, *,
-                              allow_defaults: bool = False) -> str:
+                              credential_generation: int = None) -> str:
         """Check if we can authenticate to a CPE.
 
         Tries authentication in order:
         1. Parent AP's credentials
-        2. Global defaults if enabled and the current AP poll listed this CPE
+        2. Global default device credentials (if enabled)
 
         Returns "ok", "auth_failed", or "unreachable".
 
@@ -822,13 +814,12 @@ class NetworkPoller:
             # "expired" — token no longer accepted; drop it and re-authenticate.
             self._remove_cached_cpe_client(cpe_ip)
 
-        retry_status = self._cpe_login_retry_status(cpe_ip, generation, allow_defaults)
+        retry_status = self._cpe_login_retry_status(cpe_ip, generation)
         if retry_status is not None:
             return retry_status
 
-        effective_user, effective_pass = username or "", password or ""
-        if allow_defaults:
-            effective_user, effective_pass = credentials.get_device_credentials(username, password)
+        # Get effective credentials (device-specific or global defaults)
+        effective_user, effective_pass = credentials.get_device_credentials(username, password)
 
         try:
             client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
@@ -837,17 +828,16 @@ class NetworkPoller:
                 return "unreachable"
             if status == "ok":
                 self._cache_cpe_client(cpe_ip, client, generation)
-                self._record_cpe_login_attempt(cpe_ip, generation, status, allow_defaults)
+                self._record_cpe_login_attempt(cpe_ip, generation, status)
                 return "ok"
             if status != "auth_failed":
-                self._record_cpe_login_attempt(cpe_ip, generation, status, allow_defaults)
+                self._record_cpe_login_attempt(cpe_ip, generation, status)
                 return status
 
             # AP credentials were rejected — try global defaults as fallback.
             # Classify the fallback result the same way, so a network failure on
             # the second attempt reports "unreachable" rather than "auth_failed".
-            if (allow_defaults and effective_user == username
-                    and credentials.is_device_auth_enabled()):
+            if effective_user == username and credentials.is_device_auth_enabled():
                 default_config = credentials.get_device_auth_config()
                 # Retry with the global defaults unless they're identical to the
                 # credentials we just tried — compare the full tuple, since a
@@ -860,20 +850,19 @@ class NetworkPoller:
                         return "unreachable"
                     if status == "ok":
                         self._cache_cpe_client(cpe_ip, client, generation)
-                    self._record_cpe_login_attempt(cpe_ip, generation, status, allow_defaults)
+                    self._record_cpe_login_attempt(cpe_ip, generation, status)
                     return status
 
-            self._record_cpe_login_attempt(cpe_ip, generation, "auth_failed", allow_defaults)
+            self._record_cpe_login_attempt(cpe_ip, generation, "auth_failed")
             return "auth_failed"
         except Exception as e:
             logger.debug("CPE auth probe failed for %s (%s)", cpe_ip, type(e).__name__)
-            self._record_cpe_login_attempt(cpe_ip, generation, "unreachable", allow_defaults)
+            self._record_cpe_login_attempt(cpe_ip, generation, "unreachable")
             return "unreachable"
 
     async def _probe_cpe_auth(self, cpe_ip: str, username: str, password: str,
                               settings: dict = None, now: datetime = None,
-                              credential_generation: int = None, *,
-                              allow_defaults: bool = False) -> str:
+                              credential_generation: int = None) -> str:
         """Check a CPE and record a due period only after fresh login succeeds."""
         fresh_login_due = self._fresh_cpe_login_due(cpe_ip, settings, now)
         return await self.check_cpe_auth_for_period(
@@ -881,7 +870,6 @@ class NetworkPoller:
             force_fresh_login=fresh_login_due,
             validate_cached_session=True,
             credential_generation=credential_generation,
-            allow_defaults=allow_defaults,
         )
 
     async def check_cpe_auth_for_period(
@@ -889,7 +877,6 @@ class NetworkPoller:
         settings: dict = None, now: datetime = None, *,
         force_fresh_login: bool, validate_cached_session: bool,
         credential_generation: int = None,
-        allow_defaults: bool = False,
     ) -> str:
         """Serialize CPE login checks and reuse a fresh login for this period."""
         generation = (self._cpe_credentials_generation
@@ -907,7 +894,6 @@ class NetworkPoller:
                 status = await self._check_cpe_auth(
                     cpe_ip, username, password,
                     credential_generation=generation,
-                    allow_defaults=allow_defaults,
                 )
                 return status if self._credentials_current(generation) else "unreachable"
 
@@ -919,7 +905,6 @@ class NetworkPoller:
                 status = await self._check_cpe_auth(
                     cpe_ip, username, password,
                     credential_generation=generation,
-                    allow_defaults=allow_defaults,
                 )
             finally:
                 self._cpe_forced_login_checks.discard(cpe_ip)
