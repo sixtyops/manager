@@ -186,7 +186,6 @@ async def test_slow_preparation_rechecks_cutoff_before_first_action(mock_db, mon
             raise AssertionError("firmware write must not start")
 
     monkeypatch.setattr(app_module, "get_driver", lambda _vendor: Client)
-    monkeypatch.setattr(app_module, "is_feature_enabled", lambda _feature: False)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(app_module, "_capture_ap_recovery_baseline", lambda *_args: _resolved(None))
     monkeypatch.setattr(

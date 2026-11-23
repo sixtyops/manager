@@ -19,7 +19,6 @@ def runtime_mocks(mock_db, monkeypatch):
     db.set_setting("schedule_enabled", "true")
     monkeypatch.setattr(app_module, "broadcast", AsyncMock())
     monkeypatch.setattr(app_module, "get_scheduler", lambda: None)
-    monkeypatch.setattr(app_module, "is_feature_enabled", lambda *a: False)
     monkeypatch.setattr(app_module, "_shutting_down", False)
     monkeypatch.setattr(app_module.services, "validate_time_sources", AsyncMock(
         return_value=(True, datetime(2026, 6, 2, 3, 15))

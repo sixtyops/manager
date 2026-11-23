@@ -4,7 +4,7 @@ Runs a pyrad-based RADIUS server in a background thread alongside the
 FastAPI application.  Supports PAP authentication against either a local
 user database (radius_users table) or an LDAP/AD directory.
 
-The server is gated behind Feature.RADIUS_AUTH (PRO license).
+The server uses the configured RADIUS settings.
 """
 
 import asyncio
@@ -487,9 +487,6 @@ class RadiusService:
             return "No shared secret configured"
         if not (1024 <= config.auth_port <= 65535):
             return f"Invalid port {config.auth_port} (must be 1024-65535)"
-        from .license import Feature, is_feature_enabled
-        if not is_feature_enabled(Feature.RADIUS_AUTH):
-            return "PRO license required"
         return None
 
     def _build_hosts(self, config: RadiusServerConfig) -> dict:
@@ -677,17 +674,6 @@ class RadiusService:
                 self._server.cleanup_rate_limiter()
             except Exception as e:
                 logger.warning("Rate limiter cleanup error: %s", e)
-            # Check license
-            try:
-                from .license import Feature, is_feature_enabled
-                if not is_feature_enabled(Feature.RADIUS_AUTH):
-                    logger.warning("RADIUS server stopping: PRO license expired")
-                    self._bind_error = "PRO license required"
-                    self._server.stop()
-                    await self._broadcast_status()
-                    return
-            except Exception:
-                pass
 
     async def stop(self):
         """Stop the RADIUS server."""

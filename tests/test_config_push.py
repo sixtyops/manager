@@ -493,13 +493,13 @@ class TestRollbackLockAndVerify:
         with patch("updater.app.TachyonClient", return_value=instance), \
                 patch("updater.app.get_poller", return_value=poller_stub):
             first = asyncio.create_task(
-                app_module.rollback_device_config("10.0.0.5", request, session, None)
+                app_module.rollback_device_config("10.0.0.5", request, session)
             )
             try:
                 await asyncio.wait_for(entered.wait(), timeout=30)
                 with pytest.raises(HTTPException) as exc:
                     await asyncio.wait_for(
-                        app_module.rollback_device_config("10.0.0.5", request, session, None),
+                        app_module.rollback_device_config("10.0.0.5", request, session),
                         timeout=30,
                     )
                 assert exc.value.status_code == 409
@@ -567,7 +567,7 @@ class TestRollbackLockAndVerify:
                 assert "10.0.0.5" in app_module._config_pushing_ips
                 with pytest.raises(HTTPException) as exc:
                     await asyncio.wait_for(
-                        app_module.rollback_device_config("10.0.0.5", request, session, None),
+                        app_module.rollback_device_config("10.0.0.5", request, session),
                         timeout=30,
                     )
                 assert exc.value.status_code == 409

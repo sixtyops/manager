@@ -1,7 +1,5 @@
 """Live-dev validation matrix keyed by product feature."""
 
-from updater.features import Feature
-
 DEV_BLOCKING = "dev_blocking"
 DEV_SSO = "dev_sso"
 UNIT_API_ONLY = "unit_api_only"
@@ -15,19 +13,19 @@ VALIDATION_LANES = {
 }
 
 FEATURE_VALIDATION_MATRIX = {
-    Feature.UPDATE_SINGLE_DEVICE: DEV_BLOCKING,
-    Feature.SSO_OIDC: DEV_SSO,
-    Feature.RADIUS_AUTH: DEV_BLOCKING,
-    Feature.CONFIG_BACKUP: DEV_BLOCKING,
-    Feature.CONFIG_TEMPLATES: DEV_BLOCKING,
-    Feature.CONFIG_COMPLIANCE: DEV_BLOCKING,
-    Feature.CONFIG_PUSH: DEV_BLOCKING,
-    Feature.SLACK_NOTIFICATIONS: DEFERRED_EXTERNAL,
-    Feature.DEVICE_PORTAL: DEV_BLOCKING,
-    Feature.DEVICE_HISTORY: DEV_BLOCKING,
-    Feature.TOWER_SITES: DEV_BLOCKING,
-    Feature.BETA_FIRMWARE: UNIT_API_ONLY,
-    Feature.FIRMWARE_HOLD_CUSTOM: UNIT_API_ONLY,
-    Feature.SNMP_TRAPS: DEFERRED_EXTERNAL,
-    Feature.WEBHOOKS: DEFERRED_EXTERNAL,
+    "update_single_device": DEV_BLOCKING,
+    "sso_oidc": DEV_SSO,
+    "radius_auth": DEV_BLOCKING,
+    "config_backup": DEV_BLOCKING,
+    "config_templates": DEV_BLOCKING,
+    "config_compliance": DEV_BLOCKING,
+    "config_push": DEV_BLOCKING,
+    "slack_notifications": DEFERRED_EXTERNAL,
+    "device_portal": DEV_BLOCKING,
+    "device_history": DEV_BLOCKING,
+    "tower_sites": DEV_BLOCKING,
+    "beta_firmware": UNIT_API_ONLY,
+    "firmware_hold_custom": UNIT_API_ONLY,
+    "snmp_traps": DEFERRED_EXTERNAL,
+    "webhooks": DEFERRED_EXTERNAL,
 }

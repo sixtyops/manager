@@ -196,14 +196,6 @@ class TestWebhookNotifications:
         assert "No webhook URL" in message
 
 
-class TestFeatureGating:
-    """Test webhook feature gating."""
-
-    def test_webhooks_feature_exists(self):
-        from updater.license import Feature
-        assert Feature.WEBHOOKS == "webhooks"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 403, None])
 @pytest.mark.parametrize("userinfo,credentials", [

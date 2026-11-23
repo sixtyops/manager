@@ -102,7 +102,7 @@ async def test_endpoint_job_selects_role_and_recovery(mock_db, monkeypatch, tmp_
 
     result = await app.update_single_device_endpoint(
         ip=IP, firmware_file=FIRMWARE, firmware_file_303l="", firmware_file_tns100="",
-        bank_mode="one", session={"role": "operator"}, _pro=None,
+        bank_mode="one", session={"role": "operator"},
     )
     job = spawn.call_args.args[0]
     assert result["device_count"] == 1

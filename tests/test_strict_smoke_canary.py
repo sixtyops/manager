@@ -174,8 +174,7 @@ async def _run_update(ip, smoke_passed, version="1.2.3", *, serial="SERIAL-1", p
     with TemporaryDirectory() as firmware_dir, \
          patch.object(app_module, "get_driver", fake_driver), \
          patch.object(app_module, "broadcast", AsyncMock()), \
-         patch.object(app_module, "_shutting_down", False), \
-         patch.object(app_module, "is_feature_enabled", return_value=False):
+         patch.object(app_module, "_shutting_down", False):
         path = Path(firmware_dir) / Path(job.device_firmware_map[ip]).name
         path.write_bytes(artifact)
         job.device_firmware_map[ip] = str(path)
