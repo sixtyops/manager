@@ -118,7 +118,8 @@ class TestAPsAPI:
             "backoff_until": None,
         }
 
-    def test_global_device_credentials_invalidate_cpe_sessions(self, authed_client):
+    def test_global_device_credentials_invalidate_cpe_sessions(self, authed_client, monkeypatch):
+        monkeypatch.setenv("HOST_IP", "192.0.2.100")
         mock_poller = MagicMock()
         with patch("updater.app.get_poller", return_value=mock_poller):
             resp = authed_client.put("/api/auth/device-defaults", json={
@@ -127,6 +128,13 @@ class TestAPsAPI:
 
         assert resp.status_code == 200
         mock_poller.invalidate_cpe_clients.assert_called_once_with()
+        defaults = authed_client.get("/api/auth/config").json()["device_defaults"]
+        assert defaults == {
+            "enabled": True,
+            "username": "default",
+            "has_password": True,
+            "configured": True,
+        }
 
     def test_csv_update_import_invalidates_cpe_sessions(self, authed_client):
         mock_poller = MagicMock()

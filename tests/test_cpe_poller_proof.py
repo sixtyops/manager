@@ -13,8 +13,10 @@ import pytest
 
 from updater import database as db
 from updater import poller as poller_module
+from updater.device import credentials
 from updater.models import CPEInfo
 from updater.poller import NetworkPoller
+from updater.scheduler import AutoUpdateScheduler
 from updater.vendors import init_vendors
 from updater.vendors.tachyon import TachyonDriver
 from updater.vendors.tachyon.client import TachyonClient
@@ -67,6 +69,46 @@ def _instrument(monkeypatch):
         monkeypatch.setattr(cls, name, getattr(cls, name))
     proof._instrument(recorder)
     return recorder
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_check", ["poll", "scheduler"])
+async def test_cpe_defaults_fallback_and_period_reuse(fake_devices, monkeypatch, first_check):
+    db.upsert_cpe(AP, {"ip": CPE, "mac": "00:00:00:00:00:02"})
+    defaults = credentials.DeviceAuthConfig(True, "test-default-user", "test-default-password")
+    credentials.set_device_auth_config(defaults)
+    login_attempts = []
+
+    async def login(client):
+        if client.ip == CPE:
+            used_defaults = (client.username, client.password) == (defaults.username, defaults.password)
+            login_attempts.append(used_defaults)
+            if not used_defaults:
+                return "Invalid credentials"
+        client._token = "fake-token"
+        return True
+
+    async def peers(client):
+        client.last_connected_cpes_valid = False
+        return [CPEInfo(ip=CPE, mac="00:00:00:00:00:02")]
+
+    monkeypatch.setattr(TachyonClient, "login", login)
+    monkeypatch.setattr(TachyonClient, "get_connected_cpes", peers)
+    poller = NetworkPoller()
+    monkeypatch.setattr(poller_module, "_poller", poller)
+    scheduler = AutoUpdateScheduler(AsyncMock(), AsyncMock())
+    now = datetime.now().astimezone()
+
+    if first_check == "poll":
+        await poller._poll_ap(db.get_access_point(AP))
+        assert db.get_cpe_by_ip(CPE)["auth_status"] == "ok"
+        assert login_attempts == [False, True]
+
+    assert await scheduler._precheck_cpe_credentials([AP], {}, now) == ()
+    assert db.get_cpe_by_ip(CPE)["auth_status"] == "ok"
+    assert login_attempts == [False, True]
+    assert await scheduler._precheck_cpe_credentials([AP], {}, now) == ()
+    assert login_attempts == [False, True]
 
 
 @pytest.mark.asyncio

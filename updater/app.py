@@ -78,6 +78,7 @@ from . import syslog_forwarder
 from . import email_notifier
 from . import ssl_manager
 from . import radius_config
+from .device import credentials
 from . import radius_rollout
 from . import oidc_config
 from .features import (
@@ -3446,7 +3447,7 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
     """Update global default device credentials."""
     data = await request.json()
 
-    config = radius_config.DeviceAuthConfig(
+    config = credentials.DeviceAuthConfig(
         enabled=data.get("enabled", False),
         username=data.get("username", ""),
         password=data.get("password", ""),
@@ -3454,10 +3455,10 @@ async def update_device_auth_config(request: Request, session: dict = Depends(re
 
     # Preserve existing password if not provided (field is cleared on UI load)
     if not config.password:
-        existing = radius_config.get_device_auth_config()
+        existing = credentials.get_device_auth_config()
         config.password = existing.password
 
-    radius_config.set_device_auth_config(config)
+    credentials.set_device_auth_config(config)
     poller = get_poller()
     if poller:
         poller.invalidate_cpe_clients()

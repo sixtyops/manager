@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 from . import config_write_guard
 from . import database as db
-from . import radius_config
+from .device import credentials
 from .config_utils import (
     merge_template_config,
     fragment_matches,
@@ -819,7 +819,7 @@ class NetworkPoller:
             return retry_status
 
         # Get effective credentials (device-specific or global defaults)
-        effective_user, effective_pass = radius_config.get_device_credentials(username, password)
+        effective_user, effective_pass = credentials.get_device_credentials(username, password)
 
         try:
             client = get_driver("tachyon")(cpe_ip, effective_user, effective_pass, timeout=10)
@@ -837,8 +837,8 @@ class NetworkPoller:
             # AP credentials were rejected — try global defaults as fallback.
             # Classify the fallback result the same way, so a network failure on
             # the second attempt reports "unreachable" rather than "auth_failed".
-            if effective_user == username and radius_config.is_device_auth_enabled():
-                default_config = radius_config.get_device_auth_config()
+            if effective_user == username and credentials.is_device_auth_enabled():
+                default_config = credentials.get_device_auth_config()
                 # Retry with the global defaults unless they're identical to the
                 # credentials we just tried — compare the full tuple, since a
                 # client may share the AP's username but use a different password.
@@ -856,7 +856,7 @@ class NetworkPoller:
             self._record_cpe_login_attempt(cpe_ip, generation, "auth_failed")
             return "auth_failed"
         except Exception as e:
-            logger.debug(f"CPE auth probe failed for {cpe_ip}: {e}")
+            logger.debug("CPE auth probe failed for %s (%s)", cpe_ip, type(e).__name__)
             self._record_cpe_login_attempt(cpe_ip, generation, "unreachable")
             return "unreachable"
 
